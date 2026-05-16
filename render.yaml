@@ -1,0 +1,17 @@
+services:
+  - type: worker
+    name: slcrp-main-bot-24-7
+    runtime: python
+    buildCommand: python -m pip install -r requirements.txt
+    startCommand: python bot_fresh_standalone.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.4
+      - key: NEW_BOT_TOKEN
+        sync: false
+      - key: NEW_BOT_STATUS
+        value: Watching over SLCRP
+      - key: ERLC_API_KEY
+        sync: false
+      - key: ERLC_SERVER_CODE
+        sync: false
