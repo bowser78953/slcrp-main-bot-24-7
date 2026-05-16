@@ -28,8 +28,7 @@ if os.path.exists(ENV_PATH):
 TOKEN = os.getenv("NEW_BOT_TOKEN")
 PREFIX = os.getenv("NEW_BOT_PREFIX", "!")
 STATUS_TEXT = os.getenv("NEW_BOT_STATUS", "Managing the server")
-ERLC_API_KEY = os.getenv("ERLC_API_KEY", "").strip()
-ERLC_SERVER_CODE_RAW = os.getenv("ERLC_SERVER_CODE", "").strip()
+ERLC_API_KEY = os.getenv("ERLC_API_KEY", "DucAfpAQtDEaUScIirXg-pLusPFVQAdmGTprXvWEutufuBUsgnyrcmfczzvcd").strip()
 ERLC_API_BASE_URL = "https://api.policeroleplay.community/v1"
 
 if not TOKEN:
@@ -37,28 +36,6 @@ if not TOKEN:
     raise SystemExit(1)
 
 
-def parse_erlc_ps_code(raw_value: str) -> str:
-    if not raw_value:
-        return ""
-
-    decoded = unquote(raw_value).strip()
-    if not decoded:
-        return ""
-
-    if decoded.startswith("{"):
-        try:
-            parsed = json.loads(decoded)
-            if isinstance(parsed, dict):
-                code = parsed.get("psCode")
-                if isinstance(code, str):
-                    return code.strip()
-        except json.JSONDecodeError:
-            pass
-
-    return decoded
-
-
-ERLC_PS_CODE = parse_erlc_ps_code(ERLC_SERVER_CODE_RAW)
 
 
 intents = discord.Intents.default()
@@ -263,51 +240,30 @@ def _is_staff_player(player: dict) -> bool:
 
 async def _fetch_erlc_json(endpoint: str) -> tuple[dict | list | None, str | None]:
     if not ERLC_API_KEY:
-        return None, "ERLC API key is missing. Add `ERLC_API_KEY` in environment variables."
-    if not ERLC_PS_CODE:
-        return None, "ERLC server key is missing. Add `ERLC_SERVER_CODE` (psCode) in environment variables."
+        return None, "ERLC API key is missing."
 
     url = f"{ERLC_API_BASE_URL}{endpoint}"
     timeout = aiohttp.ClientTimeout(total=12)
-
-    request_variants: list[tuple[dict, dict]] = []
-    base_headers = {
+    headers = {
         "Authorization": ERLC_API_KEY,
         "User-Agent": "SLCRP-Bot/1.0",
     }
 
-    request_variants.append(
-        ({**base_headers, "Server-Key": ERLC_PS_CODE, "server-key": ERLC_PS_CODE}, {})
-    )
-    request_variants.append(
-        ({**base_headers, "X-Server-Key": ERLC_PS_CODE, "server-key": ERLC_PS_CODE}, {})
-    )
-    request_variants.append(
-        ({**base_headers, "Server-Key": ERLC_PS_CODE, "server-key": ERLC_PS_CODE}, {"psCode": ERLC_PS_CODE})
-    )
-
-    last_error = "Unknown ERLC API error."
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        for headers, params in request_variants:
-            try:
-                async with session.get(url, headers=headers, params=params) as response:
-                    raw_text = await response.text()
-                    if response.status != 200:
-                        snippet = raw_text.strip().replace("\n", " ")[:180]
-                        last_error = f"ERLC API returned {response.status}. {snippet}" if snippet else f"ERLC API returned {response.status}."
-                        continue
-
-                    try:
-                        return json.loads(raw_text), None
-                    except json.JSONDecodeError:
-                        last_error = "ERLC API returned invalid JSON."
-                        continue
-            except asyncio.TimeoutError:
-                last_error = "ERLC API request timed out."
-            except aiohttp.ClientError as api_error:
-                last_error = f"ERLC API request failed: {api_error}"
-
-    return None, last_error
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url, headers=headers) as response:
+                raw_text = await response.text()
+                if response.status != 200:
+                    snippet = raw_text.strip().replace("\n", " ")[:180]
+                    return None, f"ERLC API returned {response.status}. {snippet}" if snippet else f"ERLC API returned {response.status}."
+                try:
+                    return json.loads(raw_text), None
+                except json.JSONDecodeError:
+                    return None, "ERLC API returned invalid JSON."
+    except asyncio.TimeoutError:
+        return None, "ERLC API request timed out."
+    except aiohttp.ClientError as api_error:
+        return None, f"ERLC API request failed: {api_error}"
 
 
 def load_saved_roles() -> dict:
@@ -2115,6 +2071,19 @@ async def on_message(message: discord.Message) -> None:
     if message.author.bot:
         return
 
+    # --- Ticket auto-close on pinging closeticket role ---
+    CLOSE_TICKET_ROLE_NAME = "closeticket"
+    if is_ticket_channel(message.channel):
+        guild = message.guild
+        if guild:
+            closeticket_role = discord.utils.get(guild.roles, name=CLOSE_TICKET_ROLE_NAME)
+            if closeticket_role and any(role.id == closeticket_role.id for role in message.role_mentions):
+                try:
+                    await close_ticket_channel(message.channel, message.author, "Closed by pinging closeticket role.")
+                except Exception:
+                    pass
+                return
+
     if message.guild is None:
         await bot.process_commands(message)
         return
@@ -2653,8 +2622,6 @@ async def queue(ctx: commands.Context) -> None:
         timestamp=datetime.now(timezone.utc),
     )
     embed.add_field(name="Players In Queue", value=f"**{queue_count}**", inline=False)
-    if ERLC_PS_CODE:
-        embed.add_field(name="Server", value=ERLC_PS_CODE, inline=False)
     await ctx.send(embed=embed)
 
 
