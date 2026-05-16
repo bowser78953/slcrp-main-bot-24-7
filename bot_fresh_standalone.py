@@ -1438,7 +1438,13 @@ class TicketTypeSelect(discord.ui.Select):
 
     async def callback(self, interaction: discord.Interaction) -> None:
         selected = self.values[0]
-        await interaction.response.send_modal(TicketInfoModal(selected))
+        try:
+            await interaction.response.send_modal(TicketInfoModal(selected))
+        except Exception as modal_error:
+            if interaction.response.is_done():
+                await interaction.followup.send(f"Ticket modal failed to open: {modal_error}", ephemeral=True)
+            else:
+                await interaction.response.send_message(f"Ticket modal failed to open: {modal_error}", ephemeral=True)
 
 
 class TicketTypeSelectView(discord.ui.View):
@@ -3274,26 +3280,29 @@ TICKET_RULES_REWORDED = {
 class TicketInfoModal(discord.ui.Modal):
     """Modal shown when a ticket type is selected."""
 
-    topic = discord.ui.TextInput(
-        label="Topic",
-        placeholder="Brief description...",
-        style=discord.InputTextStyle.short,
-        required=True,
-        max_length=200,
-    )
-
-    details = discord.ui.TextInput(
-        label="Details",
-        placeholder="Describe in detail...",
-        style=discord.InputTextStyle.long,
-        required=True,
-        min_length=10,
-        max_length=2000,
-    )
-
     def __init__(self, ticket_type: str) -> None:
         super().__init__(title="Ticket Information")
         self.ticket_type = ticket_type
+        self.topic = discord.ui.TextInput(
+            label="Topic",
+            placeholder="Brief description...",
+            style=discord.InputTextStyle.short,
+            required=True,
+            max_length=200,
+        )
+        self.details = discord.ui.TextInput(
+            label="Details",
+            placeholder="Describe in detail...",
+            style=discord.InputTextStyle.long,
+            required=True,
+            min_length=10,
+            max_length=2000,
+        )
+        self.add_item(self.topic)
+        self.add_item(self.details)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self.on_submit(interaction)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         guild = interaction.guild
