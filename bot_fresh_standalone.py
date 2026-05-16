@@ -28,7 +28,9 @@ if os.path.exists(ENV_PATH):
 TOKEN = os.getenv("NEW_BOT_TOKEN")
 PREFIX = os.getenv("NEW_BOT_PREFIX", "!")
 STATUS_TEXT = os.getenv("NEW_BOT_STATUS", "Managing the server")
-ERLC_API_KEY = os.getenv("ERLC_API_KEY", "DucAfpAQtDEaUScIirXg-pLusPFVQAdmGTprXvWEutufuBUsgnyrcmfczzvcd").strip()
+ERLC_API_KEY_PART = os.getenv("ERLC_API_KEY_PART", "DucAfpAQtDEaUScIirXg").strip()
+ERLC_SERVER_ID = os.getenv("ERLC_SERVER_ID", "pLusPFVQAdmGTprXvWEutufuBUsgnyrcmfczzvcd").strip()
+ERLC_API_KEY = os.getenv("ERLC_API_KEY", f"{ERLC_API_KEY_PART}-{ERLC_SERVER_ID}").strip()
 ERLC_API_BASE_URL = "https://api.erlc.gg/v2"
 
 if not TOKEN:
