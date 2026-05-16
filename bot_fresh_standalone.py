@@ -1954,7 +1954,7 @@ class ProhibitedInviteReportView(discord.ui.View):
         if updated_embed is not None:
             updated_embed = updated_embed.copy()
             updated_embed.title = "Prohibited Invite - Confirmed"
-            updated_embed.add_field(name="Action", value=f"ASBAN complete in {banned_count} server(s).", inline=False)
+            updated_embed.add_field(name="Action", value=f"SWBAN complete in {banned_count} server(s).", inline=False)
             if failed_count:
                 updated_embed.add_field(name="Failed Servers", value=str(failed_count), inline=False)
             await interaction.edit_original_response(embed=updated_embed, view=self)
@@ -2396,7 +2396,7 @@ async def on_message(message: discord.Message) -> None:
             embed.add_field(name="User ID", value=str(ban_user.id), inline=True)
             embed.add_field(name="Message", value=message_preview, inline=False)
             embed.add_field(name="Blacklisted Word", value=f"||`{nsfw_matched}`||", inline=False)
-            embed.add_field(name="Action", value="Auto All Server Ban (asban) ", inline=False)
+            embed.add_field(name="Action", value="Auto Server Wide Ban (swban)", inline=False)
             embed.add_field(name="Server", value=message.guild.name, inline=True)
             embed.add_field(name="Channel", value=message.channel.mention, inline=True)
             embed.add_field(
@@ -2936,9 +2936,9 @@ async def ban(
     await ctx.send(f"Banned {member.mention}. Reason: {reason} ({', '.join(dm_status)})")
 
 
-@bot.command(name="asban")
+@bot.command(name="swban")
 @commands.has_role(ALL_SERVER_BAN_COMMAND_ROLE_ID)
-async def asban(ctx: commands.Context, target: str, *, reason: str) -> None:
+async def swban(ctx: commands.Context, target: str, *, reason: str) -> None:
     user_id = parse_user_id(target)
     if user_id is None:
         await ctx.send("Use a user mention or numeric user ID.")
@@ -2959,7 +2959,7 @@ async def asban(ctx: commands.Context, target: str, *, reason: str) -> None:
     target_guilds = get_all_server_ban_guilds()
     for guild in target_guilds:
         try:
-            await guild.ban(user, reason=f"All-server ban by {ctx.author}: {reason}", delete_message_days=0)
+            await guild.ban(user, reason=f"Server-wide ban by {ctx.author}: {reason}", delete_message_days=0)
             banned_count += 1
 
             # After banning, remove recent messages from this user in the guild.
@@ -2987,9 +2987,9 @@ async def asban(ctx: commands.Context, target: str, *, reason: str) -> None:
         )
 
     status_embed = discord.Embed(
-        title="SLCRP | Salt Lake City RP | All Server Ban System",
+        title="SLCRP | Salt Lake City RP | Server Wide Ban System",
         description=(
-            f"Successfully all server banned user: {user.mention}.\n\n"
+            f"Successfully server-wide banned user: {user.mention}.\n\n"
             f"Reason: **{reason}**.\n\n"
             f"Banned in: **{banned_count}** server(s)."
         ),
@@ -2999,16 +2999,16 @@ async def asban(ctx: commands.Context, target: str, *, reason: str) -> None:
         status_embed.add_field(name="Failed Servers", value=str(failed_count), inline=False)
     status_embed.set_footer(
         text=(
-            "SLCRP | Salt Lake City RP | All Server Ban System | "
+            "SLCRP | Salt Lake City RP | Server Wide Ban System | "
             f"{datetime.now().strftime('%Y-%m-%d, %H:%M:%S')}"
         )
     )
     await ctx.send(embed=status_embed)
 
 
-@bot.command(name="asunban", aliases=["unasban"])
+@bot.command(name="swunban")
 @commands.has_role(ALL_SERVER_BAN_COMMAND_ROLE_ID)
-async def asunban(ctx: commands.Context, target: str, *, reason: str = "No reason provided") -> None:
+async def swunban(ctx: commands.Context, target: str, *, reason: str = "No reason provided") -> None:
     user_id = parse_user_id(target)
     if user_id is None:
         await ctx.send("Use a user mention or numeric user ID.")
@@ -3029,7 +3029,7 @@ async def asunban(ctx: commands.Context, target: str, *, reason: str = "No reaso
     failed_count = 0
     for guild in bot.guilds:
         try:
-            await guild.unban(user, reason=f"All-server unban by {ctx.author}: {reason}")
+            await guild.unban(user, reason=f"Server-wide unban by {ctx.author}: {reason}")
             unbanned_count += 1
         except discord.NotFound:
             # User was not banned in this guild.
@@ -3038,9 +3038,9 @@ async def asunban(ctx: commands.Context, target: str, *, reason: str = "No reaso
             failed_count += 1
 
     status_embed = discord.Embed(
-        title="SLCRP | Salt Lake City RP | All Server Unban System",
+        title="SLCRP | Salt Lake City RP | Server Wide Unban System",
         description=(
-            f"[SUCCESS] Successfully all server unbanned user: {user_mention}.\n\n"
+            f"[SUCCESS] Successfully server-wide unbanned user: {user_mention}.\n\n"
             f"Reason: {reason}\n\n"
             f"Unbanned in: **{unbanned_count}** server(s)."
         ),
@@ -3050,7 +3050,7 @@ async def asunban(ctx: commands.Context, target: str, *, reason: str = "No reaso
         status_embed.add_field(name="Failed Servers", value=str(failed_count), inline=False)
     status_embed.set_footer(
         text=(
-            "SLCRP | Salt Lake City RP | All Server Unban System | "
+            "SLCRP | Salt Lake City RP | Server Wide Unban System | "
             f"{datetime.now().strftime('%Y-%m-%d, %H:%M:%S')}"
         )
     )
@@ -4704,7 +4704,7 @@ async def masban(ctx: commands.Context, *targets: str) -> None:
         deleted_count = 0
         for guild in target_guilds:
             try:
-                await guild.ban(user, reason=f"Mass all-server ban by {ctx.author}", delete_message_days=0)
+                await guild.ban(user, reason=f"Mass server-wide ban by {ctx.author}", delete_message_days=0)
                 banned_count += 1
                 deleted_count += await delete_recent_user_messages(guild, user.id, days=7)
             except (discord.Forbidden, discord.HTTPException):
@@ -4717,14 +4717,14 @@ async def masban(ctx: commands.Context, *targets: str) -> None:
             main_dm_sent = await send_main_bot_ban_appeal_dm(
                 user,
                 "banned across SLCRP servers",
-                "Mass all-server ban",
+                "Mass server-wide ban",
                 str(ctx.author),
                 appeal_invite_url,
             )
             modmail_queued = queue_modmail_ban_appeal_dm(
                 user.id,
                 "banned across SLCRP servers",
-                "Mass all-server ban",
+                "Mass server-wide ban",
                 str(ctx.author),
                 appeal_invite_url,
             )
@@ -4733,7 +4733,7 @@ async def masban(ctx: commands.Context, *targets: str) -> None:
         )
 
     embed = discord.Embed(
-        title="SLCRP | Mass All-Server Ban",
+        title="SLCRP | Mass Server Wide Ban",
         description="\n".join(results),
         color=discord.Color.blue(),
         timestamp=datetime.now(timezone.utc),
@@ -4814,8 +4814,8 @@ async def owcmds(ctx: commands.Context) -> None:
         f"{PREFIX}give_role",
         f"{PREFIX}nrs",
         f"{PREFIX}gar",
-        f"{PREFIX}asban",
-        f"{PREFIX}asunban",
+        f"{PREFIX}swban",
+        f"{PREFIX}swunban",
         f"{PREFIX}askick",
         f"{PREFIX}maskick",
         f"{PREFIX}masban",
