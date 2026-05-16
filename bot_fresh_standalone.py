@@ -75,6 +75,8 @@ TICKET_RULES_CHANNEL_ID = 1493095132852129873
 TICKET_CLOSE_LOG_CHANNEL_ID = 1494822378851668121
 MAIN_SERVER_GUILD_ID = 1397084580816621618
 RELOAD_COMMAND_ROLE_ID = 1495581053862019215
+RP_COMMAND_ROLE_ID = 1493343098296598538
+TICKET_COMMAND_ROLE_ID = 1493343282820812872
 RP_CHANNEL_ID = 1504639818674471072
 RP_CHANNEL_OPTIONS = {
     "1": "⟨🏙️ ⟩ 𝐑𝐢𝐯𝐞𝐫 𝐂𝐢𝐭𝐲 𝐑𝐏",
@@ -3128,7 +3130,7 @@ class RPChannelView(discord.ui.View):
 
 
 @bot.command(name="rp")
-@commands.has_permissions(administrator=True)
+@commands.has_role(RP_COMMAND_ROLE_ID)
 async def rp(ctx: commands.Context, action: str | None = None, *, option: str | None = None) -> None:
     if ctx.guild is None:
         await ctx.send("This command can only be used in a server.")
@@ -3714,7 +3716,7 @@ class CloseRequestView(discord.ui.View):
 
 
 @bot.command(name="closeticket")
-@commands.has_permissions(manage_channels=True)
+@commands.has_role(TICKET_COMMAND_ROLE_ID)
 async def closeticket(ctx: commands.Context) -> None:
     if ctx.guild is None or not isinstance(ctx.channel, discord.TextChannel) or not isinstance(ctx.author, discord.Member):
         await ctx.send("This command can only be used in a server text channel.")
@@ -3752,7 +3754,7 @@ async def closeticket(ctx: commands.Context) -> None:
 
 
 @bot.command(name="moveticket")
-@commands.has_permissions(manage_channels=True)
+@commands.has_role(TICKET_COMMAND_ROLE_ID)
 async def moveticket(ctx: commands.Context, *, category_name: str) -> None:
     if ctx.guild is None or not isinstance(ctx.channel, discord.TextChannel):
         await ctx.send("This command can only be used in a server text channel.")
@@ -3815,6 +3817,7 @@ async def transcript(ctx: commands.Context, ticket_id: str) -> None:
 
 
 @bot.command(name="closerequest")
+@commands.has_role(TICKET_COMMAND_ROLE_ID)
 async def closerequest(ctx: commands.Context) -> None:
     if ctx.guild is None or not isinstance(ctx.channel, discord.TextChannel):
         await ctx.send("This command can only be used in a server text channel.")
@@ -4328,6 +4331,7 @@ async def setnickname(
 
 
 @bot.command(name="claim")
+@commands.has_role(TICKET_COMMAND_ROLE_ID)
 async def claim(ctx: commands.Context) -> None:
     if ctx.guild is None or not isinstance(ctx.author, discord.Member):
         await ctx.send("This command can only be used in a server.")
