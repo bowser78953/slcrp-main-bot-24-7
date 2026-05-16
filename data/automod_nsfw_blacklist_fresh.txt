@@ -1,0 +1,182 @@
+# NSFW / Offensive Auto-Ban Blacklist
+# One term per line. Lines starting with # are ignored.
+# Users who send a message matching any term are AUTOMATICALLY BANNED from all servers.
+# Add full phrases or single words. Leet-speak, separators, and repeat-chars are caught too.
+#
+# ─── Explicit / NSFW Terms ────────────────────────────────────────────────────
+porn
+pornhub
+xvideos
+xnxx
+onlyfans
+naked
+nude
+nudes
+hentai
+dick pic
+send nudes
+sex tape
+cam naked
+Nigger
+nigger 
+nigga
+NIGGA 
+NIGGER 
+🍆
+🍑
+😫👉💦
+send pics
+send a pic
+send something
+send more
+send that
+send me more
+send me something
+send me a pic
+send me a video
+drop pics
+drop a pic
+drop something
+drop it
+trade pics
+trade?
+swap pics
+swap?
+got any pics
+got any videos
+got anything
+dm me privately
+dm me
+go private
+private chat
+private call
+video call
+camera on
+turn cam on
+show yourself
+show more
+show that
+can you send something
+can you send a pic
+can you send a video
+can I get a pic
+can I get a video
+want to trade
+want to swap
+want to do something
+want to have fun
+truth or dare
+I dare you to send
+I dare you to show
+I dare you to do it
+what are you wearing
+are you alone
+you alone rn
+I’m lonely
+I’m in the mood
+I’m feeling something
+I need someone
+I need attention
+I need company
+I want you
+I want something
+I want more
+I want to try something
+I’m thinking about you
+I’m imagining things
+I’m feeling bold
+I’m feeling wild
+I’m feeling spicy
+I’m feeling freaky
+I’m feeling naughty
+I’m feeling risky
+I’m feeling playful
+I’m feeling curious
+you look good
+you look really good
+you look tempting
+you look irresistible
+you look too good
+you look too cute
+you look too fine
+you’re distracting me
+you’re trouble
+you’re teasing me
+you’re too much
+you’re too cute
+you’re too fine
+you’re too tempting
+you’re too attractive
+you’re too perfect
+don’t tell anyone
+keep this between us
+don’t screenshot
+don’t show anyone
+just try it
+you’ll like it
+don’t worry about it
+don’t worry about age
+age doesn’t matter
+you’re mature for your age
+you’re old enough
+you’re ready
+you’re perfect for this
+you’re my type
+I can teach you
+I can show you
+I know what you want
+I know what you need
+leans closer
+gets closer
+moves closer
+sits on your lap
+sits next to you
+pulls you in
+grabs your hand
+touches your face
+touches your hair
+touches your shoulder
+whispers in your ear
+whispers softly
+whispers something
+breathes on your neck
+looks you up and down
+bites lip
+smirks at you
+stares at you
+gives you a look
+gives you a certain look
+gives you a teasing look
+gives you a dangerous look
+gives you a playful look
+gives you a flirty look
+🍑
+🍆
+💦
+🫦
+😩
+😫
+Want to have sex 
+fuck me
+omg it fells so good
+moans
+moan 
+pussy
+cock
+rap 
+kill yourself 
+dick 
+Daddy 
+Cum in me
+Cum
+Boobs 
+Weed 
+Drugs 
+Meth 
+Hoe 
+#
+# ─── Escort / Solicitation ────────────────────────────────────────────────────
+buy sex
+sell nudes 
+Buy nudes 
+#
