@@ -2554,6 +2554,7 @@ async def setid(ctx: commands.Context, key: str = "", value: str = "") -> None:
 
 
 @bot.command(name="ingame")
+@commands.has_role(RP_COMMAND_ROLE_ID)
 async def ingame(ctx: commands.Context) -> None:
     payload, error = await _fetch_erlc_json("/server", {"Players": "true"})
     if error or not isinstance(payload, dict):
@@ -2589,6 +2590,7 @@ async def ingame(ctx: commands.Context) -> None:
 
 
 @bot.command(name="checkstaff")
+@commands.has_role(RP_COMMAND_ROLE_ID)
 async def checkstaff(ctx: commands.Context) -> None:
     payload, error = await _fetch_erlc_json("/server", {"Players": "true"})
     if error or not isinstance(payload, dict):
