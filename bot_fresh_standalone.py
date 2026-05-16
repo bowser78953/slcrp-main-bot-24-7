@@ -4126,10 +4126,21 @@ async def reload_category(ctx: commands.Context, category: str = "") -> None:
         results.append(f"claimwipe: **{user_count}** users")
         return results
 
-    if not category.strip():
+    async def restart_process_for_code_reload() -> None:
         await ctx.send("Reloading bot process to apply latest code changes...")
-        await asyncio.sleep(1)
-        os.execv(sys.executable, [sys.executable, *sys.argv])
+
+        async def _restart_later() -> None:
+            await asyncio.sleep(1.5)
+            try:
+                os.execv(sys.executable, [sys.executable, *sys.argv])
+            except Exception as restart_error:
+                print(f"Process restart via execv failed: {restart_error}. Falling back to clean exit.")
+                os._exit(0)
+
+        bot.loop.create_task(_restart_later())
+
+    if not category.strip():
+        await restart_process_for_code_reload()
         return
 
     normalized = category.strip().lower().lstrip(">")
