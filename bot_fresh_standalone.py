@@ -75,6 +75,25 @@ TICKET_RULES_CHANNEL_ID = 1493095132852129873
 TICKET_CLOSE_LOG_CHANNEL_ID = 1494822378851668121
 MAIN_SERVER_GUILD_ID = 1397084580816621618
 RELOAD_COMMAND_ROLE_ID = 1495581053862019215
+RP_CHANNEL_ID = 1504639818674471072
+RP_CHANNEL_OPTIONS = {
+    "1": "⟨🏙️ ⟩ 𝐑𝐢𝐯𝐞𝐫 𝐂𝐢𝐭𝐲 𝐑𝐏",
+    "2": "⟨🛣️ ⟩ 𝐇𝐢𝐠𝐡𝐰𝐚𝐲 𝐑𝐏",
+    "3": "⟨🏞️ ⟩ 𝐇𝐢𝐠𝐡 𝐑𝐨𝐜𝐤 𝐏𝐚𝐫𝐤 𝐑𝐏",
+    "4": "⟨🌆 ⟩ 𝐑𝐢𝐯𝐞𝐫 𝐂𝐢𝐭𝐲 𝐂𝐨𝐮𝐧𝐭𝐲 𝐑𝐏",
+    "5": "⟨🌇 ⟩ 𝐒𝐩𝐫𝐢𝐧𝐠𝐟𝐢𝐞𝐥𝐝 𝐂𝐨𝐮𝐧𝐭𝐲 𝐑𝐏",
+    "6": "⟨🏢 ⟩ 𝐒𝐩𝐫𝐢𝐧𝐠𝐟𝐢𝐞𝐥𝐝 𝐑𝐏",
+    "7": "⟨🌃 ⟩ 𝐅𝐮𝐥𝐥 𝐌𝐚𝐩 𝐑𝐏",
+    "8": "⟨🎆 ⟩ 𝐈𝐧-𝐆𝐚𝐦𝐞 𝐄𝐯𝐞𝐧𝐭",
+    "9": "⟨⛔⟩ 𝐒𝐞𝐫𝐯𝐞𝐫 𝐒𝐡𝐮𝐭 𝐃𝐨𝐰𝐧",
+    "10": "⟨🔃⟩ 𝐒𝐞𝐫𝐯𝐞𝐫 𝐑𝐞𝐬𝐭𝐚𝐫𝐭",
+}
+RP_CHANNEL_COOLDOWN: dict[int, datetime] = {}
+RP_COOLDOWN_SECONDS = 300
+RP_HISTORY_LIMIT = 7
+RP_CURRENT_NAME: str | None = None
+RP_CURRENT_SINCE: datetime | None = None
+RP_CHANGE_HISTORY: deque[tuple[str, datetime]] = deque(maxlen=RP_HISTORY_LIMIT)
 ALT_DETECTION_MAX_ACCOUNT_AGE_DAYS = 7
 TICKET_TRANSCRIPT_RETENTION_DAYS = 7
 TICKET_TRANSCRIPT_CLEANUP_INTERVAL_SECONDS = 3600
@@ -2958,6 +2977,136 @@ async def setstatus(ctx: commands.Context, *, text: str) -> None:
     await ctx.send(f"Status updated to: `{text}`")
 
 
+def format_elapsed(elapsed: timedelta) -> str:
+    total_seconds = int(elapsed.total_seconds())
+    days, remainder = divmod(total_seconds, 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes, seconds = divmod(remainder, 60)
+
+    parts: list[str] = []
+    if days > 0:
+        parts.append(f"{days}d")
+    if hours > 0:
+        parts.append(f"{hours}h")
+    if minutes > 0:
+        parts.append(f"{minutes}m")
+    if seconds > 0 or not parts:
+        parts.append(f"{seconds}s")
+    return " ".join(parts)
+
+
+def format_rp_options_text() -> str:
+    return "\n".join([f"{key}. {value}" for key, value in RP_CHANNEL_OPTIONS.items()])
+
+
+def resolve_rp_option(option_input: str) -> str | None:
+    cleaned = option_input.strip()
+    if cleaned in RP_CHANNEL_OPTIONS:
+        return RP_CHANNEL_OPTIONS[cleaned]
+
+    lowered = cleaned.lower()
+    for value in RP_CHANNEL_OPTIONS.values():
+        if lowered == value.lower():
+            return value
+    return None
+
+
+@bot.command(name="rp")
+@commands.has_permissions(administrator=True)
+async def rp(ctx: commands.Context, action: str | None = None, *, option: str | None = None) -> None:
+    if ctx.guild is None:
+        await ctx.send("This command can only be used in a server.")
+        return
+
+    global RP_CURRENT_NAME, RP_CURRENT_SINCE
+    action_lower = (action or "").lower().strip()
+    now = datetime.now(timezone.utc)
+
+    if action_lower == "info":
+        if RP_CURRENT_NAME is None:
+            channel = ctx.guild.get_channel(RP_CHANNEL_ID)
+            if isinstance(channel, discord.TextChannel):
+                RP_CURRENT_NAME = channel.name
+
+        current_name = RP_CURRENT_NAME or "Not set yet"
+        if RP_CURRENT_SINCE is None:
+            await ctx.send(
+                f"Current RP: **{current_name}**\n"
+                f"Duration: **Unknown (tracking starts after first {PREFIX}rp change)**"
+            )
+            return
+
+        duration = format_elapsed(now - RP_CURRENT_SINCE)
+        await ctx.send(f"Current RP: **{current_name}**\nDuration: **{duration}**")
+        return
+
+    if action_lower == "history":
+        if not RP_CHANGE_HISTORY:
+            await ctx.send("No RP history yet. Change RP at least once to start tracking.")
+            return
+
+        lines: list[str] = []
+        for index, (name, changed_at) in enumerate(reversed(list(RP_CHANGE_HISTORY)), start=1):
+            age = format_elapsed(now - changed_at)
+            lines.append(f"{index}. {name} ({age} ago)")
+
+        history_embed = discord.Embed(
+            title="RP History",
+            description="\n".join(lines),
+            color=discord.Color.blurple(),
+            timestamp=now,
+        )
+        history_embed.set_footer(text=f"Showing last {len(lines)} RP change(s)")
+        await ctx.send(embed=history_embed)
+        return
+
+    if action_lower == "change":
+        if ctx.author.id in RP_CHANNEL_COOLDOWN:
+            cooldown_expiry = RP_CHANNEL_COOLDOWN[ctx.author.id]
+            if now < cooldown_expiry:
+                remaining = int((cooldown_expiry - now).total_seconds())
+                await ctx.send(f"❌ You can change RP again in {remaining} seconds.")
+                return
+
+        if not option:
+            await ctx.send(
+                "❌ Missing RP option.\n"
+                f"Use `{PREFIX}rp change <number>` with one of:\n{format_rp_options_text()}"
+            )
+            return
+
+        channel = ctx.guild.get_channel(RP_CHANNEL_ID)
+        if not isinstance(channel, discord.TextChannel):
+            await ctx.send(f"❌ RP channel with ID `{RP_CHANNEL_ID}` not found.")
+            return
+
+        new_name = resolve_rp_option(option)
+        if new_name is None:
+            await ctx.send(
+                "❌ Invalid RP option.\n"
+                f"Use `{PREFIX}rp change <number>` with one of:\n{format_rp_options_text()}"
+            )
+            return
+
+        try:
+            await channel.edit(name=new_name, reason=f"RP channel changed by {ctx.author}")
+        except discord.Forbidden:
+            await ctx.send("❌ I do not have permission to rename that channel.")
+            return
+        except discord.HTTPException as error:
+            await ctx.send(f"❌ Failed to rename the RP channel: {error}")
+            return
+
+        RP_CURRENT_NAME = new_name
+        RP_CURRENT_SINCE = now
+        RP_CHANGE_HISTORY.append((new_name, now))
+        RP_CHANNEL_COOLDOWN[ctx.author.id] = now + timedelta(seconds=RP_COOLDOWN_SECONDS)
+        await ctx.send(f"✅ RP has been changed to {new_name}")
+        return
+
+    await ctx.send(f"Usage: `{PREFIX}rp change <number>`, `{PREFIX}rp info`, or `{PREFIX}rp history`.")
+
+
 @bot.command(name="warn")
 @commands.has_role(WARN_COMMAND_ROLE_ID)
 async def warn(ctx: commands.Context, target: str, *, reason: str) -> None:
@@ -4736,6 +4885,9 @@ async def funcmds(ctx: commands.Context) -> None:
         f"{PREFIX}soundboard",
         f"{PREFIX}closerequest",
         f"{PREFIX}claim",
+        f"{PREFIX}rp change",
+        f"{PREFIX}rp info",
+        f"{PREFIX}rp history",
         f"{PREFIX}levels",
         f"{PREFIX}lledaderboard",
         f"{PREFIX}funcmds",
