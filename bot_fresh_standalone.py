@@ -1920,6 +1920,7 @@ async def post_ticket_panel() -> None:
 async def on_ready() -> None:
     global unban_task, transcript_cleanup_task
     await bot.change_presence(activity=discord.Game(name=STATUS_TEXT))
+    bot.add_view(RPChannelView())
     bot.add_view(TicketTypeSelectView())
     ensure_automod_blacklist_file()
     ensure_automod_nsfw_blacklist_file()
@@ -3011,6 +3012,99 @@ def resolve_rp_option(option_input: str) -> str | None:
     return None
 
 
+async def change_rp_channel(guild: discord.Guild, actor_name: str, actor_id: int, option_input: str) -> str:
+    now = datetime.now(timezone.utc)
+
+    if actor_id in RP_CHANNEL_COOLDOWN:
+        cooldown_expiry = RP_CHANNEL_COOLDOWN[actor_id]
+        if now < cooldown_expiry:
+            remaining = int((cooldown_expiry - now).total_seconds())
+            return f"❌ You can change RP again in {remaining} seconds."
+
+    channel = guild.get_channel(RP_CHANNEL_ID)
+    if not isinstance(channel, discord.TextChannel):
+        return f"❌ RP channel with ID `{RP_CHANNEL_ID}` not found."
+
+    new_name = resolve_rp_option(option_input)
+    if new_name is None:
+        return (
+            "❌ Invalid RP option.\n"
+            f"Use `{PREFIX}rp change` and choose from buttons."
+        )
+
+    try:
+        await channel.edit(name=new_name, reason=f"RP channel changed by {actor_name}")
+    except discord.Forbidden:
+        return "❌ I do not have permission to rename that channel."
+    except discord.HTTPException as error:
+        return f"❌ Failed to rename the RP channel: {error}"
+
+    global RP_CURRENT_NAME, RP_CURRENT_SINCE
+    RP_CURRENT_NAME = new_name
+    RP_CURRENT_SINCE = now
+    RP_CHANGE_HISTORY.append((new_name, now))
+    RP_CHANNEL_COOLDOWN[actor_id] = now + timedelta(seconds=RP_COOLDOWN_SECONDS)
+    return f"✅ RP has been changed to {new_name}"
+
+
+class RPChannelView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="1️⃣ River City RP", style=discord.ButtonStyle.blurple, custom_id="rp_river_city")
+    async def river_city(self, button: discord.ui.Button, interaction: discord.Interaction) -> None:
+        await self._change_rp(interaction, "1")
+
+    @discord.ui.button(label="2️⃣ Highway RP", style=discord.ButtonStyle.blurple, custom_id="rp_highway")
+    async def highway(self, button: discord.ui.Button, interaction: discord.Interaction) -> None:
+        await self._change_rp(interaction, "2")
+
+    @discord.ui.button(label="3️⃣ High Rock RP", style=discord.ButtonStyle.blurple, custom_id="rp_high_rock")
+    async def high_rock(self, button: discord.ui.Button, interaction: discord.Interaction) -> None:
+        await self._change_rp(interaction, "3")
+
+    @discord.ui.button(label="4️⃣ River City County", style=discord.ButtonStyle.blurple, custom_id="rp_river_county")
+    async def river_county(self, button: discord.ui.Button, interaction: discord.Interaction) -> None:
+        await self._change_rp(interaction, "4")
+
+    @discord.ui.button(label="5️⃣ Springfield County", style=discord.ButtonStyle.blurple, custom_id="rp_springfield_county")
+    async def springfield_county(self, button: discord.ui.Button, interaction: discord.Interaction) -> None:
+        await self._change_rp(interaction, "5")
+
+    @discord.ui.button(label="6️⃣ Springfield RP", style=discord.ButtonStyle.blurple, custom_id="rp_springfield")
+    async def springfield(self, button: discord.ui.Button, interaction: discord.Interaction) -> None:
+        await self._change_rp(interaction, "6")
+
+    @discord.ui.button(label="7️⃣ Full Map", style=discord.ButtonStyle.blurple, custom_id="rp_full_map")
+    async def full_map(self, button: discord.ui.Button, interaction: discord.Interaction) -> None:
+        await self._change_rp(interaction, "7")
+
+    @discord.ui.button(label="8️⃣ In-Game Event", style=discord.ButtonStyle.blurple, custom_id="rp_event")
+    async def event(self, button: discord.ui.Button, interaction: discord.Interaction) -> None:
+        await self._change_rp(interaction, "8")
+
+    @discord.ui.button(label="9️⃣ Server Shut Down", style=discord.ButtonStyle.blurple, custom_id="rp_shutdown")
+    async def shutdown(self, button: discord.ui.Button, interaction: discord.Interaction) -> None:
+        await self._change_rp(interaction, "9")
+
+    @discord.ui.button(label="🔟 Server Restart", style=discord.ButtonStyle.blurple, custom_id="rp_restart")
+    async def restart(self, button: discord.ui.Button, interaction: discord.Interaction) -> None:
+        await self._change_rp(interaction, "10")
+
+    async def _change_rp(self, interaction: discord.Interaction, option: str) -> None:
+        if interaction.guild is None:
+            await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+            return
+
+        result = await change_rp_channel(
+            interaction.guild,
+            str(interaction.user),
+            interaction.user.id,
+            option,
+        )
+        await interaction.response.send_message(result, ephemeral=True)
+
+
 @bot.command(name="rp")
 @commands.has_permissions(administrator=True)
 async def rp(ctx: commands.Context, action: str | None = None, *, option: str | None = None) -> None:
@@ -3061,50 +3155,15 @@ async def rp(ctx: commands.Context, action: str | None = None, *, option: str | 
         return
 
     if action_lower == "change":
-        if ctx.author.id in RP_CHANNEL_COOLDOWN:
-            cooldown_expiry = RP_CHANNEL_COOLDOWN[ctx.author.id]
-            if now < cooldown_expiry:
-                remaining = int((cooldown_expiry - now).total_seconds())
-                await ctx.send(f"❌ You can change RP again in {remaining} seconds.")
-                return
-
-        if not option:
-            await ctx.send(
-                "❌ Missing RP option.\n"
-                f"Use `{PREFIX}rp change <number>` with one of:\n{format_rp_options_text()}"
-            )
+        if option:
+            result = await change_rp_channel(ctx.guild, str(ctx.author), ctx.author.id, option)
+            await ctx.send(result)
             return
 
-        channel = ctx.guild.get_channel(RP_CHANNEL_ID)
-        if not isinstance(channel, discord.TextChannel):
-            await ctx.send(f"❌ RP channel with ID `{RP_CHANNEL_ID}` not found.")
-            return
-
-        new_name = resolve_rp_option(option)
-        if new_name is None:
-            await ctx.send(
-                "❌ Invalid RP option.\n"
-                f"Use `{PREFIX}rp change <number>` with one of:\n{format_rp_options_text()}"
-            )
-            return
-
-        try:
-            await channel.edit(name=new_name, reason=f"RP channel changed by {ctx.author}")
-        except discord.Forbidden:
-            await ctx.send("❌ I do not have permission to rename that channel.")
-            return
-        except discord.HTTPException as error:
-            await ctx.send(f"❌ Failed to rename the RP channel: {error}")
-            return
-
-        RP_CURRENT_NAME = new_name
-        RP_CURRENT_SINCE = now
-        RP_CHANGE_HISTORY.append((new_name, now))
-        RP_CHANNEL_COOLDOWN[ctx.author.id] = now + timedelta(seconds=RP_COOLDOWN_SECONDS)
-        await ctx.send(f"✅ RP has been changed to {new_name}")
+        await ctx.send("Select an RP mode:", view=RPChannelView())
         return
 
-    await ctx.send(f"Usage: `{PREFIX}rp change <number>`, `{PREFIX}rp info`, or `{PREFIX}rp history`.")
+    await ctx.send(f"Usage: `{PREFIX}rp change`, `{PREFIX}rp info`, or `{PREFIX}rp history`.")
 
 
 @bot.command(name="warn")
