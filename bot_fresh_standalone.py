@@ -13,6 +13,13 @@ from discord.ext import commands
 from dotenv import load_dotenv
 
 
+# Compatibility shims for modal APIs across py-cord / discord.py variants.
+if not hasattr(discord, "InputTextStyle") and hasattr(discord, "TextStyle"):
+    discord.InputTextStyle = discord.TextStyle
+if not hasattr(discord.ui, "TextInput") and hasattr(discord.ui, "InputText"):
+    discord.ui.TextInput = discord.ui.InputText
+
+
 ENV_PATH = os.path.join(os.path.dirname(__file__), ".env.fresh")
 if os.path.exists(ENV_PATH):
     load_dotenv(dotenv_path=ENV_PATH, override=True)
@@ -3167,7 +3174,7 @@ class TicketInfoModal(discord.ui.Modal, title="Ticket Information"):
     topic = discord.ui.TextInput(
         label="Topic",
         placeholder="Brief description...",
-        style=discord.TextStyle.short,
+        style=discord.InputTextStyle.short,
         required=True,
         max_length=200,
     )
@@ -3175,7 +3182,7 @@ class TicketInfoModal(discord.ui.Modal, title="Ticket Information"):
     details = discord.ui.TextInput(
         label="Details",
         placeholder="Describe in detail...",
-        style=discord.TextStyle.paragraph,
+        style=discord.InputTextStyle.long,
         required=True,
         min_length=10,
         max_length=2000,
@@ -3290,7 +3297,7 @@ class CloseRequestDenyReasonModal(discord.ui.Modal, title="Deny Ticket Close Req
             placeholder="Enter reason for denying the ticket close request...",
             required=True,
             max_length=500,
-            style=discord.TextStyle.paragraph,
+            style=discord.InputTextStyle.long,
         )
         self.add_item(self.reason)
 
