@@ -1949,6 +1949,7 @@ async def post_ticket_panel() -> None:
 async def on_ready() -> None:
     global unban_task, transcript_cleanup_task
     await bot.change_presence(activity=discord.Game(name=STATUS_TEXT))
+    bot.add_view(TicketTypeSelectView())
     ensure_automod_blacklist_file()
     ensure_automod_nsfw_blacklist_file()
     ensure_approved_invites_file()
