@@ -4040,6 +4040,75 @@ async def timeout_command(
     await ctx.send(f"Timed out {member.mention} for **{minutes}** minute(s).")
 
 
+def parse_mute_duration(duration_text: str) -> timedelta | None:
+    match = re.fullmatch(r"(\d+)([mhdw])", duration_text.strip().lower())
+    if not match:
+        return None
+
+    amount = int(match.group(1))
+    unit = match.group(2)
+    if amount < 1:
+        return None
+
+    if unit == "m":
+        return timedelta(minutes=amount)
+    if unit == "h":
+        return timedelta(hours=amount)
+    if unit == "d":
+        return timedelta(days=amount)
+    if unit == "w":
+        return timedelta(weeks=amount)
+    return None
+
+
+@bot.command(name="mute")
+@commands.has_role(WARN_COMMAND_ROLE_ID)
+@commands.bot_has_permissions(moderate_members=True)
+async def mute_command(
+    ctx: commands.Context,
+    member: discord.Member,
+    duration: str,
+    *,
+    reason: str = "No reason provided",
+) -> None:
+    delta = parse_mute_duration(duration)
+    if delta is None:
+        await ctx.send("Invalid duration. Use formats like `1m`, `1h`, `1d`, `1w`.")
+        return
+
+    timeout_until = datetime.now(timezone.utc) + delta
+    max_timeout_until = datetime.now(timezone.utc) + timedelta(days=28)
+    if timeout_until > max_timeout_until:
+        await ctx.send("Mute duration cannot be longer than 28 days (Discord limit).")
+        return
+
+    try:
+        await member.timeout(timeout_until, reason=f"Mute by {ctx.author}: {reason}")
+    except (discord.Forbidden, discord.HTTPException):
+        await ctx.send("I could not mute that user (permissions or API error).")
+        return
+
+    await ctx.send(f"Muted {member.mention} for **{duration.lower()}**.")
+
+
+@bot.command(name="unmute")
+@commands.has_role(WARN_COMMAND_ROLE_ID)
+@commands.bot_has_permissions(moderate_members=True)
+async def unmute_command(
+    ctx: commands.Context,
+    member: discord.Member,
+    *,
+    reason: str = "No reason provided",
+) -> None:
+    try:
+        await member.timeout(None, reason=f"Unmute by {ctx.author}: {reason}")
+    except (discord.Forbidden, discord.HTTPException):
+        await ctx.send("I could not unmute that user (permissions or API error).")
+        return
+
+    await ctx.send(f"Unmuted {member.mention}.")
+
+
 @bot.command(name="setnickname")
 @commands.has_role(WARN_COMMAND_ROLE_ID)
 @commands.bot_has_permissions(manage_nicknames=True)
