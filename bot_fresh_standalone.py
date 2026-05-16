@@ -3757,7 +3757,7 @@ async def closeticket(ctx: commands.Context) -> None:
 
 @bot.command(name="moveticket")
 @commands.has_role(TICKET_COMMAND_ROLE_ID)
-async def moveticket(ctx: commands.Context, *, category_name: str) -> None:
+async def moveticket(ctx: commands.Context, *, ticket_type: str) -> None:
     if ctx.guild is None or not isinstance(ctx.channel, discord.TextChannel):
         await ctx.send("This command can only be used in a server text channel.")
         return
@@ -3766,26 +3766,33 @@ async def moveticket(ctx: commands.Context, *, category_name: str) -> None:
         await ctx.send("This command can only be used in a ticket channel.")
         return
 
-    target_category: discord.CategoryChannel | None = None
-    if category_name.isdigit():
-        by_id = ctx.guild.get_channel(int(category_name))
-        if isinstance(by_id, discord.CategoryChannel):
-            target_category = by_id
+    # Find ticket type (case-insensitive)
+    target_type: str | None = None
+    search_lower = ticket_type.lower().strip()
+    for ticket_type_key in TICKET_TYPE_ROUTING.keys():
+        if ticket_type_key.lower() == search_lower:
+            target_type = ticket_type_key
+            break
 
-    if target_category is None:
-        lowered = category_name.lower().strip()
-        for category in ctx.guild.categories:
-            if category.name.lower() == lowered:
-                target_category = category
-                break
+    if target_type is None:
+        available = ", ".join(TICKET_TYPE_ROUTING.keys())
+        await ctx.send(f"Ticket type not found. Available types: {available}")
+        return
 
-    if target_category is None:
-        await ctx.send("Category not found. Use the exact category name or category ID.")
+    routing = TICKET_TYPE_ROUTING[target_type]
+    category_id = routing.get("category_id")
+    if not isinstance(category_id, int):
+        await ctx.send("Invalid category ID in routing config.")
+        return
+
+    target_category = ctx.guild.get_channel(category_id)
+    if not isinstance(target_category, discord.CategoryChannel):
+        await ctx.send("Target category not found in this server.")
         return
 
     try:
         await ctx.channel.edit(category=target_category, reason=f"Ticket moved by {ctx.author}")
-        await ctx.send(f"Moved ticket to **{target_category.name}**.")
+        await ctx.send(f"Moved ticket to **{target_type}** category.")
     except (discord.Forbidden, discord.HTTPException):
         await ctx.send("I could not move this ticket due to missing permissions.")
 
