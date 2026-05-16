@@ -29,7 +29,7 @@ TOKEN = os.getenv("NEW_BOT_TOKEN")
 PREFIX = os.getenv("NEW_BOT_PREFIX", "!")
 STATUS_TEXT = os.getenv("NEW_BOT_STATUS", "Managing the server")
 ERLC_API_KEY = os.getenv("ERLC_API_KEY", "DucAfpAQtDEaUScIirXg-pLusPFVQAdmGTprXvWEutufuBUsgnyrcmfczzvcd").strip()
-ERLC_API_BASE_URL = "https://api.policeroleplay.community/v1"
+ERLC_API_BASE_URL = "https://api.erlc.gg/v2"
 
 if not TOKEN:
     print("Missing NEW_BOT_TOKEN in environment variables.")
@@ -205,24 +205,15 @@ def _extract_queue_count(payload: dict | list) -> int | None:
 
 
 def _format_erlc_player_line(player: dict) -> str:
-    username = _pick_payload_value(player, "username", "player", "name")
-    permission = _pick_payload_value(player, "permission", "role", "staffType")
-    team = _pick_payload_value(player, "team", "teamName")
-    callsign = _pick_payload_value(player, "callsign", "callSign")
-
-    username_text = str(username).strip() if username is not None else "Unknown"
-    permission_text = str(permission).strip() if permission is not None else "N/A"
-    team_text = str(team).strip() if team is not None else "N/A"
-    callsign_text = str(callsign).strip() if callsign is not None else "N/A"
-
+    # v2 API: Player field is "Username:Id", split to get username
+    raw_player = player.get("Player", "")
+    username_text = str(raw_player).split(":")[0].strip() if raw_player else "Unknown"
     if not username_text:
         username_text = "Unknown"
-    if not permission_text:
-        permission_text = "N/A"
-    if not team_text:
-        team_text = "N/A"
-    if not callsign_text:
-        callsign_text = "N/A"
+
+    permission_text = str(player.get("Permission", "N/A")).strip() or "N/A"
+    team_text = str(player.get("Team", "N/A")).strip() or "N/A"
+    callsign_text = str(player.get("Callsign", "N/A")).strip() or "N/A"
 
     return (
         f"• **{username_text}** — `{permission_text}` | "
@@ -231,27 +222,24 @@ def _format_erlc_player_line(player: dict) -> str:
 
 
 def _is_staff_player(player: dict) -> bool:
-    permission = _pick_payload_value(player, "permission", "role", "staffType")
-    if permission is None:
-        return False
-    text = str(permission).lower()
-    return "admin" in text or "moderator" in text or "staff" in text
+    permission = str(player.get("Permission", "")).lower()
+    return "administrator" in permission or "moderator" in permission or "owner" in permission
 
 
-async def _fetch_erlc_json(endpoint: str) -> tuple[dict | list | None, str | None]:
+async def _fetch_erlc_json(endpoint: str, params: dict | None = None) -> tuple[dict | list | None, str | None]:
     if not ERLC_API_KEY:
         return None, "ERLC API key is missing."
 
     url = f"{ERLC_API_BASE_URL}{endpoint}"
     timeout = aiohttp.ClientTimeout(total=12)
     headers = {
-        "Authorization": ERLC_API_KEY,
+        "server-key": ERLC_API_KEY,
         "User-Agent": "SLCRP-Bot/1.0",
     }
 
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(url, headers=headers) as response:
+            async with session.get(url, headers=headers, params=params or {}) as response:
                 raw_text = await response.text()
                 if response.status != 200:
                     snippet = raw_text.strip().replace("\n", " ")[:180]
@@ -2538,12 +2526,14 @@ async def setid(ctx: commands.Context, key: str = "", value: str = "") -> None:
 
 @bot.command(name="ingame")
 async def ingame(ctx: commands.Context) -> None:
-    payload, error = await _fetch_erlc_json("/server/players")
-    if error or payload is None:
+    payload, error = await _fetch_erlc_json("/server", {"Players": "true"})
+    if error or not isinstance(payload, dict):
         await ctx.send(f"Could not fetch in-game players. {error or ''}".strip())
         return
 
-    players = _extract_players(payload)
+    players = payload.get("Players") or []
+    if not isinstance(players, list):
+        players = []
     if not players:
         embed = discord.Embed(
             title="ERLC Players Currently In-Game (0)",
@@ -2571,13 +2561,15 @@ async def ingame(ctx: commands.Context) -> None:
 
 @bot.command(name="checkstaff")
 async def checkstaff(ctx: commands.Context) -> None:
-    payload, error = await _fetch_erlc_json("/server/players")
-    if error or payload is None:
+    payload, error = await _fetch_erlc_json("/server", {"Players": "true"})
+    if error or not isinstance(payload, dict):
         await ctx.send(f"Could not fetch in-game staff. {error or ''}".strip())
         return
 
-    players = _extract_players(payload)
-    staff_players = [player for player in players if _is_staff_player(player)]
+    players = payload.get("Players") or []
+    if not isinstance(players, list):
+        players = []
+    staff_players = [p for p in players if _is_staff_player(p)]
 
     if not staff_players:
         embed = discord.Embed(
@@ -2606,15 +2598,13 @@ async def checkstaff(ctx: commands.Context) -> None:
 
 @bot.command(name="queue")
 async def queue(ctx: commands.Context) -> None:
-    payload, error = await _fetch_erlc_json("/server/queue")
-    if error or payload is None:
+    payload, error = await _fetch_erlc_json("/server", {"Queue": "true"})
+    if error or not isinstance(payload, dict):
         await ctx.send(f"Could not fetch server queue. {error or ''}".strip())
         return
 
-    queue_count = _extract_queue_count(payload)
-    if queue_count is None:
-        await ctx.send("Could not determine queue size from ERLC response.")
-        return
+    queue_data = payload.get("Queue", [])
+    queue_count = len(queue_data) if isinstance(queue_data, list) else 0
 
     embed = discord.Embed(
         title="ERLC Server Queue",
