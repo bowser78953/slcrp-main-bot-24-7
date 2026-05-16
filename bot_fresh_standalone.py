@@ -537,14 +537,14 @@ class LevelsLeaderboardView(discord.ui.View):
         return True
 
     @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary)
-    async def previous_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    async def previous_button(self, button: discord.ui.Button, interaction: discord.Interaction) -> None:
         self.page_index = max(self.page_index - 1, 0)
         self._sync_buttons()
         embed = build_levels_leaderboard_embed(entries=self.entries, page_index=self.page_index, page_size=self.page_size)
         await interaction.response.edit_message(embed=embed, view=self)
 
     @discord.ui.button(label="Next", style=discord.ButtonStyle.secondary)
-    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    async def next_button(self, button: discord.ui.Button, interaction: discord.Interaction) -> None:
         total_pages = max((len(self.entries) + self.page_size - 1) // self.page_size, 1)
         self.page_index = min(self.page_index + 1, total_pages - 1)
         self._sync_buttons()
@@ -1722,7 +1722,7 @@ class AutomodReportView(discord.ui.View):
                 item.disabled = True
 
     @discord.ui.button(label="Accept Report", style=discord.ButtonStyle.green)
-    async def accept_report(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    async def accept_report(self, button: discord.ui.Button, interaction: discord.Interaction) -> None:
         self._disable_all()
         await interaction.response.edit_message(view=self)
         await interaction.followup.send(
@@ -1730,7 +1730,7 @@ class AutomodReportView(discord.ui.View):
         )
 
     @discord.ui.button(label="Dismiss Report", style=discord.ButtonStyle.red)
-    async def dismiss_report(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    async def dismiss_report(self, button: discord.ui.Button, interaction: discord.Interaction) -> None:
         self._disable_all()
         await interaction.response.edit_message(view=self)
         await interaction.followup.send(
@@ -1763,14 +1763,14 @@ class SpamReportView(discord.ui.View):
         )
 
     @discord.ui.button(label="Deal With", style=discord.ButtonStyle.green, custom_id="spam_report_deal_with")
-    async def deal_with(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    async def deal_with(self, button: discord.ui.Button, interaction: discord.Interaction) -> None:
         await self._handle_once(
             interaction,
             f"{interaction.user.mention} has moderated {self.flagged_user.mention} for spam.",
         )
 
     @discord.ui.button(label="Dismiss", style=discord.ButtonStyle.danger, custom_id="spam_report_dismiss")
-    async def dismiss(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    async def dismiss(self, button: discord.ui.Button, interaction: discord.Interaction) -> None:
         await self._handle_once(
             interaction,
             f"{interaction.user.mention} dismissed the spam report without further action.",
@@ -1787,7 +1787,7 @@ class HelpRequestLogView(discord.ui.View):
         self.handled = False
 
     @discord.ui.button(label="Mark as Dealt With", style=discord.ButtonStyle.secondary, custom_id="help_mark_dealt_with")
-    async def mark_dealt_with(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    async def mark_dealt_with(self, button: discord.ui.Button, interaction: discord.Interaction) -> None:
         if self.handled:
             await interaction.response.send_message("This help request has already been marked as dealt with.", ephemeral=True)
             return
@@ -1838,7 +1838,7 @@ class HelpRequestConfirmView(discord.ui.View):
         await interaction.response.edit_message(view=self)
 
     @discord.ui.button(label="Yes", style=discord.ButtonStyle.green, custom_id="help_confirm_yes")
-    async def confirm_yes(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    async def confirm_yes(self, button: discord.ui.Button, interaction: discord.Interaction) -> None:
         if self.completed:
             await interaction.response.send_message("This help request prompt is already handled.", ephemeral=True)
             return
@@ -1880,7 +1880,7 @@ class HelpRequestConfirmView(discord.ui.View):
         await interaction.followup.send("Staff has been notified.", ephemeral=True)
 
     @discord.ui.button(label="No", style=discord.ButtonStyle.red, custom_id="help_confirm_no")
-    async def confirm_no(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    async def confirm_no(self, button: discord.ui.Button, interaction: discord.Interaction) -> None:
         if self.completed:
             await interaction.response.send_message("This help request prompt is already handled.", ephemeral=True)
             return
@@ -1906,7 +1906,7 @@ class ProhibitedInviteReportView(discord.ui.View):
         await interaction.response.edit_message(view=self)
 
     @discord.ui.button(label="Confirm", style=discord.ButtonStyle.danger, custom_id="prohibited_invite_confirm")
-    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    async def confirm(self, button: discord.ui.Button, interaction: discord.Interaction) -> None:
         if self.handled:
             await interaction.response.send_message("This report has already been handled.", ephemeral=True)
             return
@@ -1941,7 +1941,7 @@ class ProhibitedInviteReportView(discord.ui.View):
             await interaction.edit_original_response(embed=updated_embed, view=self)
 
     @discord.ui.button(label="Dismiss", style=discord.ButtonStyle.secondary, custom_id="prohibited_invite_dismiss")
-    async def dismiss(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    async def dismiss(self, button: discord.ui.Button, interaction: discord.Interaction) -> None:
         if self.handled:
             await interaction.response.send_message("This report has already been handled.", ephemeral=True)
             return
@@ -3543,7 +3543,7 @@ class CloseRequestView(discord.ui.View):
                 item.disabled = True
 
     @discord.ui.button(label="Accept", style=discord.ButtonStyle.green, custom_id="ticket_close_request_accept")
-    async def accept(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    async def accept(self, button: discord.ui.Button, interaction: discord.Interaction) -> None:
         if self.handled:
             await interaction.response.send_message("This close request is already handled.", ephemeral=True)
             return
@@ -3566,7 +3566,7 @@ class CloseRequestView(discord.ui.View):
             await interaction.followup.send("I could not close this ticket due to missing permissions.", ephemeral=True)
 
     @discord.ui.button(label="Deny", style=discord.ButtonStyle.red, custom_id="ticket_close_request_deny")
-    async def deny(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    async def deny(self, button: discord.ui.Button, interaction: discord.Interaction) -> None:
         if self.handled:
             await interaction.response.send_message("This close request is already handled.", ephemeral=True)
             return
