@@ -4,6 +4,7 @@ import re
 import asyncio
 import random
 import time
+import sys
 import aiohttp
 from urllib.parse import unquote
 from collections import deque
@@ -4096,54 +4097,48 @@ async def reload_category(ctx: commands.Context, category: str = "") -> None:
         await ctx.send(f"You need <@&{RELOAD_COMMAND_ROLE_ID}> to use this command.")
         return
 
-    ALL_CATEGORIES = ["xpsystem", "spam", "automod", "nsfwautomod", "invitesystem", "botsystem", "ticketsystam", "claimwipe"]
+    ALL_CATEGORIES = ["all", "xpsystem", "spam", "automod", "nsfwautomod", "invitesystem", "botsystem", "ticketsystam", "claimwipe"]
+
+    async def perform_full_runtime_reload() -> list[str]:
+        results: list[str] = []
+        ensure_levels_file()
+        levels_data = load_levels_data()
+        save_levels_data(levels_data)
+        results.append(f"xpsystem: **{len(levels_data.get('users', {}))}** users")
+
+        SPAM_AUTOMOD_STATE.clear()
+        SPAM_AUTOMOD_RECENT_ACTION.clear()
+        results.append("spam: cache cleared")
+
+        normal_term_count = refresh_runtime_automod_terms()
+        results.append(f"automod: **{normal_term_count}** normal terms")
+
+        nsfw_term_count = refresh_runtime_nsfw_terms()
+        results.append(f"nsfwautomod: **{nsfw_term_count}** nsfw terms")
+
+        invite_count = refresh_runtime_approved_invites()
+        results.append(f"invitesystem: **{invite_count}** invites")
+
+        bot_count = refresh_runtime_approved_bots()
+        results.append(f"botsystem: **{bot_count}** bots")
+
+        user_count = refresh_runtime_claimwipe_users()
+        results.append(f"claimwipe: **{user_count}** users")
+        return results
 
     if not category.strip():
-        # Reload all categories
-        started_at = time.perf_counter()
-        results: list[str] = []
-        try:
-            ensure_levels_file()
-            levels_data = load_levels_data()
-            save_levels_data(levels_data)
-            results.append(f"xpsystem: **{len(levels_data.get('users', {}))}** users")
-
-            SPAM_AUTOMOD_STATE.clear()
-            SPAM_AUTOMOD_RECENT_ACTION.clear()
-            results.append("spam: cache cleared")
-
-            normal_term_count = refresh_runtime_automod_terms()
-            results.append(f"automod: **{normal_term_count}** normal terms")
-
-            nsfw_term_count = refresh_runtime_nsfw_terms()
-            results.append(f"nsfwautomod: **{nsfw_term_count}** nsfw terms")
-
-            invite_count = refresh_runtime_approved_invites()
-            results.append(f"invitesystem: **{invite_count}** invites")
-
-            bot_count = refresh_runtime_approved_bots()
-            results.append(f"botsystem: **{bot_count}** bots")
-
-            user_count = refresh_runtime_claimwipe_users()
-            results.append(f"claimwipe: **{user_count}** users")
-        except Exception as reload_error:
-            await ctx.send(f"Reload failed: `{reload_error}`")
-            return
-
-        elapsed = time.perf_counter() - started_at
-        embed = discord.Embed(
-            title="All Systems Reloaded",
-            description="\n".join(results),
-            color=discord.Color.green(),
-        )
-        embed.add_field(name="Elapsed Time", value=f"{elapsed:.4f}s", inline=False)
-        embed.set_footer(text="Cog Manager • Success")
-        await ctx.send(embed=embed)
+        await ctx.send("Reloading bot process to apply latest code changes...")
+        await asyncio.sleep(1)
+        os.execv(sys.executable, [sys.executable, *sys.argv])
         return
 
     normalized = category.strip().lower().lstrip(">")
     normalized = normalized.replace(" ", "").replace("-", "").replace("_", "")
     aliases = {
+        "all": "all",
+        "data": "all",
+        "runtime": "all",
+        "systems": "all",
         "xpsystem": "xpsystem",
         "xp": "xpsystem",
         "spam": "spam",
@@ -4165,6 +4160,18 @@ async def reload_category(ctx: commands.Context, category: str = "") -> None:
     details = ""
 
     try:
+        if normalized == "all":
+            results = await perform_full_runtime_reload()
+            elapsed = time.perf_counter() - started_at
+            embed = discord.Embed(
+                title="All Systems Reloaded",
+                description="\n".join(results),
+                color=discord.Color.green(),
+            )
+            embed.add_field(name="Elapsed Time", value=f"{elapsed:.4f}s", inline=False)
+            embed.set_footer(text="Cog Manager • Success")
+            await ctx.send(embed=embed)
+            return
         if normalized == "xpsystem":
             ensure_levels_file()
             levels_data = load_levels_data()
