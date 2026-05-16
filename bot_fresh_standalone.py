@@ -887,6 +887,7 @@ def build_default_runtime_settings() -> dict:
         "id_overrides": {
             "reload_command_role_id": RELOAD_COMMAND_ROLE_ID,
             "ticket_rules_channel_id": TICKET_RULES_CHANNEL_ID,
+            "rp_channel_id": RP_CHANNEL_ID,
         },
     }
 
@@ -996,6 +997,10 @@ def get_reload_command_role_id() -> int:
 
 def get_ticket_rules_channel_id() -> int:
     return get_runtime_id("ticket_rules_channel_id", TICKET_RULES_CHANNEL_ID)
+
+
+def get_rp_channel_id() -> int:
+    return get_runtime_id("rp_channel_id", RP_CHANNEL_ID)
 
 
 def load_automod_nsfw_blacklist_terms() -> list[str]:
@@ -3012,6 +3017,19 @@ def resolve_rp_option(option_input: str) -> str | None:
     return None
 
 
+def resolve_rp_channel(guild: discord.Guild) -> discord.TextChannel | None:
+    configured_channel = guild.get_channel(get_rp_channel_id())
+    if isinstance(configured_channel, discord.TextChannel):
+        return configured_channel
+
+    valid_names = {name.lower() for name in RP_CHANNEL_OPTIONS.values()}
+    for channel in guild.text_channels:
+        if channel.name.lower() in valid_names:
+            return channel
+
+    return None
+
+
 async def change_rp_channel(guild: discord.Guild, actor_name: str, actor_id: int, option_input: str) -> str:
     now = datetime.now(timezone.utc)
 
@@ -3021,9 +3039,13 @@ async def change_rp_channel(guild: discord.Guild, actor_name: str, actor_id: int
             remaining = int((cooldown_expiry - now).total_seconds())
             return f"❌ You can change RP again in {remaining} seconds."
 
-    channel = guild.get_channel(RP_CHANNEL_ID)
+    channel = resolve_rp_channel(guild)
     if not isinstance(channel, discord.TextChannel):
-        return f"❌ RP channel with ID `{RP_CHANNEL_ID}` not found."
+        rp_channel_id = get_rp_channel_id()
+        return (
+            f"❌ RP channel with ID `{rp_channel_id}` not found. "
+            f"Update `id_overrides.rp_channel_id` in `{RUNTIME_SETTINGS_PATH}` and run `{PREFIX}reload settings`."
+        )
 
     new_name = resolve_rp_option(option_input)
     if new_name is None:
@@ -3118,7 +3140,7 @@ async def rp(ctx: commands.Context, action: str | None = None, *, option: str | 
 
     if action_lower == "info":
         if RP_CURRENT_NAME is None:
-            channel = ctx.guild.get_channel(RP_CHANNEL_ID)
+            channel = resolve_rp_channel(ctx.guild)
             if isinstance(channel, discord.TextChannel):
                 RP_CURRENT_NAME = channel.name
 
