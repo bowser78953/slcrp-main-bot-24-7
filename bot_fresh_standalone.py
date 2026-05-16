@@ -3168,7 +3168,7 @@ TICKET_RULES_REWORDED = {
 }
 
 
-class TicketInfoModal(discord.ui.Modal, title="Ticket Information"):
+class TicketInfoModal(discord.ui.Modal):
     """Modal shown when a ticket type is selected."""
 
     topic = discord.ui.TextInput(
@@ -3189,7 +3189,7 @@ class TicketInfoModal(discord.ui.Modal, title="Ticket Information"):
     )
 
     def __init__(self, ticket_type: str) -> None:
-        super().__init__()
+        super().__init__(title="Ticket Information")
         self.ticket_type = ticket_type
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
@@ -3288,9 +3288,9 @@ class TicketRequestView(discord.ui.View):
         super().__init__(timeout=None)
 
 
-class CloseRequestDenyReasonModal(discord.ui.Modal, title="Deny Ticket Close Request"):
+class CloseRequestDenyReasonModal(discord.ui.Modal):
     def __init__(self, parent_view: "CloseRequestView") -> None:
-        super().__init__()
+        super().__init__(title="Deny Ticket Close Request")
         self.parent_view = parent_view
         self.reason = discord.ui.TextInput(
             label="Reason",
