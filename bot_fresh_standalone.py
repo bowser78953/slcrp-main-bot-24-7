@@ -3737,7 +3737,7 @@ async def nrs(ctx: commands.Context, member: discord.Member) -> None:
         await ctx.send("Roles were saved, but I could not remove any due to role hierarchy.")
         return
 
-    await member.remove_roles(*removable_roles, reason=f"nrs used by {ctx.author}")
+    await member.remove_roles(*removable_roles, reason=f"nrs used by {ctx.author}", atomic=False)
     result_embed = discord.Embed(
         title="NRS Complete",
         description=(
@@ -3822,7 +3822,7 @@ async def gar(ctx: commands.Context, member: discord.Member) -> None:
         await ctx.send("I could not add any saved roles (missing roles or role hierarchy issue).")
         return
 
-    await member.add_roles(*addable_roles, reason=f"gar used by {ctx.author}")
+    await member.add_roles(*addable_roles, reason=f"gar used by {ctx.author}", atomic=False)
     result_embed = discord.Embed(
         title="GAR Complete",
         description=f"Restored **{len(addable_roles)}** saved role(s) to {member.mention}.",
