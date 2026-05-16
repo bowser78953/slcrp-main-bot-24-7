@@ -95,7 +95,6 @@ ANTI_BOT_LOG_CHANNEL_ID = 1494414785763348621
 TICKET_RULES_CHANNEL_ID = 1493095132852129873
 TICKET_CLOSE_LOG_CHANNEL_ID = 1494822378851668121
 MAIN_SERVER_GUILD_ID = 1397084580816621618
-CLAIMWIPE_PING_ROLE_ID = 1495572493900054648
 RELOAD_COMMAND_ROLE_ID = 1495581053862019215
 ALT_DETECTION_MAX_ACCOUNT_AGE_DAYS = 7
 TICKET_TRANSCRIPT_RETENTION_DAYS = 7
@@ -124,7 +123,6 @@ APPROVED_INVITES_PATH = os.path.join(DATA_DIR, "approved_invites.json")
 APPROVED_BOTS_PATH = os.path.join(DATA_DIR, "approved_bots.json")
 TICKET_TRANSCRIPTS_DIR = os.path.join(DATA_DIR, "ticket_transcripts")
 LEVELS_PATH = os.path.join(DATA_DIR, "levels.json")
-CLAIMWIPE_ALLOWED_USERS_PATH = os.path.join(DATA_DIR, "claimwipe_allowed_users.json")
 RUNTIME_SETTINGS_PATH = os.path.join(DATA_DIR, "runtime_settings.json")
 BAN_APPEAL_GUILD_ID = 1500595644220444752
 BAN_APPEAL_DM_QUEUE_PATH = os.path.join(DATA_DIR, "ban_appeal_dm_queue.jsonl")
@@ -134,7 +132,6 @@ RUNTIME_AUTOMOD_TERMS: list[str] = []
 RUNTIME_NSFW_TERMS: list[str] = []
 RUNTIME_APPROVED_INVITE_CODES: set[str] = set()
 RUNTIME_APPROVED_BOT_IDS: set[int] = set()
-RUNTIME_CLAIMWIPE_ALLOWED_USER_IDS: set[int] = set()
 RUNTIME_SETTINGS: dict = {}
 
 unban_task: asyncio.Task | None = None
@@ -908,54 +905,6 @@ def load_approved_bot_ids() -> set[int]:
     return approved_ids
 
 
-def ensure_claimwipe_allowed_users_file() -> None:
-    if os.path.exists(CLAIMWIPE_ALLOWED_USERS_PATH):
-        return
-
-    os.makedirs(os.path.dirname(CLAIMWIPE_ALLOWED_USERS_PATH), exist_ok=True)
-    with open(CLAIMWIPE_ALLOWED_USERS_PATH, "w", encoding="utf-8") as file:
-        json.dump({"user_ids": [114951300970979331]}, file, indent=2)
-
-
-def load_claimwipe_allowed_user_ids() -> set[int]:
-    ensure_claimwipe_allowed_users_file()
-
-    try:
-        with open(CLAIMWIPE_ALLOWED_USERS_PATH, "r", encoding="utf-8") as file:
-            raw_data = json.load(file)
-    except (OSError, json.JSONDecodeError):
-        return set()
-
-    if isinstance(raw_data, dict):
-        raw_ids = raw_data.get("user_ids")
-        if raw_ids is None:
-            raw_ids = raw_data.get("allowed_user_ids", [])
-    elif isinstance(raw_data, list):
-        raw_ids = raw_data
-    else:
-        raw_ids = []
-
-    allowed_ids: set[int] = set()
-    for raw_entry in raw_ids:
-        try:
-            allowed_ids.add(int(raw_entry))
-            continue
-        except (TypeError, ValueError):
-            pass
-
-        # Allow mention-style or mixed text entries like "<@123...>".
-        if isinstance(raw_entry, str):
-            match = re.search(r"\d+", raw_entry)
-            if match:
-                try:
-                    allowed_ids.add(int(match.group(0)))
-                except ValueError:
-                    pass
-            continue
-
-    return allowed_ids
-
-
 def build_default_runtime_settings() -> dict:
     return {
         "support_embed": {
@@ -972,7 +921,6 @@ def build_default_runtime_settings() -> dict:
         "ticket_rules": dict(TICKET_RULES_REWORDED),
         "id_overrides": {
             "reload_command_role_id": RELOAD_COMMAND_ROLE_ID,
-            "claimwipe_ping_role_id": CLAIMWIPE_PING_ROLE_ID,
             "ticket_rules_channel_id": TICKET_RULES_CHANNEL_ID,
         },
     }
@@ -1081,10 +1029,6 @@ def get_reload_command_role_id() -> int:
     return get_runtime_id("reload_command_role_id", RELOAD_COMMAND_ROLE_ID)
 
 
-def get_claimwipe_ping_role_id() -> int:
-    return get_runtime_id("claimwipe_ping_role_id", CLAIMWIPE_PING_ROLE_ID)
-
-
 def get_ticket_rules_channel_id() -> int:
     return get_runtime_id("ticket_rules_channel_id", TICKET_RULES_CHANNEL_ID)
 
@@ -1134,13 +1078,6 @@ def refresh_runtime_approved_bots() -> int:
     return len(RUNTIME_APPROVED_BOT_IDS)
 
 
-def refresh_runtime_claimwipe_users() -> int:
-    global RUNTIME_CLAIMWIPE_ALLOWED_USER_IDS
-    ensure_claimwipe_allowed_users_file()
-    RUNTIME_CLAIMWIPE_ALLOWED_USER_IDS = load_claimwipe_allowed_user_ids()
-    return len(RUNTIME_CLAIMWIPE_ALLOWED_USER_IDS)
-
-
 def get_blacklist_file_stats(file_path: str) -> tuple[int, int]:
     """Return (raw_line_count, ignored_line_count) for blacklist-style files."""
     raw_line_count = 0
@@ -1164,7 +1101,6 @@ def refresh_all_runtime_caches() -> None:
     refresh_runtime_nsfw_terms()
     refresh_runtime_approved_invites()
     refresh_runtime_approved_bots()
-    refresh_runtime_claimwipe_users()
     refresh_runtime_settings()
 
 
@@ -2017,7 +1953,6 @@ async def on_ready() -> None:
     ensure_automod_nsfw_blacklist_file()
     ensure_approved_invites_file()
     ensure_approved_bots_file()
-    ensure_claimwipe_allowed_users_file()
     refresh_all_runtime_caches()
     delete_expired_ticket_transcripts()
     if unban_task is None or unban_task.done():
@@ -2592,7 +2527,6 @@ async def setid(ctx: commands.Context, key: str = "", value: str = "") -> None:
 
     allowed_keys = {
         "reload_command_role_id": "Reload command access role",
-        "claimwipe_ping_role_id": "Claimwipe ping role",
         "ticket_rules_channel_id": "Ticket rules panel channel",
     }
 
@@ -2606,7 +2540,7 @@ async def setid(ctx: commands.Context, key: str = "", value: str = "") -> None:
 
     if key_text not in allowed_keys:
         await ctx.send(
-            "Invalid ID key. Use: `reload_command_role_id`, `claimwipe_ping_role_id`, "
+            "Invalid ID key. Use: `reload_command_role_id`, "
             "`ticket_rules_channel_id` or `list`."
         )
         return
@@ -4230,29 +4164,6 @@ async def lledaderboard(ctx: commands.Context) -> None:
     await ctx.send(embed=embed, view=view)
 
 
-@bot.command(name="claimwipe")
-async def claimwipe(ctx: commands.Context) -> None:
-    allowed_user_ids = load_claimwipe_allowed_user_ids()
-    if ctx.author.id not in allowed_user_ids:
-        await ctx.send("You are not allowed to use this command.")
-        return
-
-    levels_data = load_levels_data()
-    reset_count = 0
-    for record in levels_data.get("users", {}).values():
-        if record.get("last_claim") is not None:
-            record["last_claim"] = None
-            reset_count += 1
-    save_levels_data(levels_data)
-
-    await ctx.send(
-        content=(
-            f"<@&{get_claimwipe_ping_role_id()}> Claim cooldowns were reset for **{reset_count}** user(s)."
-        ),
-        allowed_mentions=discord.AllowedMentions(roles=True),
-    )
-
-
 @bot.command(name="reload")
 async def reload_category(ctx: commands.Context, category: str = "") -> None:
     if ctx.guild is None or not isinstance(ctx.author, discord.Member):
@@ -4265,7 +4176,7 @@ async def reload_category(ctx: commands.Context, category: str = "") -> None:
         await ctx.send(f"You need <@&{reload_role_id}> to use this command.")
         return
 
-    ALL_CATEGORIES = ["all", "settings", "xpsystem", "spam", "automod", "nsfwautomod", "invitesystem", "botsystem", "ticketsystam", "claimwipe"]
+    ALL_CATEGORIES = ["all", "settings", "xpsystem", "spam", "automod", "nsfwautomod", "invitesystem", "botsystem", "ticketsystam"]
 
     async def perform_full_runtime_reload() -> list[str]:
         results: list[str] = []
@@ -4289,9 +4200,6 @@ async def reload_category(ctx: commands.Context, category: str = "") -> None:
 
         bot_count = refresh_runtime_approved_bots()
         results.append(f"botsystem: **{bot_count}** bots")
-
-        user_count = refresh_runtime_claimwipe_users()
-        results.append(f"claimwipe: **{user_count}** users")
 
         settings_count = refresh_runtime_settings()
         results.append(f"settings: **{settings_count}** ticket rules")
@@ -4399,9 +4307,6 @@ async def reload_category(ctx: commands.Context, category: str = "") -> None:
         elif normalized == "ticketsystam":
             await post_ticket_panel()
             details = "Ticket panel re-posted."
-        elif normalized == "claimwipe":
-            user_count = refresh_runtime_claimwipe_users()
-            details = f"Loaded **{user_count}** allowed claimwipe user IDs into runtime cache."
         else:
             await ctx.send(
                 f"Invalid category. Use one of: `{'`, `'.join(ALL_CATEGORIES)}`."

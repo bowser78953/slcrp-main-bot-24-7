@@ -6,4 +6,3 @@ __pycache__/
 data/*
 !data/automod_blacklist_fresh.txt
 !data/automod_nsfw_blacklist_fresh.txt
-!data/claimwipe_allowed_users.json
