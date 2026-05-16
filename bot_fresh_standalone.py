@@ -14,7 +14,8 @@ from dotenv import load_dotenv
 
 
 ENV_PATH = os.path.join(os.path.dirname(__file__), ".env.fresh")
-load_dotenv(dotenv_path=ENV_PATH, override=True)
+if os.path.exists(ENV_PATH):
+    load_dotenv(dotenv_path=ENV_PATH, override=True)
 
 TOKEN = os.getenv("NEW_BOT_TOKEN")
 PREFIX = os.getenv("NEW_BOT_PREFIX", "!")
@@ -22,10 +23,6 @@ STATUS_TEXT = os.getenv("NEW_BOT_STATUS", "Managing the server")
 ERLC_API_KEY = os.getenv("ERLC_API_KEY", "").strip()
 ERLC_SERVER_CODE_RAW = os.getenv("ERLC_SERVER_CODE", "").strip()
 ERLC_API_BASE_URL = "https://api.policeroleplay.community/v1"
-
-if not os.path.exists(ENV_PATH):
-    print("Missing .env.fresh file for this bot.")
-    raise SystemExit(1)
 
 if not TOKEN:
     print("Missing NEW_BOT_TOKEN in environment variables.")
@@ -276,9 +273,9 @@ def _is_staff_player(player: dict) -> bool:
 
 async def _fetch_erlc_json(endpoint: str) -> tuple[dict | list | None, str | None]:
     if not ERLC_API_KEY:
-        return None, "ERLC API key is missing. Add `ERLC_API_KEY` in `.env.fresh`."
+        return None, "ERLC API key is missing. Add `ERLC_API_KEY` in environment variables."
     if not ERLC_PS_CODE:
-        return None, "ERLC server key is missing. Add `ERLC_SERVER_CODE` (psCode) in `.env.fresh`."
+        return None, "ERLC server key is missing. Add `ERLC_SERVER_CODE` (psCode) in environment variables."
 
     url = f"{ERLC_API_BASE_URL}{endpoint}"
     timeout = aiohttp.ClientTimeout(total=12)
