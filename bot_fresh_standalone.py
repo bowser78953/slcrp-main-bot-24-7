@@ -989,6 +989,11 @@ def build_default_runtime_settings() -> dict:
             "select_description": "Select the type of ticket you would like to open from the menu below.",
         },
         "ticket_rules": dict(TICKET_RULES_REWORDED),
+        "id_overrides": {
+            "reload_command_role_id": RELOAD_COMMAND_ROLE_ID,
+            "claimwipe_ping_role_id": CLAIMWIPE_PING_ROLE_ID,
+            "ticket_rules_channel_id": TICKET_RULES_CHANNEL_ID,
+        },
     }
 
 
@@ -1042,10 +1047,24 @@ def load_runtime_settings() -> dict:
     if not ticket_rules:
         ticket_rules = dict(default_settings["ticket_rules"])
 
+    default_id_overrides = default_settings["id_overrides"]
+    id_overrides_raw = raw.get("id_overrides", {})
+    id_overrides: dict[str, int] = {}
+    if isinstance(id_overrides_raw, dict):
+        for key, default_value in default_id_overrides.items():
+            candidate = id_overrides_raw.get(key, default_value)
+            try:
+                id_overrides[key] = int(candidate)
+            except (TypeError, ValueError):
+                id_overrides[key] = int(default_value)
+    else:
+        id_overrides = dict(default_id_overrides)
+
     return {
         "support_embed": support_embed,
         "ticket_panel": ticket_panel,
         "ticket_rules": ticket_rules,
+        "id_overrides": id_overrides,
     }
 
 
@@ -1062,6 +1081,31 @@ def refresh_runtime_settings() -> int:
     RUNTIME_SETTINGS = load_runtime_settings()
     ticket_rules = RUNTIME_SETTINGS.get("ticket_rules", {}) if isinstance(RUNTIME_SETTINGS, dict) else {}
     return len(ticket_rules) if isinstance(ticket_rules, dict) else 0
+
+
+def get_runtime_id(setting_key: str, fallback: int) -> int:
+    if not isinstance(RUNTIME_SETTINGS, dict):
+        return fallback
+    overrides = RUNTIME_SETTINGS.get("id_overrides", {})
+    if not isinstance(overrides, dict):
+        return fallback
+    raw = overrides.get(setting_key, fallback)
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def get_reload_command_role_id() -> int:
+    return get_runtime_id("reload_command_role_id", RELOAD_COMMAND_ROLE_ID)
+
+
+def get_claimwipe_ping_role_id() -> int:
+    return get_runtime_id("claimwipe_ping_role_id", CLAIMWIPE_PING_ROLE_ID)
+
+
+def get_ticket_rules_channel_id() -> int:
+    return get_runtime_id("ticket_rules_channel_id", TICKET_RULES_CHANNEL_ID)
 
 
 def load_automod_nsfw_blacklist_terms() -> list[str]:
@@ -1946,7 +1990,7 @@ async def post_ticket_panel() -> None:
             support_panel.get("select_description", "Select the type of ticket you would like to open from the menu below.")
         )
 
-        ticket_channel = bot.get_channel(TICKET_RULES_CHANNEL_ID)
+        ticket_channel = bot.get_channel(get_ticket_rules_channel_id())
         if isinstance(ticket_channel, discord.TextChannel):
             try:
                 async for msg in ticket_channel.history(limit=None):
@@ -2496,8 +2540,9 @@ async def setsetting(ctx: commands.Context, key: str = "", *, value: str = "") -
         return
 
     member_role_ids = {role.id for role in ctx.author.roles}
-    if RELOAD_COMMAND_ROLE_ID not in member_role_ids:
-        await ctx.send(f"You need <@&{RELOAD_COMMAND_ROLE_ID}> to use this command.")
+    reload_role_id = get_reload_command_role_id()
+    if reload_role_id not in member_role_ids:
+        await ctx.send(f"You need <@&{reload_role_id}> to use this command.")
         return
 
     raw_key = key.strip()
@@ -2550,6 +2595,54 @@ async def setsetting(ctx: commands.Context, key: str = "", *, value: str = "") -
     refresh_runtime_settings()
 
     await ctx.send(f"Updated setting `{target_label}`.")
+
+
+@bot.command(name="setid")
+async def setid(ctx: commands.Context, key: str = "", value: str = "") -> None:
+    if ctx.guild is None or not isinstance(ctx.author, discord.Member):
+        await ctx.send("This command can only be used in a server.")
+        return
+
+    member_role_ids = {role.id for role in ctx.author.roles}
+    reload_role_id = get_reload_command_role_id()
+    if reload_role_id not in member_role_ids:
+        await ctx.send(f"You need <@&{reload_role_id}> to use this command.")
+        return
+
+    allowed_keys = {
+        "reload_command_role_id": "Reload command access role",
+        "claimwipe_ping_role_id": "Claimwipe ping role",
+        "ticket_rules_channel_id": "Ticket rules panel channel",
+    }
+
+    key_text = key.strip().lower()
+    value_text = value.strip()
+
+    if key_text == "list":
+        lines = [f"`{name}` - {label}" for name, label in allowed_keys.items()]
+        await ctx.send("Editable runtime IDs:\n" + "\n".join(lines))
+        return
+
+    if key_text not in allowed_keys:
+        await ctx.send(
+            "Invalid ID key. Use: `reload_command_role_id`, `claimwipe_ping_role_id`, "
+            "`ticket_rules_channel_id` or `list`."
+        )
+        return
+
+    try:
+        new_id = int(value_text)
+    except ValueError:
+        await ctx.send("ID must be a numeric Discord ID.")
+        return
+
+    settings = load_runtime_settings()
+    id_overrides = settings.setdefault("id_overrides", {})
+    id_overrides[key_text] = new_id
+    save_runtime_settings(settings)
+    refresh_runtime_settings()
+
+    await ctx.send(f"Updated `{key_text}` to `{new_id}`.")
 
 
 @bot.command(name="ingame")
@@ -4173,7 +4266,7 @@ async def claimwipe(ctx: commands.Context) -> None:
 
     await ctx.send(
         content=(
-            f"<@&{CLAIMWIPE_PING_ROLE_ID}> Claim cooldowns were reset for **{reset_count}** user(s)."
+            f"<@&{get_claimwipe_ping_role_id()}> Claim cooldowns were reset for **{reset_count}** user(s)."
         ),
         allowed_mentions=discord.AllowedMentions(roles=True),
     )
@@ -4186,8 +4279,9 @@ async def reload_category(ctx: commands.Context, category: str = "") -> None:
         return
 
     member_role_ids = {role.id for role in ctx.author.roles}
-    if RELOAD_COMMAND_ROLE_ID not in member_role_ids:
-        await ctx.send(f"You need <@&{RELOAD_COMMAND_ROLE_ID}> to use this command.")
+    reload_role_id = get_reload_command_role_id()
+    if reload_role_id not in member_role_ids:
+        await ctx.send(f"You need <@&{reload_role_id}> to use this command.")
         return
 
     ALL_CATEGORIES = ["all", "settings", "xpsystem", "spam", "automod", "nsfwautomod", "invitesystem", "botsystem", "ticketsystam", "claimwipe"]
@@ -4356,8 +4450,9 @@ async def addbotid(ctx: commands.Context, bot_id: str = "") -> None:
         return
 
     member_role_ids = {role.id for role in ctx.author.roles}
-    if RELOAD_COMMAND_ROLE_ID not in member_role_ids:
-        await ctx.send(f"You need <@&{RELOAD_COMMAND_ROLE_ID}> to use this command.")
+    reload_role_id = get_reload_command_role_id()
+    if reload_role_id not in member_role_ids:
+        await ctx.send(f"You need <@&{reload_role_id}> to use this command.")
         return
 
     if not bot_id.strip():
@@ -4401,8 +4496,9 @@ async def removebotid(ctx: commands.Context, bot_id: str = "") -> None:
         return
 
     member_role_ids = {role.id for role in ctx.author.roles}
-    if RELOAD_COMMAND_ROLE_ID not in member_role_ids:
-        await ctx.send(f"You need <@&{RELOAD_COMMAND_ROLE_ID}> to use this command.")
+    reload_role_id = get_reload_command_role_id()
+    if reload_role_id not in member_role_ids:
+        await ctx.send(f"You need <@&{reload_role_id}> to use this command.")
         return
 
     if not bot_id.strip():
