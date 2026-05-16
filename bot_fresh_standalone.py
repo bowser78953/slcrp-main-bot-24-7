@@ -3349,8 +3349,10 @@ class TicketInfoModal(discord.ui.Modal):
             ),
             color=discord.Color.blue(),
         )
-        embed.add_field(name="📋 Topic", value=str(self.topic)[:1024], inline=False)
-        embed.add_field(name="📋 Details", value=str(self.details)[:1024], inline=False)
+        topic_text = (self.topic.value or "").strip()
+        details_text = (self.details.value or "").strip()
+        embed.add_field(name="📋 Topic", value=topic_text[:1024] if topic_text else "No topic provided.", inline=False)
+        embed.add_field(name="📋 Details", value=details_text[:1024] if details_text else "No details provided.", inline=False)
         if guild.icon:
             embed.set_thumbnail(url=guild.icon.url)
         embed.set_footer(text=f"Ticket Opened By: {user.display_name} • {timestamp_str}")
