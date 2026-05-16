@@ -140,6 +140,9 @@ LEVELS_PATH = os.path.abspath(
 CLAIMWIPE_ALLOWED_USERS_PATH = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "data", "claimwipe_allowed_users.json")
 )
+RUNTIME_SETTINGS_PATH = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "data", "runtime_settings.json")
+)
 BAN_APPEAL_GUILD_ID = 1500595644220444752
 BAN_APPEAL_DM_QUEUE_PATH = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "data", "ban_appeal_dm_queue.jsonl")
@@ -151,6 +154,7 @@ RUNTIME_NSFW_TERMS: list[str] = []
 RUNTIME_APPROVED_INVITE_CODES: set[str] = set()
 RUNTIME_APPROVED_BOT_IDS: set[int] = set()
 RUNTIME_CLAIMWIPE_ALLOWED_USER_IDS: set[int] = set()
+RUNTIME_SETTINGS: dict = {}
 
 unban_task: asyncio.Task | None = None
 transcript_cleanup_task: asyncio.Task | None = None
@@ -971,6 +975,95 @@ def load_claimwipe_allowed_user_ids() -> set[int]:
     return allowed_ids
 
 
+def build_default_runtime_settings() -> dict:
+    return {
+        "support_embed": {
+            "title": "Support Channel",
+            "description": "The support channel is right here: https://discord.com/channels/1397084580816621618/1493095132852129873",
+        },
+        "ticket_panel": {
+            "rules_title": "SLCRP | Salt Lake City RP - Ticket System",
+            "rules_description": "Kindly make sure to read our complete Ticket Terms of Service below before creating a ticket.",
+            "footer": "SLCRP | Salt Lake City RP Support System",
+            "select_title": "Open a Ticket",
+            "select_description": "Select the type of ticket you would like to open from the menu below.",
+        },
+        "ticket_rules": dict(TICKET_RULES_REWORDED),
+    }
+
+
+def ensure_runtime_settings_file() -> None:
+    if os.path.exists(RUNTIME_SETTINGS_PATH):
+        return
+
+    os.makedirs(os.path.dirname(RUNTIME_SETTINGS_PATH), exist_ok=True)
+    with open(RUNTIME_SETTINGS_PATH, "w", encoding="utf-8") as file:
+        json.dump(build_default_runtime_settings(), file, indent=2)
+
+
+def load_runtime_settings() -> dict:
+    ensure_runtime_settings_file()
+
+    default_settings = build_default_runtime_settings()
+    try:
+        with open(RUNTIME_SETTINGS_PATH, "r", encoding="utf-8") as file:
+            raw = json.load(file)
+    except (OSError, json.JSONDecodeError):
+        return default_settings
+
+    if not isinstance(raw, dict):
+        return default_settings
+
+    support_raw = raw.get("support_embed", {})
+    ticket_panel_raw = raw.get("ticket_panel", {})
+    ticket_rules_raw = raw.get("ticket_rules", {})
+
+    support_embed = {
+        "title": str(support_raw.get("title", default_settings["support_embed"]["title"])),
+        "description": str(support_raw.get("description", default_settings["support_embed"]["description"])),
+    } if isinstance(support_raw, dict) else dict(default_settings["support_embed"])
+
+    ticket_panel = {
+        "rules_title": str(ticket_panel_raw.get("rules_title", default_settings["ticket_panel"]["rules_title"])),
+        "rules_description": str(ticket_panel_raw.get("rules_description", default_settings["ticket_panel"]["rules_description"])),
+        "footer": str(ticket_panel_raw.get("footer", default_settings["ticket_panel"]["footer"])),
+        "select_title": str(ticket_panel_raw.get("select_title", default_settings["ticket_panel"]["select_title"])),
+        "select_description": str(ticket_panel_raw.get("select_description", default_settings["ticket_panel"]["select_description"])),
+    } if isinstance(ticket_panel_raw, dict) else dict(default_settings["ticket_panel"])
+
+    ticket_rules: dict[str, str] = {}
+    if isinstance(ticket_rules_raw, dict):
+        for key, value in ticket_rules_raw.items():
+            key_text = str(key).strip()
+            value_text = str(value).strip()
+            if key_text and value_text:
+                ticket_rules[key_text] = value_text
+
+    if not ticket_rules:
+        ticket_rules = dict(default_settings["ticket_rules"])
+
+    return {
+        "support_embed": support_embed,
+        "ticket_panel": ticket_panel,
+        "ticket_rules": ticket_rules,
+    }
+
+
+def save_runtime_settings(settings: dict) -> None:
+    os.makedirs(os.path.dirname(RUNTIME_SETTINGS_PATH), exist_ok=True)
+    temp_path = RUNTIME_SETTINGS_PATH + ".tmp"
+    with open(temp_path, "w", encoding="utf-8") as file:
+        json.dump(settings, file, indent=2)
+    os.replace(temp_path, RUNTIME_SETTINGS_PATH)
+
+
+def refresh_runtime_settings() -> int:
+    global RUNTIME_SETTINGS
+    RUNTIME_SETTINGS = load_runtime_settings()
+    ticket_rules = RUNTIME_SETTINGS.get("ticket_rules", {}) if isinstance(RUNTIME_SETTINGS, dict) else {}
+    return len(ticket_rules) if isinstance(ticket_rules, dict) else 0
+
+
 def load_automod_nsfw_blacklist_terms() -> list[str]:
     ensure_automod_nsfw_blacklist_file()
     terms: list[str] = []
@@ -1047,6 +1140,7 @@ def refresh_all_runtime_caches() -> None:
     refresh_runtime_approved_invites()
     refresh_runtime_approved_bots()
     refresh_runtime_claimwipe_users()
+    refresh_runtime_settings()
 
 
 def normalize_text_for_detection(text: str) -> str:
@@ -1834,6 +1928,24 @@ class ProhibitedInviteReportView(discord.ui.View):
 async def post_ticket_panel() -> None:
     """Rebuild and post the ticket rules + ticket type panel in the configured channel."""
     try:
+        settings = RUNTIME_SETTINGS if isinstance(RUNTIME_SETTINGS, dict) else {}
+        support_panel = settings.get("ticket_panel", {}) if isinstance(settings.get("ticket_panel"), dict) else {}
+        rules_raw = settings.get("ticket_rules", {}) if isinstance(settings.get("ticket_rules"), dict) else {}
+        rules = rules_raw if rules_raw else TICKET_RULES_REWORDED
+
+        rules_title = str(support_panel.get("rules_title", "SLCRP | Salt Lake City RP - Ticket System"))
+        rules_description = str(
+            support_panel.get(
+                "rules_description",
+                "Kindly make sure to read our complete Ticket Terms of Service below before creating a ticket.",
+            )
+        )
+        panel_footer = str(support_panel.get("footer", "SLCRP | Salt Lake City RP Support System"))
+        select_title = str(support_panel.get("select_title", "Open a Ticket"))
+        select_description = str(
+            support_panel.get("select_description", "Select the type of ticket you would like to open from the menu below.")
+        )
+
         ticket_channel = bot.get_channel(TICKET_RULES_CHANNEL_ID)
         if isinstance(ticket_channel, discord.TextChannel):
             try:
@@ -1843,121 +1955,30 @@ async def post_ticket_panel() -> None:
                 pass
 
             embed = discord.Embed(
-                title="SLCRP | Salt Lake City RP - Ticket System",
-                description=(
-                    "Kindly make sure to read our complete Ticket Terms of Service below before creating a ticket."
-                ),
+                title=rules_title,
+                description=rules_description,
                 color=discord.Color.blue(),
                 timestamp=datetime.now(timezone.utc),
             )
-            embed.add_field(
-                name="<:slcrpproperreason:1494794953098788984> Valid Reason",
-                value=(
-                    "Ensure that you are opening a ticket with a valid and well-defined reason for your issue. "
-                    "Submitting tickets without proper details may result in an immediate closure."
-                ),
-                inline=True,
-            )
-            embed.add_field(
-                name="<:slcrpnoswearing:1494798750399467560> Swearing",
-                value=(
-                    "Please refrain from using offensive language or swearing in tickets. "
-                    "Any inappropriate language will result in a temporary ban and your ticket being closed without resolution."
-                ),
-                inline=True,
-            )
-            embed.add_field(
-                name="<:slcrpnopinging:1494799027231784970> Pinging",
-                value=(
-                    "Do not ping or mention staff members or roles in your ticket unnecessarily. "
-                    "Unwarranted mentions will lead to an automatic closure of your ticket and may result in further action."
-                ),
-                inline=True,
-            )
-            embed.add_field(
-                name="<:slcrponeticket:1494799464286781481> One Ticket Rule",
-                value=(
-                    "Only one ticket should be open at a time. Creating duplicate tickets for the same issue or an "
-                    "unrelated issue will lead to the closing of your ticket and a formal warning on the server."
-                ),
-                inline=True,
-            )
-            embed.add_field(
-                name="<:slcrpnoNSFW:1494799860673810443> NSFW Content",
-                value=(
-                    "Any (Not Safe For Work) content is strictly prohibited. Submitting such content will result in "
-                    "the immediate closure of your ticket and a permanent ban on the server."
-                ),
-                inline=True,
-            )
-            embed.add_field(
-                name="<:slcrpwaitforstaff:1494795354758057984> Patience",
-                value=(
-                    "Be patient and allow staff adequate time to respond to your ticket. Sending multiple messages to "
-                    "bump your ticket will result in a closure, and repeated actions may lead to further consequences."
-                ),
-                inline=True,
-            )
-            embed.add_field(
-                name="<:slcrprespectstaff:1494795914685055037> Respect Staff",
-                value=(
-                    "Always interact with staff members in a respectful manner. Harassment, disrespectful behavior, "
-                    "or failure to engage respectfully during the process may result in a warning and the closure of your ticket."
-                ),
-                inline=True,
-            )
-            embed.add_field(
-                name="<:slcrpfilloutformat:1494794592183128215> Proper Formatting",
-                value=(
-                    "Ensure that all fields in the ticket are properly filled out. Spamming, providing incoherent "
-                    "information, or failing to provide adequate information may lead to ticket closure without further notice."
-                ),
-                inline=True,
-            )
-            embed.add_field(
-                name="<:slcrptimelimit:1494796181157449861> Time Limit",
-                value=(
-                    "Once a ticket is opened, a response is expected within 12 hours. Failure to continue the "
-                    "conversation during this period might result in a closure of your ticket."
-                ),
-                inline=True,
-            )
-            embed.add_field(
-                name="<:slcrpLanguage:1494796566911783112> Language",
-                value=(
-                    "We only accept tickets written in English, as it is the primary language of our server. "
-                    "Submitting tickets in other languages may result in the closure of your ticket without response."
-                ),
-                inline=True,
-            )
-            embed.add_field(
-                name="<:slcrphonesty:1494797445308354661> Honesty",
-                value=(
-                    "Ensure that all information provided in the ticket is accurate and truthful. Dishonesty or "
-                    "malicious use of tickets may lead to ticket closure and a formal warning on the server."
-                ),
-                inline=True,
-            )
-            embed.add_field(
-                name="<:slcrpremaincalm:1494797865032351945> Remain Calm",
-                value=(
-                    "We request that you remain calm and composed throughout the ticket process. Acting out of "
-                    "frustration or aggression may result in a warning and the closure of your ticket."
-                ),
-                inline=True,
-            )
+            for rule_name, rule_text in rules.items():
+                label = str(rule_name).strip()
+                text = str(rule_text).strip()
+                if not label or not text:
+                    continue
+                emoji = TICKET_EMOJIS.get(label, "•")
+                embed.add_field(name=f"{emoji} {label}", value=text, inline=True)
             if bot.user and bot.user.avatar:
                 embed.set_thumbnail(url=bot.user.avatar.url)
-            embed.set_footer(text="SLCRP | Salt Lake City RP Support System")
+            embed.set_footer(text=panel_footer)
 
             await ticket_channel.send(embed=embed)
 
             ticket_select_embed = discord.Embed(
-                title="Open a Ticket",
-                description="Select the type of ticket you would like to open from the menu below.",
+                title=select_title,
+                description=select_description,
                 color=discord.Color.blue(),
             )
-            ticket_select_embed.set_footer(text="SLCRP | Salt Lake City RP Support System")
+            ticket_select_embed.set_footer(text=panel_footer)
             await ticket_channel.send(embed=ticket_select_embed, view=TicketTypeSelectView())
     except Exception as panel_error:
         print(f"Failed to post ticket rules message: {panel_error}")
@@ -2451,12 +2472,84 @@ async def get_id(ctx: commands.Context, user: str = None) -> None:
 
 @bot.command(name="support")
 async def support(ctx: commands.Context) -> None:
+    settings = RUNTIME_SETTINGS if isinstance(RUNTIME_SETTINGS, dict) else {}
+    support_embed = settings.get("support_embed", {}) if isinstance(settings.get("support_embed"), dict) else {}
+    title = str(support_embed.get("title", "Support Channel"))
+    description = str(
+        support_embed.get(
+            "description",
+            "The support channel is right here: https://discord.com/channels/1397084580816621618/1493095132852129873",
+        )
+    )
     embed = discord.Embed(
-        title="Support Channel",
-        description="The support channel is right here: https://discord.com/channels/1397084580816621618/1493095132852129873",
+        title=title,
+        description=description,
         color=discord.Color.blue(),
     )
     await ctx.reply(embed=embed)
+
+
+@bot.command(name="setsetting")
+async def setsetting(ctx: commands.Context, key: str = "", *, value: str = "") -> None:
+    if ctx.guild is None or not isinstance(ctx.author, discord.Member):
+        await ctx.send("This command can only be used in a server.")
+        return
+
+    member_role_ids = {role.id for role in ctx.author.roles}
+    if RELOAD_COMMAND_ROLE_ID not in member_role_ids:
+        await ctx.send(f"You need <@&{RELOAD_COMMAND_ROLE_ID}> to use this command.")
+        return
+
+    raw_key = key.strip()
+    raw_value = value.strip()
+    if not raw_key or not raw_value:
+        await ctx.send(
+            f"Usage: `{PREFIX}setsetting support_title <text>` | `{PREFIX}setsetting support_description <text>` | "
+            f"`{PREFIX}setsetting ticket_rule:<Rule Name> <text>`"
+        )
+        return
+
+    settings = load_runtime_settings()
+    support_embed = settings.setdefault("support_embed", {})
+    ticket_panel = settings.setdefault("ticket_panel", {})
+    ticket_rules = settings.setdefault("ticket_rules", {})
+
+    key_normalized = raw_key.lower()
+    target_label = raw_key
+
+    if key_normalized.startswith("ticket_rule:"):
+        rule_name = raw_key.split(":", 1)[1].strip()
+        if not rule_name:
+            await ctx.send("For ticket rules, use: `ticket_rule:<Rule Name>`")
+            return
+        ticket_rules[rule_name] = raw_value
+        target_label = f"ticket_rule:{rule_name}"
+    elif key_normalized == "support_title":
+        support_embed["title"] = raw_value
+    elif key_normalized == "support_description":
+        support_embed["description"] = raw_value
+    elif key_normalized == "ticket_rules_title":
+        ticket_panel["rules_title"] = raw_value
+    elif key_normalized == "ticket_rules_description":
+        ticket_panel["rules_description"] = raw_value
+    elif key_normalized == "ticket_select_title":
+        ticket_panel["select_title"] = raw_value
+    elif key_normalized == "ticket_select_description":
+        ticket_panel["select_description"] = raw_value
+    elif key_normalized == "ticket_footer":
+        ticket_panel["footer"] = raw_value
+    else:
+        await ctx.send(
+            "Invalid setting key. Use one of: "
+            "`support_title`, `support_description`, `ticket_rules_title`, `ticket_rules_description`, "
+            "`ticket_select_title`, `ticket_select_description`, `ticket_footer`, `ticket_rule:<Rule Name>`."
+        )
+        return
+
+    save_runtime_settings(settings)
+    refresh_runtime_settings()
+
+    await ctx.send(f"Updated setting `{target_label}`.")
 
 
 @bot.command(name="ingame")
@@ -4097,7 +4190,7 @@ async def reload_category(ctx: commands.Context, category: str = "") -> None:
         await ctx.send(f"You need <@&{RELOAD_COMMAND_ROLE_ID}> to use this command.")
         return
 
-    ALL_CATEGORIES = ["all", "xpsystem", "spam", "automod", "nsfwautomod", "invitesystem", "botsystem", "ticketsystam", "claimwipe"]
+    ALL_CATEGORIES = ["all", "settings", "xpsystem", "spam", "automod", "nsfwautomod", "invitesystem", "botsystem", "ticketsystam", "claimwipe"]
 
     async def perform_full_runtime_reload() -> list[str]:
         results: list[str] = []
@@ -4124,6 +4217,9 @@ async def reload_category(ctx: commands.Context, category: str = "") -> None:
 
         user_count = refresh_runtime_claimwipe_users()
         results.append(f"claimwipe: **{user_count}** users")
+
+        settings_count = refresh_runtime_settings()
+        results.append(f"settings: **{settings_count}** ticket rules")
         return results
 
     async def restart_process_for_code_reload() -> None:
@@ -4150,6 +4246,8 @@ async def reload_category(ctx: commands.Context, category: str = "") -> None:
         "data": "all",
         "runtime": "all",
         "systems": "all",
+        "settings": "settings",
+        "config": "settings",
         "xpsystem": "xpsystem",
         "xp": "xpsystem",
         "spam": "spam",
@@ -4183,7 +4281,10 @@ async def reload_category(ctx: commands.Context, category: str = "") -> None:
             embed.set_footer(text="Cog Manager • Success")
             await ctx.send(embed=embed)
             return
-        if normalized == "xpsystem":
+        if normalized == "settings":
+            settings_count = refresh_runtime_settings()
+            details = f"Loaded runtime settings. Ticket rules: **{settings_count}**"
+        elif normalized == "xpsystem":
             ensure_levels_file()
             levels_data = load_levels_data()
             save_levels_data(levels_data)
