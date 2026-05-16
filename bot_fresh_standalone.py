@@ -107,46 +107,27 @@ DISCORD_INVITE_CODE_REGEX = re.compile(
     re.IGNORECASE,
 )
 
-ROLE_SAVE_PATH = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "data", "saved_roles_fresh.json")
-)
-WARNINGS_PATH = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "data", "warnings_fresh.json")
-)
-SANCTIONS_PATH = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "data", "sanctions_fresh.json")
-)
-AUTOMOD_BLACKLIST_PATH = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "data", "automod_blacklist_fresh.txt")
-)
-AUTOMOD_NSFW_BLACKLIST_PATH = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "data", "automod_nsfw_blacklist_fresh.txt")
-)
-TEMP_VC_DATA_PATH = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "data", "temp_vcs_fresh.json")
-)
-APPROVED_INVITES_PATH = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "data", "approved_invites.json")
-)
-APPROVED_BOTS_PATH = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "data", "approved_bots.json")
-)
-TICKET_TRANSCRIPTS_DIR = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "data", "ticket_transcripts")
-)
-LEVELS_PATH = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "data", "levels.json")
-)
-CLAIMWIPE_ALLOWED_USERS_PATH = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "data", "claimwipe_allowed_users.json")
-)
-RUNTIME_SETTINGS_PATH = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "data", "runtime_settings.json")
-)
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+_LOCAL_DATA_DIR = os.path.abspath(os.path.join(_BASE_DIR, "data"))
+_PARENT_DATA_DIR = os.path.abspath(os.path.join(_BASE_DIR, "..", "data"))
+
+# Prefer repo-local data when running the root bot entrypoint; fallback keeps compatibility.
+DATA_DIR = _LOCAL_DATA_DIR if os.path.isdir(_LOCAL_DATA_DIR) else _PARENT_DATA_DIR
+
+ROLE_SAVE_PATH = os.path.join(DATA_DIR, "saved_roles_fresh.json")
+WARNINGS_PATH = os.path.join(DATA_DIR, "warnings_fresh.json")
+SANCTIONS_PATH = os.path.join(DATA_DIR, "sanctions_fresh.json")
+AUTOMOD_BLACKLIST_PATH = os.path.join(DATA_DIR, "automod_blacklist_fresh.txt")
+AUTOMOD_NSFW_BLACKLIST_PATH = os.path.join(DATA_DIR, "automod_nsfw_blacklist_fresh.txt")
+TEMP_VC_DATA_PATH = os.path.join(DATA_DIR, "temp_vcs_fresh.json")
+APPROVED_INVITES_PATH = os.path.join(DATA_DIR, "approved_invites.json")
+APPROVED_BOTS_PATH = os.path.join(DATA_DIR, "approved_bots.json")
+TICKET_TRANSCRIPTS_DIR = os.path.join(DATA_DIR, "ticket_transcripts")
+LEVELS_PATH = os.path.join(DATA_DIR, "levels.json")
+CLAIMWIPE_ALLOWED_USERS_PATH = os.path.join(DATA_DIR, "claimwipe_allowed_users.json")
+RUNTIME_SETTINGS_PATH = os.path.join(DATA_DIR, "runtime_settings.json")
 BAN_APPEAL_GUILD_ID = 1500595644220444752
-BAN_APPEAL_DM_QUEUE_PATH = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "data", "ban_appeal_dm_queue.jsonl")
-)
+BAN_APPEAL_DM_QUEUE_PATH = os.path.join(DATA_DIR, "ban_appeal_dm_queue.jsonl")
 
 # Runtime caches refreshed by on_ready and ?reload
 RUNTIME_AUTOMOD_TERMS: list[str] = []
