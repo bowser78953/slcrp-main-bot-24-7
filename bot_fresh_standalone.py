@@ -4281,13 +4281,36 @@ async def reload_category(ctx: commands.Context, category: str = "") -> None:
             nsfw_term_count = refresh_runtime_nsfw_terms()
             raw_lines, ignored_lines = get_blacklist_file_stats(AUTOMOD_BLACKLIST_PATH)
             nsfw_raw_lines, nsfw_ignored_lines = get_blacklist_file_stats(AUTOMOD_NSFW_BLACKLIST_PATH)
+            normal_path = os.path.realpath(AUTOMOD_BLACKLIST_PATH)
+            nsfw_path = os.path.realpath(AUTOMOD_NSFW_BLACKLIST_PATH)
+            normal_mtime = "unknown"
+            nsfw_mtime = "unknown"
+            if os.path.exists(AUTOMOD_BLACKLIST_PATH):
+                normal_mtime = datetime.fromtimestamp(
+                    os.path.getmtime(AUTOMOD_BLACKLIST_PATH),
+                    tz=timezone.utc,
+                ).strftime("%Y-%m-%d %H:%M:%S UTC")
+            if os.path.exists(AUTOMOD_NSFW_BLACKLIST_PATH):
+                nsfw_mtime = datetime.fromtimestamp(
+                    os.path.getmtime(AUTOMOD_NSFW_BLACKLIST_PATH),
+                    tz=timezone.utc,
+                ).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+            normal_last_term = RUNTIME_AUTOMOD_TERMS[-1] if RUNTIME_AUTOMOD_TERMS else "none"
+            nsfw_last_term = RUNTIME_NSFW_TERMS[-1] if RUNTIME_NSFW_TERMS else "none"
             details = (
                 f"Normal raw lines: **{raw_lines}**\n"
                 f"Normal ignored lines: **{ignored_lines}**\n"
                 f"Normal loaded terms: **{normal_term_count}**\n"
+                f"Normal file: `{normal_path}`\n"
+                f"Normal modified: **{normal_mtime}**\n"
+                f"Normal last term: `{normal_last_term}`\n"
                 f"NSFW raw lines: **{nsfw_raw_lines}**\n"
                 f"NSFW ignored lines: **{nsfw_ignored_lines}**\n"
-                f"NSFW loaded terms: **{nsfw_term_count}**"
+                f"NSFW loaded terms: **{nsfw_term_count}**\n"
+                f"NSFW file: `{nsfw_path}`\n"
+                f"NSFW modified: **{nsfw_mtime}**\n"
+                f"NSFW last term: `{nsfw_last_term}`"
             )
         elif normalized == "nsfwautomod":
             term_count = refresh_runtime_nsfw_terms()
