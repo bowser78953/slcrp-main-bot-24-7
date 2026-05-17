@@ -2489,6 +2489,43 @@ async def get_id(ctx: commands.Context, user: str = None) -> None:
     await ctx.send(embed=embed)
 
 
+@bot.command(name="roleid")
+async def roleid(ctx: commands.Context, *, role_query: str | None = None) -> None:
+    if ctx.guild is None:
+        await ctx.send("This command can only be used in a server.")
+        return
+
+    if not role_query:
+        await ctx.send(f"Usage: `{PREFIX}roleid <role mention | role name | role id>`")
+        return
+
+    target_role: discord.Role | None = None
+
+    if role_query.isdigit():
+        target_role = ctx.guild.get_role(int(role_query))
+
+    if target_role is None:
+        try:
+            target_role = await commands.RoleConverter().convert(ctx, role_query)
+        except commands.BadArgument:
+            lowered = role_query.lower().strip()
+            for role in ctx.guild.roles:
+                if role.name.lower() == lowered:
+                    target_role = role
+                    break
+
+    if target_role is None:
+        await ctx.send(f"Could not find role `{role_query}`.")
+        return
+
+    embed = discord.Embed(
+        title=f"Role ID for {target_role.name}",
+        description=f"`{target_role.id}`",
+        color=discord.Color.blue(),
+    )
+    await ctx.send(embed=embed)
+
+
 @bot.command(name="support")
 async def support(ctx: commands.Context) -> None:
     settings = RUNTIME_SETTINGS if isinstance(RUNTIME_SETTINGS, dict) else {}
