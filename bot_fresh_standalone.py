@@ -4967,7 +4967,7 @@ async def maskick(ctx: commands.Context, *targets: str) -> None:
 @main_server_role_required(ALL_SERVER_BAN_COMMAND_ROLE_ID)
 async def mswban(ctx: commands.Context, *targets: str) -> None:
     if not targets:
-        await ctx.send(f"Usage: `{PREFIX}masban <user_id1> <user_id2> ...`")
+        await ctx.send(f"Usage: `{PREFIX}mswban <user_id1> <user_id2> ...`")
         return
 
     user_ids: list[int] = []
@@ -5030,12 +5030,25 @@ async def mswban(ctx: commands.Context, *targets: str) -> None:
         )
 
     embed = discord.Embed(
-        title="SLCRP | Mass Server Wide Ban",
-        description="\n".join(results),
+        title="Mswban",
         color=discord.Color.blue(),
         timestamp=datetime.now(timezone.utc),
     )
-    embed.add_field(name="Skipped Servers", value="Ban appeal server: **1**", inline=False)
+    embed.add_field(
+        name="Moderator",
+        value=f"{ctx.author.mention} ({ctx.author.id})",
+        inline=False
+    )
+    embed.add_field(
+        name="Target",
+        value="\n".join(results),
+        inline=False
+    )
+    embed.add_field(
+        name="Reason",
+        value="Mass server ban executed.",
+        inline=False
+    )
     embed.set_footer(text=f"Requested by {ctx.author}")
     await ctx.send(embed=embed)
 
