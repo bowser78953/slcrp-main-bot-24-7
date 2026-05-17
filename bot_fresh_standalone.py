@@ -5041,11 +5041,32 @@ async def mswban(ctx: commands.Context, *targets: str) -> None:
         value=f"{ctx.author.mention} ({ctx.author.id})",
         inline=False
     )
-    embed.add_field(
-        name="Target",
-        value="\n".join(results),
-        inline=False
-    )
+    target_lines = results or ["No valid targets processed."]
+    target_chunks: list[str] = []
+    current_chunk = ""
+    for line in target_lines:
+        candidate = line if not current_chunk else f"{current_chunk}\n{line}"
+        if len(candidate) <= 1024:
+            current_chunk = candidate
+            continue
+        if current_chunk:
+            target_chunks.append(current_chunk)
+        if len(line) <= 1024:
+            current_chunk = line
+        else:
+            target_chunks.append(f"{line[:1021]}...")
+            current_chunk = ""
+    if current_chunk:
+        target_chunks.append(current_chunk)
+
+    max_target_fields = 6
+    for index, chunk in enumerate(target_chunks[:max_target_fields]):
+        field_name = "Target" if index == 0 else f"Target (cont. {index})"
+        embed.add_field(name=field_name, value=chunk, inline=False)
+    if len(target_chunks) > max_target_fields:
+        remaining = len(target_chunks) - max_target_fields
+        embed.add_field(name="Target", value=f"...and {remaining} more target block(s).", inline=False)
+
     embed.add_field(
         name="Reason",
         value="Mass server ban executed.",
