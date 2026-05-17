@@ -2017,6 +2017,9 @@ async def on_ready() -> None:
         transcript_cleanup_task = asyncio.create_task(run_ticket_transcript_cleanup_loop())
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
     print(f"Prefix: {PREFIX}")
+    registered_commands = sorted(cmd.qualified_name for cmd in bot.commands)
+    print(f"Loaded prefix commands: {len(registered_commands)}")
+    print(f"baninfo loaded: {'baninfo' in registered_commands}")
 
     await post_ticket_panel()
 
