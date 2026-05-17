@@ -5,6 +5,7 @@ import asyncio
 import random
 import time
 import sys
+import traceback
 import aiohttp
 from urllib.parse import unquote
 from collections import deque
@@ -262,6 +263,12 @@ def _is_staff_player(player: dict) -> bool:
 
 async def get_main_server_member(user_id: int) -> discord.Member | None:
     main_guild = bot.get_guild(MAIN_SERVER_GUILD_ID)
+    if main_guild is None:
+        try:
+            main_guild = await bot.fetch_guild(MAIN_SERVER_GUILD_ID)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            return None
+
     if main_guild is None:
         return None
 
@@ -4908,8 +4915,15 @@ async def on_command_error(ctx: commands.Context, error: Exception) -> None:
         await ctx.send(f"Command not found: `{ctx.message.content.split()[0]}`")
         return
 
+    if isinstance(error, commands.CheckFailure):
+        message = str(error).strip() or "You do not meet the requirements to use that command."
+        await ctx.send(message)
+        return
+
     await ctx.send("Something went wrong while running that command.")
-    print(f"Command error: {error}")
+    original_error = getattr(error, "original", error)
+    print(f"Command error in {getattr(ctx.command, 'qualified_name', 'unknown')}: {original_error!r}")
+    traceback.print_exception(type(original_error), original_error, original_error.__traceback__)
 
 
 
