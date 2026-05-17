@@ -2391,7 +2391,7 @@ async def on_message(message: discord.Message) -> None:
             )
             if message.guild.icon:
                 embed.set_thumbnail(url=message.guild.icon.url)
-            embed.set_footer(text="SLCRP | Salt Lake City Anti-Offensive/NSFW System")
+            embed.set_footer(text="SLCRP | Salt Lake City RP Anti-Offensive/NSFW System")
             await log_channel.send(embed=embed)
 
         nsfw_ban_reason = "Your message has been flagged for containing offensive or NSFW content."
@@ -2440,7 +2440,7 @@ async def on_message(message: discord.Message) -> None:
             )
             if message.guild.icon:
                 embed.set_thumbnail(url=message.guild.icon.url)
-            embed.set_footer(text="SLCRP | Salt Lake City Anti-Swearing System")
+            embed.set_footer(text="SLCRP | Salt Lake City RP Anti-Swearing System")
             await log_channel.send(
                 content=f"<@&{WARN_COMMAND_ROLE_ID}>",
                 embed=embed,
