@@ -4209,9 +4209,9 @@ async def lockdown(ctx: commands.Context, target: str) -> None:
         await ctx.send("I could not lock that channel (permissions or channel type).")
 
 
-@bot.command(name="askick")
+@bot.command(name="swkick")
 @main_server_role_required(ALL_SERVER_BAN_COMMAND_ROLE_ID)
-async def askick(ctx: commands.Context, target: str, *, reason: str = "No reason provided") -> None:
+async def swkick(ctx: commands.Context, target: str, *, reason: str = "No reason provided") -> None:
     user_id = parse_user_id(target)
     if user_id is None:
         await ctx.send("Use a user mention or numeric user ID.")
@@ -4963,9 +4963,9 @@ async def maskick(ctx: commands.Context, *targets: str) -> None:
     await ctx.send(embed=embed)
 
 
-@bot.command(name="masban")
+@bot.command(name="mswban")
 @main_server_role_required(ALL_SERVER_BAN_COMMAND_ROLE_ID)
-async def masban(ctx: commands.Context, *targets: str) -> None:
+async def mswban(ctx: commands.Context, *targets: str) -> None:
     if not targets:
         await ctx.send(f"Usage: `{PREFIX}masban <user_id1> <user_id2> ...`")
         return
