@@ -2959,6 +2959,55 @@ async def ban(
     await ctx.send(f"Banned {member.mention}. Reason: {reason} ({', '.join(dm_status)})")
 
 
+@bot.command(name="baninfo")
+@commands.has_permissions(ban_members=True)
+async def baninfo(ctx: commands.Context, target: str) -> None:
+    user_id = parse_user_id(target)
+    if user_id is None:
+        await ctx.send(f"Usage: `{PREFIX}baninfo <user_id>`")
+        return
+
+    user = discord.Object(id=user_id)
+    try:
+        fetched_user = await bot.fetch_user(user_id)
+        user = fetched_user
+        user_label = f"{fetched_user.mention} ({user_id})"
+    except discord.NotFound:
+        user_label = f"<@{user_id}> ({user_id})"
+    except discord.HTTPException:
+        user_label = f"<@{user_id}> ({user_id})"
+
+    found_reason: str | None = None
+    found_guild: discord.Guild | None = None
+
+    for guild in get_all_server_ban_guilds(include_ban_appeal=True):
+        try:
+            ban_entry = await guild.fetch_ban(user)
+            found_reason = ban_entry.reason or "No reason provided"
+            found_guild = guild
+            break
+        except discord.NotFound:
+            continue
+        except discord.Forbidden:
+            continue
+        except discord.HTTPException:
+            continue
+
+    if found_reason is None:
+        await ctx.send(f"No ban record found for {user_label} in the configured servers.")
+        return
+
+    embed = discord.Embed(
+        title="Ban Info",
+        color=discord.Color.orange(),
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.add_field(name="Target", value=user_label, inline=False)
+    embed.add_field(name="Server", value=found_guild.name if found_guild else "Unknown", inline=False)
+    embed.add_field(name="Reason", value=found_reason, inline=False)
+    await ctx.send(embed=embed)
+
+
 @bot.command(name="swban")
 @main_server_role_required(ALL_SERVER_BAN_COMMAND_ROLE_ID)
 async def swban(ctx: commands.Context, target: str, *, reason: str) -> None:
@@ -5230,33 +5279,6 @@ async def owcmds(ctx: commands.Context) -> None:
             await ctx.send("I sent your command list in DMs.")
     except (discord.Forbidden, discord.HTTPException):
         await ctx.send("I could not DM you. Please enable DMs and try again.")
-
-
-@bot.command(name="baninfo")
-@commands.has_permissions(ban_members=True)
-async def baninfo(ctx: commands.Context, user_id: int) -> None:
-    """Finds the reason for a user's ban."""
-    user = await bot.fetch_user(user_id)
-    if user is None:
-        await ctx.send("User not found.")
-        return
-
-    reason = "No reason provided"  # Default reason if none is found
-    for guild in bot.guilds:
-        try:
-            ban_entry = await guild.fetch_ban(user)
-            reason = ban_entry.reason or reason
-            break  # Exit loop once the ban reason is found
-        except discord.NotFound:
-            continue  # User not banned in this guild
-        except discord.Forbidden:
-            await ctx.send(f"Missing permissions to fetch bans in {guild.name}.")
-            return
-        except discord.HTTPException as e:
-            await ctx.send(f"Failed to fetch ban info: {e}")
-            return
-
-    await ctx.send(f"Ban reason for {user.mention}: {reason}")
 
 
 bot.run(TOKEN)
