@@ -3532,8 +3532,30 @@ class GiveawayJoinView(discord.ui.View):
             return
 
         entrants.add(interaction.user.id)
+        participant_count = len(entrants)
+
+        if message.embeds:
+            updated_embed = message.embeds[0].copy()
+            participants_index = next(
+                (index for index, field in enumerate(updated_embed.fields) if field.name.strip().lower() == "participants"),
+                None,
+            )
+            if participants_index is None:
+                updated_embed.add_field(name="Participants", value=str(participant_count), inline=True)
+            else:
+                updated_embed.set_field_at(
+                    participants_index,
+                    name="Participants",
+                    value=str(participant_count),
+                    inline=True,
+                )
+            try:
+                await message.edit(embed=updated_embed, view=self)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+
         await interaction.response.send_message(
-            f"You joined the giveaway. Total entries: {len(entrants)}",
+            f"You joined the giveaway. Total participants: {participant_count}",
             ephemeral=True,
         )
 
@@ -3570,7 +3592,7 @@ async def finish_giveaway_after_delay(
         timestamp=datetime.now(timezone.utc),
     )
     end_embed.add_field(name="Prize", value=prize, inline=False)
-    end_embed.add_field(name="Entries", value=str(len(entry_ids)), inline=True)
+    end_embed.add_field(name="Participants", value=str(len(entry_ids)), inline=True)
     if winner_id is None:
         end_embed.add_field(name="Winner", value="No valid entries.", inline=True)
         await channel.send(embed=end_embed)
@@ -3666,6 +3688,7 @@ async def giveaway_slash(
     giveaway_embed.add_field(name="Prize", value=prize.strip(), inline=False)
     giveaway_embed.add_field(name="Ends", value=discord.utils.format_dt(end_time, style="R"), inline=True)
     giveaway_embed.add_field(name="Hosted By", value=ctx.author.mention, inline=True)
+    giveaway_embed.add_field(name="Participants", value="0", inline=True)
     giveaway_embed.set_footer(text="Click the Join Giveaway button below to enter")
 
     try:
