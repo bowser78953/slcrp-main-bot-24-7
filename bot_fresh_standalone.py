@@ -2098,9 +2098,15 @@ async def on_ready() -> None:
         transcript_cleanup_task = asyncio.create_task(run_ticket_transcript_cleanup_loop())
     if not command_tree_synced:
         try:
+            guild_obj = discord.Object(id=MAIN_SERVER_GUILD_ID)
+            bot.tree.copy_global_to(guild=guild_obj)
+            guild_synced_commands = await bot.tree.sync(guild=guild_obj)
             synced_commands = await bot.tree.sync()
             command_tree_synced = True
-            print(f"Slash commands synced: {len(synced_commands)}")
+            print(
+                f"Slash commands synced: guild={len(guild_synced_commands)}, "
+                f"global={len(synced_commands)}"
+            )
         except Exception as sync_error:
             print(f"Failed to sync slash commands: {sync_error}")
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
