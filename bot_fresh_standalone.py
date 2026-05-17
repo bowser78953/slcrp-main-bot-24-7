@@ -5105,7 +5105,7 @@ async def mswban(ctx: commands.Context, *targets: str) -> None:
             )
             user_embed.add_field(
                 name="Reason",
-                value="Mass server ban executed.",
+                value="Mass server wide ban executed.",
                 inline=False
             )
             user_embed.set_footer(text=f"Requested by {ctx.author}")
