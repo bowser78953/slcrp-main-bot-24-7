@@ -1592,7 +1592,7 @@ async def run_ticket_transcript_cleanup_loop() -> None:
             print(
                 "Transcript cleanup: "
                 f"deleted={deleted_count}, failed={failed_count}, "
-                f"retention_days={TICKET
+                f"retention_days={TICKET_TRANSCRIPT_RETENTION_DAYS}"
             )
         await asyncio.sleep(TICKET_TRANSCRIPT_CLEANUP_INTERVAL_SECONDS)
 
@@ -2962,9 +2962,7 @@ async def ban(
     await ctx.send(f"Banned {member.mention}. Reason: {reason} ({', '.join(dm_status)})")
 
 
-@bot.command(name="baninfo")
-@commands.has_permissions(ban_members=True)
-async def baninfo(ctx: commands.Context, target: str) -> None:
+async def run_baninfo_lookup(ctx: commands.Context, target: str) -> None:
     user_id = parse_user_id(target)
     if user_id is None:
         await ctx.send(f"Usage: `{PREFIX}baninfo <user_id>`")
@@ -3009,6 +3007,12 @@ async def baninfo(ctx: commands.Context, target: str) -> None:
     embed.add_field(name="Server", value=found_guild.name if found_guild else "Unknown", inline=False)
     embed.add_field(name="Reason", value=found_reason, inline=False)
     await ctx.send(embed=embed)
+
+
+@bot.command(name="baninfo")
+@commands.has_permissions(ban_members=True)
+async def baninfo(ctx: commands.Context, target: str) -> None:
+    await run_baninfo_lookup(ctx, target)
 
 
 @bot.command(name="swban")
@@ -4959,6 +4963,17 @@ async def on_command_error(ctx: commands.Context, error: Exception) -> None:
         return
 
     if isinstance(error, commands.CommandNotFound):
+        raw_parts = (ctx.message.content or "").strip().split(maxsplit=1)
+        typed_command = raw_parts[0].lower() if raw_parts else ""
+        if typed_command in {f"{PREFIX}baninfo", "!baninfo"}:
+            if not ctx.author.guild_permissions.ban_members:
+                await ctx.send("You do not have permission to use that command.")
+                return
+            if len(raw_parts) < 2:
+                await ctx.send(f"Usage: `{PREFIX}baninfo <user_id>`")
+                return
+            await run_baninfo_lookup(ctx, raw_parts[1].strip())
+            return
         await ctx.send(f"Command not found: `{ctx.message.content.split()[0]}`")
         return
 
