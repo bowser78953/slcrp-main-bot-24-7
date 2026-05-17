@@ -5001,16 +5001,19 @@ async def mswban(ctx: commands.Context, *targets: str) -> None:
         if not user_ids:
             return
 
-    results: list[str] = []
     target_guilds = get_all_server_ban_guilds(include_ban_appeal=True)
+    processed_count = 0
+    total_bans_count = 0
+    target_log_channel_ids = [MSWBAN_AUDIT_LOG_CHANNEL_ID, WARN_LOG_CHANNEL_ID]
+
     for user_id in user_ids:
         try:
             user = await bot.fetch_user(user_id)
         except discord.NotFound:
-            results.append(f"`{user_id}` — user not found.")
+            print(f"mswban: {user_id} not found")
             continue
         except discord.HTTPException:
-            results.append(f"`{user_id}` — could not fetch user.")
+            print(f"mswban: could not fetch user {user_id}")
             continue
 
         try:
@@ -5045,7 +5048,7 @@ async def mswban(ctx: commands.Context, *targets: str) -> None:
                 except Exception as ban_error:
                     print(f"mswban unexpected ban error in guild {guild.id} for {user_id}: {ban_error}")
                     failed_count += 1
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.1)
 
             appeal_invite_url = await get_ban_appeal_invite_url()
             if banned_count > 0:
@@ -5070,91 +5073,66 @@ async def mswban(ctx: commands.Context, *targets: str) -> None:
                 except Exception:
                     pass
 
-            results.append(
-                f"{user.mention} ({user_id}) — banned: **{banned_count}/{len(target_guilds)}**, failed: **{failed_count}**, deleted: **{deleted_count}**"
+            user_embed = discord.Embed(
+                title="Mswban",
+                color=discord.Color.blue(),
+                timestamp=datetime.now(timezone.utc),
             )
-            await asyncio.sleep(1)
+            user_embed.add_field(
+                name="Moderator",
+                value=f"{ctx.author.mention} ({ctx.author.id})",
+                inline=False
+            )
+            user_embed.add_field(
+                name="Target",
+                value=f"{user.mention} ({user_id})",
+                inline=False
+            )
+            user_embed.add_field(
+                name="Banned",
+                value=f"{banned_count}/{len(target_guilds)}",
+                inline=True
+            )
+            user_embed.add_field(
+                name="Failed",
+                value=str(failed_count),
+                inline=True
+            )
+            user_embed.add_field(
+                name="Messages Deleted",
+                value=str(deleted_count),
+                inline=True
+            )
+            user_embed.add_field(
+                name="Reason",
+                value="Mass server ban executed.",
+                inline=False
+            )
+            user_embed.set_footer(text=f"Requested by {ctx.author}")
+
+            for channel_id in dict.fromkeys(target_log_channel_ids):
+                log_channel = None
+                if ctx.guild is not None:
+                    log_channel = ctx.guild.get_channel(channel_id)
+                if log_channel is None:
+                    log_channel = bot.get_channel(channel_id)
+
+                if isinstance(log_channel, discord.TextChannel):
+                    try:
+                        await log_channel.send(embed=user_embed)
+                    except discord.HTTPException as log_error:
+                        print(f"mswban log send failed for {channel_id}: {log_error}")
+
+            processed_count += 1
+            total_bans_count += banned_count
+            await asyncio.sleep(0.2)
         except Exception as user_error:
             print(f"mswban user processing error for {user_id}: {user_error}")
-            results.append(f"`{user_id}` — processing failed.")
 
-    embed = discord.Embed(
-        title="Mswban",
-        color=discord.Color.blue(),
-        timestamp=datetime.now(timezone.utc),
+    await ctx.send(
+        f"Mass server-wide ban executed on **{processed_count}** user(s) across **{total_bans_count}** total server ban(s). "
+        f"Check the audit logs for individual ban details."
     )
-    embed.add_field(
-        name="Moderator",
-        value=f"{ctx.author.mention} ({ctx.author.id})",
-        inline=False
-    )
-    target_lines = results or ["No valid targets processed."]
-    target_chunks: list[str] = []
-    current_chunk = ""
-    for line in target_lines:
-        candidate = line if not current_chunk else f"{current_chunk}\n{line}"
-        if len(candidate) <= 1024:
-            current_chunk = candidate
-            continue
-        if current_chunk:
-            target_chunks.append(current_chunk)
-        if len(line) <= 1024:
-            current_chunk = line
-        else:
-            target_chunks.append(f"{line[:1021]}...")
-            current_chunk = ""
-    if current_chunk:
-        target_chunks.append(current_chunk)
-
-    max_target_fields = 6
-    for index, chunk in enumerate(target_chunks[:max_target_fields]):
-        field_name = "Target" if index == 0 else f"Target (cont. {index})"
-        embed.add_field(name=field_name, value=chunk, inline=False)
-    if len(target_chunks) > max_target_fields:
-        remaining = len(target_chunks) - max_target_fields
-        embed.add_field(name="Target", value=f"...and {remaining} more target block(s).", inline=False)
-
-    embed.add_field(
-        name="Reason",
-        value="Mass server ban executed.",
-        inline=False
-    )
-    embed.set_footer(text=f"Requested by {ctx.author}")
-
-    target_log_channel_ids = [MSWBAN_AUDIT_LOG_CHANNEL_ID, WARN_LOG_CHANNEL_ID]
-    sent_log_count = 0
-    for channel_id in dict.fromkeys(target_log_channel_ids):
-        log_channel = None
-        if ctx.guild is not None:
-            log_channel = ctx.guild.get_channel(channel_id)
-        if log_channel is None:
-            log_channel = bot.get_channel(channel_id)
-
-        if not isinstance(log_channel, discord.TextChannel):
-            continue
-
-        try:
-            await log_channel.send(embed=embed)
-            sent_log_count += 1
-        except discord.HTTPException as log_error:
-            print(f"mswban log send failed for {channel_id}: {log_error}")
-
-    if sent_log_count > 0:
-        await ctx.send(f"Mass server-wide ban executed and logged to **{sent_log_count}** audit channel(s).")
-        return
-
-    await ctx.send("Mass server-wide ban executed, but I could not find any configured audit log channels.")
-
-    try:
-        await ctx.send(embed=embed)
-    except discord.HTTPException as send_error:
-        print(f"mswban embed send failed: {send_error}")
-        summary_lines = results[:40]
-        summary_text = "\n".join(summary_lines) if summary_lines else "No valid targets processed."
-        await ctx.send(
-            f"Mswban\nModerator: {ctx.author.mention} ({ctx.author.id})\n"
-            f"Reason: Mass server ban executed.\nTargets:\n{summary_text}"
-        )
 
 
 @bot.command(name="cmds")
