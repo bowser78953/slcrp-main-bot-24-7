@@ -4996,40 +4996,49 @@ async def mswban(ctx: commands.Context, *targets: str) -> None:
             results.append(f"`{user_id}` — could not fetch user.")
             continue
 
-        banned_count = 0
-        failed_count = 0
-        deleted_count = 0
-        for guild in target_guilds:
-            try:
-                await guild.ban(user, reason=f"Mass server-wide ban by {ctx.author}", delete_message_days=0)
-                banned_count += 1
-                deleted_count += await delete_recent_user_messages(guild, user.id, days=7)
-            except (discord.Forbidden, discord.HTTPException):
-                failed_count += 1
-            await asyncio.sleep(0.5)
+        try:
+            banned_count = 0
+            failed_count = 0
+            deleted_count = 0
+            for guild in target_guilds:
+                try:
+                    await guild.ban(user, reason=f"Mass server-wide ban by {ctx.author}", delete_message_days=0)
+                    banned_count += 1
+                    deleted_count += await delete_recent_user_messages(guild, user.id, days=7)
+                except (discord.Forbidden, discord.HTTPException):
+                    failed_count += 1
+                except Exception:
+                    failed_count += 1
+                await asyncio.sleep(0.5)
 
-        appeal_invite_url = await get_ban_appeal_invite_url()
-        main_dm_sent = False
-        modmail_queued = False
-        if banned_count > 0:
-            main_dm_sent = await send_main_bot_ban_appeal_dm(
-                user,
-                "banned across SLCRP servers",
-                "Mass server-wide ban",
-                str(ctx.author),
-                appeal_invite_url,
-            )
-            modmail_queued = queue_modmail_ban_appeal_dm(
-                user.id,
-                "banned across SLCRP servers",
-                "Mass server-wide ban",
-                str(ctx.author),
-                appeal_invite_url,
-            )
-        results.append(
-            f"{user.mention} ({user_id})"
-        )
-        await asyncio.sleep(1)
+            appeal_invite_url = await get_ban_appeal_invite_url()
+            if banned_count > 0:
+                try:
+                    await send_main_bot_ban_appeal_dm(
+                        user,
+                        "banned across SLCRP servers",
+                        "Mass server-wide ban",
+                        str(ctx.author),
+                        appeal_invite_url,
+                    )
+                except Exception:
+                    pass
+                try:
+                    queue_modmail_ban_appeal_dm(
+                        user.id,
+                        "banned across SLCRP servers",
+                        "Mass server-wide ban",
+                        str(ctx.author),
+                        appeal_invite_url,
+                    )
+                except Exception:
+                    pass
+
+            results.append(f"{user.mention} ({user_id})")
+            await asyncio.sleep(1)
+        except Exception as user_error:
+            print(f"mswban user processing error for {user_id}: {user_error}")
+            results.append(f"`{user_id}` — processing failed.")
 
     embed = discord.Embed(
         title="Mswban",
@@ -5073,7 +5082,16 @@ async def mswban(ctx: commands.Context, *targets: str) -> None:
         inline=False
     )
     embed.set_footer(text=f"Requested by {ctx.author}")
-    await ctx.send(embed=embed)
+    try:
+        await ctx.send(embed=embed)
+    except discord.HTTPException as send_error:
+        print(f"mswban embed send failed: {send_error}")
+        summary_lines = results[:40]
+        summary_text = "\n".join(summary_lines) if summary_lines else "No valid targets processed."
+        await ctx.send(
+            f"Mswban\nModerator: {ctx.author.mention} ({ctx.author.id})\n"
+            f"Reason: Mass server ban executed.\nTargets:\n{summary_text}"
+        )
 
 
 @bot.command(name="cmds")
