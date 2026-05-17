@@ -142,6 +142,7 @@ BAN_APPEAL_GUILD_ID = 1500595644220444752
 BAN_APPEAL_DM_QUEUE_PATH = os.path.join(DATA_DIR, "ban_appeal_dm_queue.jsonl")
 
 GIVEAWAY_ENTRY_EMOJI = "🎉"
+ALL_DEPT_SWL_ROLE_ID = 1505624777514025031
 REACTION_ROLE_EMOJI_TO_ROLE_ID: dict[str, int] = {
     "📸": 1505614008437313697,
     "📊": 1505612901401104526,
@@ -150,6 +151,7 @@ REACTION_ROLE_EMOJI_TO_ROLE_ID: dict[str, int] = {
     "🎪": 1505612781796462602,
     "👥": 1505612837089841172,
 }
+GIVEAWAY_ENTRIES: dict[int, set[int]] = {}
 
 # Runtime caches refreshed by on_ready and ?reload
 RUNTIME_AUTOMOD_TERMS: list[str] = []
@@ -161,6 +163,7 @@ RUNTIME_REACTION_ROLE_MESSAGE_IDS: set[int] = set()
 
 unban_task: asyncio.Task | None = None
 transcript_cleanup_task: asyncio.Task | None = None
+ALLDEPTSWL_TASKS: dict[tuple[int, int], asyncio.Task] = {}
 
 LEET_TRANSLATION = str.maketrans(
     {
@@ -532,6 +535,78 @@ def parse_duration_token(value: str) -> int | None:
     if multiplier is None:
         return None
     return amount * multiplier
+
+
+def parse_timed_or_forever_duration(value: str) -> int | None:
+    cleaned = (value or "").strip().lower()
+    if cleaned == "forever":
+        return None
+
+    match = re.fullmatch(r"(\d+)\s*([smhdw])", cleaned)
+    if not match:
+        return -1
+
+    amount = int(match.group(1))
+    if amount <= 0:
+        return -1
+
+    multiplier = {
+        "s": 1,
+        "m": 60,
+        "h": 3600,
+        "d": 86400,
+        "w": 604800,
+    }.get(match.group(2))
+    if multiplier is None:
+        return -1
+    return amount * multiplier
+
+
+async def remove_alldeptswl_role_after_delay(
+    *,
+    guild_id: int,
+    user_id: int,
+    duration_seconds: int,
+) -> None:
+    try:
+        await asyncio.sleep(max(duration_seconds, 1))
+
+        guild = bot.get_guild(guild_id)
+        if guild is None:
+            return
+
+        member = guild.get_member(user_id)
+        if member is None:
+            return
+
+        role = guild.get_role(ALL_DEPT_SWL_ROLE_ID)
+        if role is None or role not in member.roles:
+            return
+
+        try:
+            await member.remove_roles(role, reason="All Department WL duration expired")
+        except (discord.Forbidden, discord.HTTPException):
+            return
+
+        expiry_embed = discord.Embed(
+            title="All Department WL Expired",
+            description=(
+                "Your All Department WL access has ended.\n\n"
+                "If you still need this access, contact staff to request it again."
+            ),
+            color=discord.Color.orange(),
+            timestamp=datetime.now(timezone.utc),
+        )
+        expiry_embed.add_field(name="Role", value=f"<@&{ALL_DEPT_SWL_ROLE_ID}>", inline=True)
+        expiry_embed.add_field(name="Server", value=guild.name, inline=True)
+        expiry_embed.set_footer(text="SLCRP | Access Update")
+
+        try:
+            await member.send(embed=expiry_embed)
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+    finally:
+        ALLDEPTSWL_TASKS.pop((guild_id, user_id), None)
 
 
 def ensure_reaction_role_messages_file() -> None:
@@ -2083,6 +2158,7 @@ async def on_ready() -> None:
     global unban_task, transcript_cleanup_task
     await bot.change_presence(activity=discord.Game(name=STATUS_TEXT))
     bot.add_view(RPChannelView())
+    bot.add_view(GiveawayJoinView())
     bot.add_view(TicketTypeSelectView())
     ensure_automod_blacklist_file()
     ensure_automod_nsfw_blacklist_file()
@@ -3430,6 +3506,38 @@ class RPChannelView(discord.ui.View):
         await interaction.response.send_message(result, ephemeral=True)
 
 
+class GiveawayJoinView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="Join Giveaway",
+        style=discord.ButtonStyle.green,
+        emoji="🎉",
+        custom_id="giveaway_join_button",
+    )
+    async def join_giveaway(self, button: discord.ui.Button, interaction: discord.Interaction) -> None:
+        if interaction.user.bot:
+            await interaction.response.send_message("Bots cannot enter giveaways.", ephemeral=True)
+            return
+
+        message = interaction.message
+        if message is None:
+            await interaction.response.send_message("Could not verify giveaway message.", ephemeral=True)
+            return
+
+        entrants = GIVEAWAY_ENTRIES.setdefault(message.id, set())
+        if interaction.user.id in entrants:
+            await interaction.response.send_message("You already joined this giveaway.", ephemeral=True)
+            return
+
+        entrants.add(interaction.user.id)
+        await interaction.response.send_message(
+            f"You joined the giveaway. Total entries: {len(entrants)}",
+            ephemeral=True,
+        )
+
+
 async def finish_giveaway_after_delay(
     *,
     guild_id: int,
@@ -3453,19 +3561,8 @@ async def finish_giveaway_after_delay(
     except (discord.NotFound, discord.Forbidden, discord.HTTPException):
         return
 
-    entrants: list[discord.abc.User] = []
-    for reaction in giveaway_message.reactions:
-        if str(reaction.emoji) != GIVEAWAY_ENTRY_EMOJI:
-            continue
-        try:
-            async for user in reaction.users():
-                if not user.bot:
-                    entrants.append(user)
-        except (discord.Forbidden, discord.HTTPException):
-            continue
-        break
-
-    winner = random.choice(entrants) if entrants else None
+    entry_ids = list(GIVEAWAY_ENTRIES.pop(message_id, set()))
+    winner_id = random.choice(entry_ids) if entry_ids else None
 
     end_embed = discord.Embed(
         title="Giveaway Ended",
@@ -3473,14 +3570,15 @@ async def finish_giveaway_after_delay(
         timestamp=datetime.now(timezone.utc),
     )
     end_embed.add_field(name="Prize", value=prize, inline=False)
-    end_embed.add_field(name="Entries", value=str(len(entrants)), inline=True)
-    if winner is None:
+    end_embed.add_field(name="Entries", value=str(len(entry_ids)), inline=True)
+    if winner_id is None:
         end_embed.add_field(name="Winner", value="No valid entries.", inline=True)
         await channel.send(embed=end_embed)
         return
 
-    end_embed.add_field(name="Winner", value=winner.mention, inline=True)
-    await channel.send(content=f"Congratulations {winner.mention}! You won **{prize}**.", embed=end_embed)
+    winner_mention = f"<@{winner_id}>"
+    end_embed.add_field(name="Winner", value=winner_mention, inline=True)
+    await channel.send(content=f"Congratulations {winner_mention}! You won **{prize}**.", embed=end_embed)
 
 
 async def post_reaction_roles_panel(target_channel: discord.TextChannel) -> discord.Message:
@@ -3568,15 +3666,16 @@ async def giveaway_slash(
     giveaway_embed.add_field(name="Prize", value=prize.strip(), inline=False)
     giveaway_embed.add_field(name="Ends", value=discord.utils.format_dt(end_time, style="R"), inline=True)
     giveaway_embed.add_field(name="Hosted By", value=ctx.author.mention, inline=True)
-    giveaway_embed.set_footer(text=f"React with {GIVEAWAY_ENTRY_EMOJI} to enter")
+    giveaway_embed.set_footer(text="Click the Join Giveaway button below to enter")
 
     try:
         giveaway_message = await channel.send(
             content=f"<@&{REACTION_ROLE_EMOJI_TO_ROLE_ID['🥳']}>",
             embed=giveaway_embed,
+            view=GiveawayJoinView(),
             allowed_mentions=discord.AllowedMentions(roles=True),
         )
-        await giveaway_message.add_reaction(GIVEAWAY_ENTRY_EMOJI)
+        GIVEAWAY_ENTRIES[giveaway_message.id] = set()
     except (discord.Forbidden, discord.HTTPException) as send_error:
         await ctx.respond(f"Failed to post giveaway: {send_error}", ephemeral=True)
         return
@@ -5229,6 +5328,90 @@ async def syncslash(ctx: commands.Context) -> None:
         "If slash commands still do not appear, re-invite with this URL:\n"
         f"{invite_url}"
     )
+
+
+@bot.command(name="alldeptswl")
+@commands.has_permissions(manage_roles=True)
+async def alldeptswl(ctx: commands.Context, member: discord.Member, duration: str) -> None:
+    if ctx.guild is None:
+        await ctx.send("This command can only be used in a server.")
+        return
+
+    role = ctx.guild.get_role(ALL_DEPT_SWL_ROLE_ID)
+    if role is None:
+        await ctx.send(f"I could not find the All Department WL role (`{ALL_DEPT_SWL_ROLE_ID}`).")
+        return
+
+    if not isinstance(ctx.author, discord.Member):
+        await ctx.send("This command can only be used by a server member.")
+        return
+
+    if role >= ctx.author.top_role and ctx.guild.owner_id != ctx.author.id:
+        await ctx.send("You cannot manage this role because it is equal to or above your highest role.")
+        return
+
+    bot_member = ctx.guild.get_member(bot.user.id) if bot.user else None
+    if bot_member is None or role >= bot_member.top_role:
+        await ctx.send("I cannot assign that role because it is above my highest role.")
+        return
+
+    duration_seconds = parse_timed_or_forever_duration(duration)
+    if duration_seconds == -1:
+        await ctx.send(
+            "Invalid duration. Use `1s`, `1m`, `1h`, `1d`, `1w`, or `forever`."
+        )
+        return
+
+    try:
+        await member.add_roles(role, reason=f"All Department WL assigned by {ctx.author}")
+    except (discord.Forbidden, discord.HTTPException):
+        await ctx.send("I could not assign that role due to permissions or role hierarchy.")
+        return
+
+    existing_task = ALLDEPTSWL_TASKS.pop((ctx.guild.id, member.id), None)
+    if existing_task is not None:
+        existing_task.cancel()
+
+    if duration_seconds is None:
+        confirmation_embed = discord.Embed(
+            title="All Department WL Granted",
+            description=(
+                f"{member.mention} now has **All Department WL** access.\n\n"
+                "Duration: **Forever**"
+            ),
+            color=discord.Color.green(),
+            timestamp=datetime.now(timezone.utc),
+        )
+        confirmation_embed.add_field(name="Role", value=role.mention, inline=True)
+        confirmation_embed.add_field(name="Granted By", value=ctx.author.mention, inline=True)
+        confirmation_embed.set_footer(text="SLCRP | Access Management")
+        await ctx.send(embed=confirmation_embed)
+        return
+
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=duration_seconds)
+    removal_task = asyncio.create_task(
+        remove_alldeptswl_role_after_delay(
+            guild_id=ctx.guild.id,
+            user_id=member.id,
+            duration_seconds=duration_seconds,
+        )
+    )
+    ALLDEPTSWL_TASKS[(ctx.guild.id, member.id)] = removal_task
+
+    confirmation_embed = discord.Embed(
+        title="All Department WL Granted",
+        description=(
+            f"{member.mention} now has **All Department WL** access.\n\n"
+            f"This access will expire {discord.utils.format_dt(expires_at, style='R')}"
+        ),
+        color=discord.Color.green(),
+        timestamp=datetime.now(timezone.utc),
+    )
+    confirmation_embed.add_field(name="Role", value=role.mention, inline=True)
+    confirmation_embed.add_field(name="Granted By", value=ctx.author.mention, inline=True)
+    confirmation_embed.add_field(name="Duration", value=duration.lower().strip(), inline=True)
+    confirmation_embed.set_footer(text="SLCRP | Access Management")
+    await ctx.send(embed=confirmation_embed)
 
 
 @bot.command(name="give_role")
