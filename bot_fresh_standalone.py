@@ -75,9 +75,6 @@ TICKET_RULES_CHANNEL_ID = 1493095132852129873
 TICKET_CLOSE_LOG_CHANNEL_ID = 1494822378851668121
 MAIN_SERVER_GUILD_ID = 1397084580816621618
 RELOAD_COMMAND_ROLE_ID = 1495581053862019215
-AUDIT_LOG_CHANNEL_ID = 1505310257436430387
-MESSAGE_LOG_CHANNEL_ID = 1505310300092633218
-REDACTION_LOG_CHANNEL_ID = 1505310345106030622
 RP_COMMAND_ROLE_ID = 1493343098296598538
 TICKET_COMMAND_ROLE_ID = 1493343282820812872
 RP_CHANNEL_ID = 1504639818674471072
@@ -124,7 +121,6 @@ AUTOMOD_NSFW_BLACKLIST_PATH = os.path.join(DATA_DIR, "automod_nsfw_blacklist_fre
 TEMP_VC_DATA_PATH = os.path.join(DATA_DIR, "temp_vcs_fresh.json")
 APPROVED_INVITES_PATH = os.path.join(DATA_DIR, "approved_invites.json")
 APPROVED_BOTS_PATH = os.path.join(DATA_DIR, "approved_bots.json")
-FALLBACK_APPROVED_BOTS_PATH = os.path.join(_PARENT_DATA_DIR, "approved_bots.json")
 TICKET_TRANSCRIPTS_DIR = os.path.join(DATA_DIR, "ticket_transcripts")
 LEVELS_PATH = os.path.join(DATA_DIR, "levels.json")
 RUNTIME_SETTINGS_PATH = os.path.join(DATA_DIR, "runtime_settings.json")
@@ -137,8 +133,6 @@ RUNTIME_NSFW_TERMS: list[str] = []
 RUNTIME_APPROVED_INVITE_CODES: set[str] = set()
 RUNTIME_APPROVED_BOT_IDS: set[int] = set()
 RUNTIME_SETTINGS: dict = {}
-GLOBAL_AUTOMOD_BYPASS_CACHE: dict[int, tuple[bool, datetime]] = {}
-GLOBAL_AUTOMOD_BYPASS_CACHE_SECONDS = 60
 
 unban_task: asyncio.Task | None = None
 transcript_cleanup_task: asyncio.Task | None = None
@@ -253,6 +247,30 @@ def _format_erlc_player_line(player: dict) -> str:
 def _is_staff_player(player: dict) -> bool:
     permission = str(player.get("Permission", "")).lower()
     return "administrator" in permission or "moderator" in permission or "owner" in permission
+
+
+def main_server_role_required(role_id: int):
+    async def predicate(ctx: commands.Context) -> bool:
+        main_guild = bot.get_guild(MAIN_SERVER_GUILD_ID)
+        if main_guild is None:
+            raise commands.CheckFailure("Main server is not available.")
+
+        member = main_guild.get_member(ctx.author.id)
+        if member is None:
+            try:
+                member = await main_guild.fetch_member(ctx.author.id)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                member = None
+
+        if member is None:
+            raise commands.MissingRole(role_id)
+
+        if any(role.id == role_id for role in member.roles):
+            return True
+
+        raise commands.MissingRole(role_id)
+
+    return commands.check(predicate)
 
 
 async def _fetch_erlc_json(endpoint: str, params: dict | None = None) -> tuple[dict | list | None, str | None]:
@@ -852,33 +870,28 @@ def ensure_approved_bots_file() -> None:
 
 def load_approved_bot_ids() -> set[int]:
     ensure_approved_bots_file()
+
+    try:
+        with open(APPROVED_BOTS_PATH, "r", encoding="utf-8") as file:
+            raw_data = json.load(file)
+    except (OSError, json.JSONDecodeError):
+        return set()
+
+    if isinstance(raw_data, dict):
+        raw_ids = raw_data.get("bot_ids")
+        if raw_ids is None:
+            raw_ids = raw_data.get("approved_bots", [])
+    elif isinstance(raw_data, list):
+        raw_ids = raw_data
+    else:
+        raw_ids = []
+
     approved_ids: set[int] = set()
-
-    candidate_paths = [APPROVED_BOTS_PATH]
-    if FALLBACK_APPROVED_BOTS_PATH not in candidate_paths and os.path.exists(FALLBACK_APPROVED_BOTS_PATH):
-        candidate_paths.append(FALLBACK_APPROVED_BOTS_PATH)
-
-    for path in candidate_paths:
+    for raw_entry in raw_ids:
         try:
-            with open(path, "r", encoding="utf-8") as file:
-                raw_data = json.load(file)
-        except (OSError, json.JSONDecodeError):
+            approved_ids.add(int(raw_entry))
+        except (TypeError, ValueError):
             continue
-
-        if isinstance(raw_data, dict):
-            raw_ids = raw_data.get("bot_ids")
-            if raw_ids is None:
-                raw_ids = raw_data.get("approved_bots", [])
-        elif isinstance(raw_data, list):
-            raw_ids = raw_data
-        else:
-            raw_ids = []
-
-        for raw_entry in raw_ids:
-            try:
-                approved_ids.add(int(raw_entry))
-            except (TypeError, ValueError):
-                continue
 
     return approved_ids
 
@@ -1061,19 +1074,6 @@ def refresh_runtime_approved_bots() -> int:
     return len(RUNTIME_APPROVED_BOT_IDS)
 
 
-def is_bot_id_approved(bot_id: int) -> bool:
-    if bot_id in RUNTIME_APPROVED_BOT_IDS:
-        return True
-
-    # Fallback to disk to avoid stale cache issues across restarts/processes.
-    approved_ids = load_approved_bot_ids()
-    if bot_id in approved_ids:
-        RUNTIME_APPROVED_BOT_IDS.update(approved_ids)
-        return True
-
-    return False
-
-
 def get_blacklist_file_stats(file_path: str) -> tuple[int, int]:
     """Return (raw_line_count, ignored_line_count) for blacklist-style files."""
     raw_line_count = 0
@@ -1158,54 +1158,6 @@ def find_blacklisted_term(message_content: str, terms: list[str]) -> str | None:
                 return term
 
     return None
-
-
-async def log_to_audit_channel(ctx: commands.Context, command_name: str, details: str = "") -> None:
-    """Helper function to log command execution to audit channel."""
-    audit_channel = bot.get_channel(AUDIT_LOG_CHANNEL_ID)
-    if not audit_channel:
-        return
-    
-    try:
-        embed = discord.Embed(
-            title="Audit Log: Command Executed",
-            description=f"**Command:** {PREFIX}{command_name}",
-            color=discord.Color.blue(),
-            timestamp=datetime.now(timezone.utc),
-        )
-        embed.add_field(name="User", value=f"{ctx.author} ({ctx.author.id})")
-        embed.add_field(name="Guild", value=f"{ctx.guild.name if ctx.guild else 'DM'} ({ctx.guild.id if ctx.guild else 'N/A'})")
-        if details:
-            embed.add_field(name="Details", value=details, inline=False)
-        await audit_channel.send(embed=embed)
-    except (discord.Forbidden, discord.HTTPException):
-        pass
-
-
-async def user_has_global_role(user_id: int, role_id: int) -> bool:
-    now = datetime.now(timezone.utc)
-    cached = GLOBAL_AUTOMOD_BYPASS_CACHE.get(user_id)
-    if cached is not None:
-        has_role, expires_at = cached
-        if now < expires_at:
-            return has_role
-
-    for guild in bot.guilds:
-        member = guild.get_member(user_id)
-        if member is None:
-            continue
-        if any(role.id == role_id for role in member.roles):
-            GLOBAL_AUTOMOD_BYPASS_CACHE[user_id] = (
-                True,
-                now + timedelta(seconds=GLOBAL_AUTOMOD_BYPASS_CACHE_SECONDS),
-            )
-            return True
-
-    GLOBAL_AUTOMOD_BYPASS_CACHE[user_id] = (
-        False,
-        now + timedelta(seconds=GLOBAL_AUTOMOD_BYPASS_CACHE_SECONDS),
-    )
-    return False
 
 
 async def process_pending_unbans() -> None:
@@ -2023,7 +1975,7 @@ async def on_member_join(member: discord.Member) -> None:
     now = datetime.now(timezone.utc)
 
     if member.bot:
-        if is_bot_id_approved(member.id):
+        if member.id in RUNTIME_APPROVED_BOT_IDS:
             return
 
         inviter: discord.abc.User | None = None
@@ -2188,9 +2140,7 @@ async def on_message(message: discord.Message) -> None:
     if isinstance(message.author, discord.Member):
         member_role_ids = {role.id for role in message.author.roles}
         has_automod_bypass = AUTOMOD_BYPASS_ROLE_ID in member_role_ids
-        if not has_automod_bypass:
-            has_automod_bypass = await user_has_global_role(message.author.id, AUTOMOD_BYPASS_ROLE_ID)
-        has_spam_bypass = (SPAM_BYPASS_ROLE_ID in member_role_ids) or has_automod_bypass
+        has_spam_bypass = SPAM_BYPASS_ROLE_ID in member_role_ids
 
     if isinstance(message.author, discord.Member) and not has_spam_bypass:
         now = datetime.now(timezone.utc)
@@ -2497,24 +2447,6 @@ async def get_id(ctx: commands.Context, user: str = None) -> None:
     await ctx.send(embed=embed)
 
 
-@bot.command(name="roleid")
-async def roleid(ctx: commands.Context, *, role: str) -> None:
-    """Get the ID of a role by name or mention."""
-    try:
-        # Try to convert the input to a role
-        target_role = await commands.RoleConverter().convert(ctx, role)
-    except commands.BadArgument:
-        await ctx.send(f"Could not find role `{role}`.")
-        return
-
-    embed = discord.Embed(
-        title=f"Role ID for {target_role.name}",
-        description=f"`{target_role.id}`",
-        color=target_role.color if target_role.color != discord.Color.default() else discord.Color.blue(),
-    )
-    await ctx.send(embed=embed)
-
-
 @bot.command(name="support")
 async def support(ctx: commands.Context) -> None:
     settings = RUNTIME_SETTINGS if isinstance(RUNTIME_SETTINGS, dict) else {}
@@ -2646,7 +2578,7 @@ async def setid(ctx: commands.Context, key: str = "", value: str = "") -> None:
 
 
 @bot.command(name="ingame")
-@commands.has_role(RP_COMMAND_ROLE_ID)
+@main_server_role_required(RP_COMMAND_ROLE_ID)
 async def ingame(ctx: commands.Context) -> None:
     payload, error = await _fetch_erlc_json("/server", {"Players": "true"})
     if error or not isinstance(payload, dict):
@@ -2682,7 +2614,7 @@ async def ingame(ctx: commands.Context) -> None:
 
 
 @bot.command(name="checkstaff")
-@commands.has_role(RP_COMMAND_ROLE_ID)
+@main_server_role_required(RP_COMMAND_ROLE_ID)
 async def checkstaff(ctx: commands.Context) -> None:
     payload, error = await _fetch_erlc_json("/server", {"Players": "true"})
     if error or not isinstance(payload, dict):
@@ -2879,16 +2811,13 @@ async def soundboard(ctx: commands.Context, state: str) -> None:
 @bot.command(name="say")
 @commands.has_permissions(manage_messages=True)
 async def say(ctx: commands.Context, *, message: str) -> None:
-    await log_to_audit_channel(ctx, "say", f"Message length: {len(message)}")
     await ctx.message.delete()
     await ctx.send(message)
 
 
 @bot.command(name="clear")
-@commands.has_role(WARN_COMMAND_ROLE_ID)
 @commands.has_permissions(manage_messages=True)
 async def purge(ctx: commands.Context, amount: int) -> None:
-    await log_to_audit_channel(ctx, "clear", f"Amount: {amount} messages")
     if amount < 1 or amount > 100:
         await ctx.send("Please choose an amount from 1 to 100.")
         return
@@ -2899,7 +2828,6 @@ async def purge(ctx: commands.Context, amount: int) -> None:
 
 
 @bot.command(name="kick")
-@commands.has_role(WARN_COMMAND_ROLE_ID)
 @commands.has_permissions(kick_members=True)
 async def kick(
     ctx: commands.Context,
@@ -2907,13 +2835,11 @@ async def kick(
     *,
     reason: str = "No reason provided",
 ) -> None:
-    await log_to_audit_channel(ctx, "kick", f"Target: {member} ({member.id})\nReason: {reason}")
     await member.kick(reason=reason)
     await ctx.send(f"Kicked {member.mention}. Reason: {reason}")
 
 
 @bot.command(name="ban")
-@commands.has_role(WARN_COMMAND_ROLE_ID)
 @commands.has_permissions(ban_members=True)
 async def ban(
     ctx: commands.Context,
@@ -2921,7 +2847,6 @@ async def ban(
     *,
     reason: str = "No reason provided",
 ) -> None:
-    await log_to_audit_channel(ctx, "ban", f"Target: {member} ({member.id})\nReason: {reason}")
     await member.ban(reason=reason)
     appeal_invite_url = await get_ban_appeal_invite_url()
     main_dm_sent = await send_main_bot_ban_appeal_dm(
@@ -2945,115 +2870,78 @@ async def ban(
     await ctx.send(f"Banned {member.mention}. Reason: {reason} ({', '.join(dm_status)})")
 
 
-async def ban_with_seven_day_cleanup(
-    guild: discord.Guild,
-    user: discord.abc.User,
-    *,
-    reason: str,
-) -> None:
-    # discord.py and py-cord differ on the cleanup parameter name.
-    try:
-        await guild.ban(user, reason=reason, delete_message_days=7)
-        return
-    except TypeError:
-        pass
-
-    await guild.ban(user, reason=reason, delete_message_seconds=7 * 24 * 60 * 60)
-
-
 @bot.command(name="swban")
-@commands.has_role(ALL_SERVER_BAN_COMMAND_ROLE_ID)
+@main_server_role_required(ALL_SERVER_BAN_COMMAND_ROLE_ID)
 async def swban(ctx: commands.Context, target: str, *, reason: str) -> None:
+    user_id = parse_user_id(target)
+    if user_id is None:
+        await ctx.send("Use a user mention or numeric user ID.")
+        return
+
     try:
-        await log_to_audit_channel(ctx, "swban", f"Target: {target}\nReason: {reason}")
-        user_id = parse_user_id(target)
-        if user_id is None:
-            await ctx.send("Use a user mention or numeric user ID.")
-            return
+        user = await bot.fetch_user(user_id)
+    except discord.NotFound:
+        await ctx.send("User was not found.")
+        return
+    except discord.HTTPException:
+        await ctx.send("I could not fetch that user right now.")
+        return
 
+    banned_count = 0
+    failed_count = 0
+    deleted_messages_count = 0
+    target_guilds = get_all_server_ban_guilds()
+    for guild in target_guilds:
         try:
-            user = await bot.fetch_user(user_id)
-        except discord.NotFound:
-            await ctx.send("User was not found.")
-            return
-        except discord.HTTPException:
-            await ctx.send("I could not fetch that user right now.")
-            return
+            await guild.ban(user, reason=f"Server-wide ban by {ctx.author}: {reason}", delete_message_days=0)
+            banned_count += 1
 
-        banned_count = 0
-        failed_count = 0
-        delay_seconds = 1.25
-        target_guilds = get_all_server_ban_guilds()
-        failed_guilds: list[str] = []
-        for index, guild in enumerate(target_guilds):
-            try:
-                await ban_with_seven_day_cleanup(
-                    guild,
-                    user,
-                    reason=f"Server-wide ban by {ctx.author}: {reason}",
-                )
-                banned_count += 1
-            except (discord.Forbidden, discord.HTTPException, TypeError):
-                failed_count += 1
-                if len(failed_guilds) < 10:
-                    failed_guilds.append(f"{guild.name} ({guild.id})")
+            # After banning, remove recent messages from this user in the guild.
+            deleted_messages_count += await delete_recent_user_messages(guild, user.id, days=7)
+        except (discord.Forbidden, discord.HTTPException):
+            failed_count += 1
 
-            if index < len(target_guilds) - 1:
-                await asyncio.sleep(delay_seconds)
-
-        appeal_invite_url = await get_ban_appeal_invite_url()
-        if banned_count > 0:
-            try:
-                await send_main_bot_ban_appeal_dm(
-                    user,
-                    "banned across SLCRP servers",
-                    reason,
-                    str(ctx.author),
-                    appeal_invite_url,
-                )
-            except Exception:
-                pass
-
-            try:
-                queue_modmail_ban_appeal_dm(
-                    user.id,
-                    "banned across SLCRP servers",
-                    reason,
-                    str(ctx.author),
-                    appeal_invite_url,
-                )
-            except Exception:
-                pass
-
-        status_embed = discord.Embed(
-            title="SLCRP | Salt Lake City RP | Server Wide Ban System",
-            description=(
-                f"Successfully server-wide banned user: {user.mention}.\n\n"
-                f"Reason: **{reason}**.\n\n"
-                f"Banned in: **{banned_count}** server(s)."
-            ),
-            color=discord.Color.orange(),
+    appeal_invite_url = await get_ban_appeal_invite_url()
+    main_dm_sent = False
+    modmail_queued = False
+    if banned_count > 0:
+        main_dm_sent = await send_main_bot_ban_appeal_dm(
+            user,
+            "banned across SLCRP servers",
+            reason,
+            str(ctx.author),
+            appeal_invite_url,
         )
-        if failed_count > 0:
-            status_embed.add_field(name="Failed Servers", value=str(failed_count), inline=False)
-        status_embed.add_field(name="Message Cleanup", value="Deletes the user's last 7 days of messages per server.", inline=False)
-        status_embed.add_field(name="Ban Pace", value=f"{delay_seconds:.2f}s delay between servers.", inline=False)
-        if failed_guilds:
-            status_embed.add_field(name="Failed Guild Samples", value="\n".join(failed_guilds), inline=False)
-        status_embed.set_footer(
-            text=(
-                "SLCRP | Salt Lake City RP | Server Wide Ban System | "
-                f"{datetime.now().strftime('%Y-%m-%d, %H:%M:%S')}"
-            )
+        modmail_queued = queue_modmail_ban_appeal_dm(
+            user.id,
+            "banned across SLCRP servers",
+            reason,
+            str(ctx.author),
+            appeal_invite_url,
         )
-        await ctx.send(embed=status_embed)
-    except Exception as error:
-        await ctx.send(f"`swban` failed: {type(error).__name__}: {error}")
-        print(f"swban error: {error}")
+
+    status_embed = discord.Embed(
+        title="SLCRP | Salt Lake City RP | Server Wide Ban System",
+        description=(
+            f"Successfully server-wide banned user: {user.mention}.\n\n"
+            f"Reason: **{reason}**.\n\n"
+            f"Banned in: **{banned_count}** server(s)."
+        ),
+        color=discord.Color.orange(),
+    )
+    if failed_count > 0:
+        status_embed.add_field(name="Failed Servers", value=str(failed_count), inline=False)
+    status_embed.set_footer(
+        text=(
+            "SLCRP | Salt Lake City RP | Server Wide Ban System | "
+            f"{datetime.now().strftime('%Y-%m-%d, %H:%M:%S')}"
+        )
+    )
+    await ctx.send(embed=status_embed)
 
 
-@bot.command(name="swunban", aliases=["unswban"])
-@commands.has_role(ALL_SERVER_BAN_COMMAND_ROLE_ID)
+@bot.command(name="swunban")
+@main_server_role_required(ALL_SERVER_BAN_COMMAND_ROLE_ID)
 async def swunban(ctx: commands.Context, target: str, *, reason: str = "No reason provided") -> None:
     user_id = parse_user_id(target)
     if user_id is None:
@@ -3103,59 +2991,7 @@ async def swunban(ctx: commands.Context, target: str, *, reason: str = "No reaso
     await ctx.send(embed=status_embed)
 
 
-@bot.command(name="baninfo")
-@commands.has_role(ALL_SERVER_BAN_COMMAND_ROLE_ID)
-async def baninfo(ctx: commands.Context, target: str) -> None:
-    user_id = parse_user_id(target)
-    if user_id is None:
-        await ctx.send(f"Usage: `{PREFIX}baninfo <user_id_or_mention>`")
-        return
-
-    user_mention = f"<@{user_id}>"
-    try:
-        fetched_user = await bot.fetch_user(user_id)
-        user_mention = fetched_user.mention
-    except (discord.NotFound, discord.HTTPException):
-        pass
-
-    checked_count = 0
-    banned_guilds: list[str] = []
-    failed_checks: list[str] = []
-
-    for guild in get_all_server_ban_guilds():
-        checked_count += 1
-        try:
-            await guild.fetch_ban(discord.Object(id=user_id))
-            if len(banned_guilds) < 20:
-                banned_guilds.append(f"{guild.name} ({guild.id})")
-        except discord.NotFound:
-            continue
-        except (discord.Forbidden, discord.HTTPException):
-            if len(failed_checks) < 20:
-                failed_checks.append(f"{guild.name} ({guild.id})")
-
-    description_lines = [
-        f"User: {user_mention} (`{user_id}`)",
-        f"Servers checked: **{checked_count}**",
-        f"Banned in: **{len(banned_guilds)}** server(s)",
-    ]
-
-    embed = discord.Embed(
-        title="Server-Wide Ban Info",
-        description="\n".join(description_lines),
-        color=discord.Color.orange(),
-        timestamp=datetime.now(timezone.utc),
-    )
-    if banned_guilds:
-        embed.add_field(name="Banned Servers", value="\n".join(banned_guilds), inline=False)
-    if failed_checks:
-        embed.add_field(name="Check Failed Servers", value="\n".join(failed_checks), inline=False)
-    embed.set_footer(text="SLCRP | Salt Lake City RP | Server Wide Ban System")
-    await ctx.send(embed=embed)
-
-
 @bot.command(name="unban")
-@commands.has_role(WARN_COMMAND_ROLE_ID)
 @commands.has_permissions(ban_members=True)
 async def unban(
     ctx: commands.Context,
@@ -3163,7 +2999,6 @@ async def unban(
     *,
     reason: str = "No reason provided",
 ) -> None:
-    await log_to_audit_channel(ctx, "unban", f"Target: {user_id}\nReason: {reason}")
     user = await bot.fetch_user(user_id)
     await ctx.guild.unban(user, reason=reason)
     await ctx.send(f"Unbanned {user}. Reason: {reason}")
@@ -3172,7 +3007,6 @@ async def unban(
 @bot.command(name="setstatus")
 @commands.has_permissions(administrator=True)
 async def setstatus(ctx: commands.Context, *, text: str) -> None:
-    await log_to_audit_channel(ctx, "setstatus", f"Status: {text}")
     await bot.change_presence(activity=discord.Game(name=text))
     await ctx.send(f"Status updated to: `{text}`")
 
@@ -3211,15 +3045,8 @@ def resolve_rp_option(option_input: str) -> str | None:
     return None
 
 
-async def resolve_rp_channel(guild: discord.Guild) -> discord.TextChannel | None:
-    rp_channel_id = get_rp_channel_id()
-    configured_channel = guild.get_channel(rp_channel_id)
-    if configured_channel is None:
-        try:
-            configured_channel = await guild.fetch_channel(rp_channel_id)
-        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-            configured_channel = None
-
+def resolve_rp_channel(guild: discord.Guild) -> discord.TextChannel | None:
+    configured_channel = guild.get_channel(get_rp_channel_id())
     if isinstance(configured_channel, discord.TextChannel):
         return configured_channel
 
@@ -3240,7 +3067,7 @@ async def change_rp_channel(guild: discord.Guild, actor_name: str, actor_id: int
             remaining = int((cooldown_expiry - now).total_seconds())
             return f"❌ You can change RP again in {remaining} seconds."
 
-    channel = await resolve_rp_channel(guild)
+    channel = resolve_rp_channel(guild)
     if not isinstance(channel, discord.TextChannel):
         rp_channel_id = get_rp_channel_id()
         return (
@@ -3329,7 +3156,7 @@ class RPChannelView(discord.ui.View):
 
 
 @bot.command(name="rp")
-@commands.has_role(RP_COMMAND_ROLE_ID)
+@main_server_role_required(RP_COMMAND_ROLE_ID)
 async def rp(ctx: commands.Context, action: str | None = None, *, option: str | None = None) -> None:
     if ctx.guild is None:
         await ctx.send("This command can only be used in a server.")
@@ -3341,7 +3168,7 @@ async def rp(ctx: commands.Context, action: str | None = None, *, option: str | 
 
     if action_lower == "info":
         if RP_CURRENT_NAME is None:
-            channel = await resolve_rp_channel(ctx.guild)
+            channel = resolve_rp_channel(ctx.guild)
             if isinstance(channel, discord.TextChannel):
                 RP_CURRENT_NAME = channel.name
 
@@ -3390,9 +3217,8 @@ async def rp(ctx: commands.Context, action: str | None = None, *, option: str | 
 
 
 @bot.command(name="warn")
-@commands.has_role(WARN_COMMAND_ROLE_ID)
+@main_server_role_required(WARN_COMMAND_ROLE_ID)
 async def warn(ctx: commands.Context, target: str, *, reason: str) -> None:
-    await log_to_audit_channel(ctx, "warn", f"Target: {target}\nReason: {reason}")
     if ctx.guild is None:
         await ctx.send("This command can only be used in a server.")
         return
@@ -3565,9 +3391,8 @@ async def warn(ctx: commands.Context, target: str, *, reason: str) -> None:
 
 
 @bot.command(name="unwarn")
-@commands.has_role(WARN_COMMAND_ROLE_ID)
+@main_server_role_required(WARN_COMMAND_ROLE_ID)
 async def unwarn(ctx: commands.Context, case_id: int, *, reason: str) -> None:
-    await log_to_audit_channel(ctx, "unwarn", f"Case ID: {case_id}\nReason: {reason}")
     if ctx.guild is None:
         await ctx.send("This command can only be used in a server.")
         return
@@ -3917,9 +3742,8 @@ class CloseRequestView(discord.ui.View):
 
 
 @bot.command(name="closeticket")
-@commands.has_role(TICKET_COMMAND_ROLE_ID)
+@main_server_role_required(TICKET_COMMAND_ROLE_ID)
 async def closeticket(ctx: commands.Context) -> None:
-    await log_to_audit_channel(ctx, "closeticket", f"Channel: {ctx.channel.name}")
     if ctx.guild is None or not isinstance(ctx.channel, discord.TextChannel) or not isinstance(ctx.author, discord.Member):
         await ctx.send("This command can only be used in a server text channel.")
         return
@@ -3956,9 +3780,8 @@ async def closeticket(ctx: commands.Context) -> None:
 
 
 @bot.command(name="moveticket")
-@commands.has_role(TICKET_COMMAND_ROLE_ID)
+@main_server_role_required(TICKET_COMMAND_ROLE_ID)
 async def moveticket(ctx: commands.Context, *, ticket_type: str) -> None:
-    await log_to_audit_channel(ctx, "moveticket", f"Channel: {ctx.channel.name}\nNew Type: {ticket_type}")
     if ctx.guild is None or not isinstance(ctx.channel, discord.TextChannel):
         await ctx.send("This command can only be used in a server text channel.")
         return
@@ -4001,7 +3824,6 @@ async def moveticket(ctx: commands.Context, *, ticket_type: str) -> None:
 @bot.command(name="transcript")
 @commands.has_permissions(manage_channels=True)
 async def transcript(ctx: commands.Context, ticket_id: str) -> None:
-    await log_to_audit_channel(ctx, "transcript", f"Ticket ID: {ticket_id}")
     if ctx.guild is None:
         await ctx.send("This command can only be used in a server.")
         return
@@ -4028,7 +3850,7 @@ async def transcript(ctx: commands.Context, ticket_id: str) -> None:
 
 
 @bot.command(name="closerequest")
-@commands.has_role(TICKET_COMMAND_ROLE_ID)
+@main_server_role_required(TICKET_COMMAND_ROLE_ID)
 async def closerequest(ctx: commands.Context) -> None:
     if ctx.guild is None or not isinstance(ctx.channel, discord.TextChannel):
         await ctx.send("This command can only be used in a server text channel.")
@@ -4076,7 +3898,6 @@ async def closerequest(ctx: commands.Context) -> None:
 @bot.command(name="ssu")
 @commands.has_permissions(manage_guild=True)
 async def ssu(ctx: commands.Context) -> None:
-    await log_to_audit_channel(ctx, "ssu", "Server Startup Announcement")
     embed = discord.Embed(
         title="Salt Lake City RP Server Startup",
         description=(
@@ -4097,7 +3918,6 @@ async def ssu(ctx: commands.Context) -> None:
 @bot.command(name="ssd")
 @commands.has_permissions(manage_guild=True)
 async def ssd(ctx: commands.Context) -> None:
-    await log_to_audit_channel(ctx, "ssd", "Server Shutdown Announcement")
     embed = discord.Embed(
         title="Salt Lake City RP Server Shutdown",
         description=(
@@ -4111,9 +3931,8 @@ async def ssd(ctx: commands.Context) -> None:
 
 
 @bot.command(name="nrs")
-@commands.has_role(ROLE_MANAGER_COMMAND_ROLE_ID)
+@main_server_role_required(ROLE_MANAGER_COMMAND_ROLE_ID)
 async def nrs(ctx: commands.Context, member: discord.Member) -> None:
-    await log_to_audit_channel(ctx, "nrs", f"Target: {member} ({member.id})")
     if not isinstance(ctx.author, discord.Member) or ctx.guild is None:
         await ctx.send("This command can only be used in a server.")
         return
@@ -4205,9 +4024,8 @@ async def sr(ctx: commands.Context, member: discord.Member | None = None) -> Non
 
 
 @bot.command(name="gar")
-@commands.has_role(ROLE_MANAGER_COMMAND_ROLE_ID)
+@main_server_role_required(ROLE_MANAGER_COMMAND_ROLE_ID)
 async def gar(ctx: commands.Context, member: discord.Member) -> None:
-    await log_to_audit_channel(ctx, "gar", f"Target: {member} ({member.id})")
     if ctx.guild is None:
         await ctx.send("This command can only be used in a server.")
         return
@@ -4252,10 +4070,9 @@ async def gar(ctx: commands.Context, member: discord.Member) -> None:
 
 
 @bot.command(name="lockdown")
-@commands.has_role(WARN_COMMAND_ROLE_ID)
+@main_server_role_required(WARN_COMMAND_ROLE_ID)
 @commands.bot_has_permissions(manage_channels=True)
 async def lockdown(ctx: commands.Context, target: str) -> None:
-    await log_to_audit_channel(ctx, "lockdown", f"Target: {target}")
     if ctx.guild is None:
         await ctx.send("This command can only be used in a server.")
         return
@@ -4314,9 +4131,8 @@ async def lockdown(ctx: commands.Context, target: str) -> None:
 
 
 @bot.command(name="askick")
-@commands.has_role(ALL_SERVER_BAN_COMMAND_ROLE_ID)
+@main_server_role_required(ALL_SERVER_BAN_COMMAND_ROLE_ID)
 async def askick(ctx: commands.Context, target: str, *, reason: str = "No reason provided") -> None:
-    await log_to_audit_channel(ctx, "askick", f"Target: {target}\nReason: {reason}")
     user_id = parse_user_id(target)
     if user_id is None:
         await ctx.send("Use a user mention or numeric user ID.")
@@ -4354,9 +4170,8 @@ async def askick(ctx: commands.Context, target: str, *, reason: str = "No reason
 
 
 @bot.command(name="warnings")
-@commands.has_role(WARN_COMMAND_ROLE_ID)
+@main_server_role_required(WARN_COMMAND_ROLE_ID)
 async def warnings(ctx: commands.Context, target: str) -> None:
-    await log_to_audit_channel(ctx, "warnings", f"Target: {target}")
     if ctx.guild is None:
         await ctx.send("This command can only be used in a server.")
         return
@@ -4406,7 +4221,7 @@ async def warnings(ctx: commands.Context, target: str) -> None:
 
 
 @bot.command(name="softban")
-@commands.has_role(WARN_COMMAND_ROLE_ID)
+@main_server_role_required(WARN_COMMAND_ROLE_ID)
 @commands.bot_has_permissions(ban_members=True)
 async def softban(
     ctx: commands.Context,
@@ -4414,7 +4229,6 @@ async def softban(
     *,
     reason: str = "No reason provided",
 ) -> None:
-    await log_to_audit_channel(ctx, "softban", f"Target: {member} ({member.id})\nReason: {reason}")
     if ctx.guild is None:
         await ctx.send("This command can only be used in a server.")
         return
@@ -4430,7 +4244,7 @@ async def softban(
 
 
 @bot.command(name="timeout")
-@commands.has_role(WARN_COMMAND_ROLE_ID)
+@main_server_role_required(WARN_COMMAND_ROLE_ID)
 @commands.bot_has_permissions(moderate_members=True)
 async def timeout_command(
     ctx: commands.Context,
@@ -4439,7 +4253,6 @@ async def timeout_command(
     *,
     reason: str = "No reason provided",
 ) -> None:
-    await log_to_audit_channel(ctx, "timeout", f"Target: {member} ({member.id})\nDuration: {minutes} min\nReason: {reason}")
     if minutes < 1:
         await ctx.send("Timeout minutes must be at least 1.")
         return
@@ -4476,7 +4289,7 @@ def parse_mute_duration(duration_text: str) -> timedelta | None:
 
 
 @bot.command(name="mute")
-@commands.has_role(WARN_COMMAND_ROLE_ID)
+@main_server_role_required(WARN_COMMAND_ROLE_ID)
 @commands.bot_has_permissions(moderate_members=True)
 async def mute_command(
     ctx: commands.Context,
@@ -4506,7 +4319,7 @@ async def mute_command(
 
 
 @bot.command(name="unmute")
-@commands.has_role(WARN_COMMAND_ROLE_ID)
+@main_server_role_required(WARN_COMMAND_ROLE_ID)
 @commands.bot_has_permissions(moderate_members=True)
 async def unmute_command(
     ctx: commands.Context,
@@ -4524,7 +4337,7 @@ async def unmute_command(
 
 
 @bot.command(name="setnickname")
-@commands.has_role(WARN_COMMAND_ROLE_ID)
+@main_server_role_required(WARN_COMMAND_ROLE_ID)
 @commands.bot_has_permissions(manage_nicknames=True)
 async def setnickname(
     ctx: commands.Context,
@@ -4532,7 +4345,6 @@ async def setnickname(
     *,
     nickname: str,
 ) -> None:
-    await log_to_audit_channel(ctx, "setnickname", f"Target: {member} ({member.id})\nNew nickname: {nickname}")
     trimmed = nickname.strip()
     if not trimmed:
         await ctx.send("Nickname cannot be empty.")
@@ -4552,7 +4364,7 @@ async def setnickname(
 
 
 @bot.command(name="claim")
-@commands.has_role(TICKET_COMMAND_ROLE_ID)
+@main_server_role_required(TICKET_COMMAND_ROLE_ID)
 async def claim(ctx: commands.Context) -> None:
     if ctx.guild is None or not isinstance(ctx.author, discord.Member):
         await ctx.send("This command can only be used in a server.")
@@ -4661,7 +4473,6 @@ async def lledaderboard(ctx: commands.Context) -> None:
 
 @bot.command(name="reload")
 async def reload_category(ctx: commands.Context, category: str = "") -> None:
-    await log_to_audit_channel(ctx, "reload", f"Category: {category if category else 'not specified'}")
     if ctx.guild is None or not isinstance(ctx.author, discord.Member):
         await ctx.send("This command can only be used in a server.")
         return
@@ -4942,7 +4753,6 @@ async def removebotid(ctx: commands.Context, bot_id: str = "") -> None:
 
 @bot.command(name="give_role")
 async def give_role(ctx: commands.Context, guild_id: str, role_id: str, user_id: str) -> None:
-    await log_to_audit_channel(ctx, "give_role", f"Guild: {guild_id}\nRole: {role_id}\nUser: {user_id}")
     if ctx.guild is None or not isinstance(ctx.author, discord.Member):
         await ctx.send("This command can only be used in a server.")
         return
@@ -5021,88 +4831,10 @@ async def on_command_error(ctx: commands.Context, error: Exception) -> None:
     print(f"Command error: {error}")
 
 
-@bot.event
-async def on_message_delete(message: discord.Message) -> None:
-    """Log deleted messages to message log channel."""
-    if message.author.bot:
-        return  # Don't log bot messages
-    
-    log_channel = bot.get_channel(MESSAGE_LOG_CHANNEL_ID)
-    if not log_channel:
-        return
-    
-    try:
-        # Create redaction log for deleted messages
-        redaction_channel = bot.get_channel(REDACTION_LOG_CHANNEL_ID)
-        if redaction_channel:
-            redaction_embed = discord.Embed(
-                title="Message Redacted (Deleted)",
-                description=f"A message from {message.author} was deleted",
-                color=discord.Color.red(),
-                timestamp=datetime.now(timezone.utc),
-            )
-            redaction_embed.add_field(name="Author", value=f"{message.author} ({message.author.id})")
-            redaction_embed.add_field(name="Channel", value=f"<#{message.channel.id}>" if isinstance(message.channel, discord.TextChannel) else "Unknown")
-            redaction_embed.add_field(name="Message ID", value=str(message.id), inline=False)
-            redaction_embed.add_field(name="Content", value=message.content[:1000] if message.content else "[No content/embed only]", inline=False)
-            try:
-                await redaction_channel.send(embed=redaction_embed)
-            except (discord.Forbidden, discord.HTTPException):
-                pass
-        
-        # Log to message log channel
-        embed = discord.Embed(
-            title="Message Deleted",
-            description=f"A message from {message.author} was deleted",
-            color=discord.Color.red(),
-            timestamp=datetime.now(timezone.utc),
-        )
-        embed.add_field(name="Author", value=f"{message.author} ({message.author.id})")
-        embed.add_field(name="Channel", value=f"<#{message.channel.id}>" if isinstance(message.channel, discord.TextChannel) else "Unknown")
-        embed.add_field(name="Message ID", value=str(message.id))
-        embed.add_field(name="Content", value=message.content[:1000] if message.content else "[No content/embed only]", inline=False)
-        if message.attachments:
-            embed.add_field(name="Attachments", value=f"{len(message.attachments)} file(s)")
-        await log_channel.send(embed=embed)
-    except (discord.Forbidden, discord.HTTPException):
-        pass
-
-
-@bot.event
-async def on_message_edit(before: discord.Message, after: discord.Message) -> None:
-    """Log edited messages to message log channel."""
-    if after.author.bot:
-        return  # Don't log bot messages
-    
-    if before.content == after.content:
-        return  # No actual content change
-    
-    log_channel = bot.get_channel(MESSAGE_LOG_CHANNEL_ID)
-    if not log_channel:
-        return
-    
-    try:
-        embed = discord.Embed(
-            title="Message Edited",
-            description=f"A message from {after.author} was edited",
-            color=discord.Color.orange(),
-            timestamp=datetime.now(timezone.utc),
-        )
-        embed.add_field(name="Author", value=f"{after.author} ({after.author.id})")
-        embed.add_field(name="Channel", value=f"<#{after.channel.id}>" if isinstance(after.channel, discord.TextChannel) else "Unknown")
-        embed.add_field(name="Message ID", value=str(after.id))
-        embed.add_field(name="Original Content", value=before.content[:1000] if before.content else "[No content/embed only]", inline=False)
-        embed.add_field(name="New Content", value=after.content[:1000] if after.content else "[No content/embed only]", inline=False)
-        embed.add_field(name="Message Link", value=f"[Jump to message](https://discord.com/channels/{after.guild.id}/{after.channel.id}/{after.id})" if isinstance(after.channel, discord.TextChannel) else "Unknown")
-        await log_channel.send(embed=embed)
-    except (discord.Forbidden, discord.HTTPException):
-        pass
-
 
 @bot.command(name="maskick")
-@commands.has_role(ALL_SERVER_BAN_COMMAND_ROLE_ID)
+@main_server_role_required(ALL_SERVER_BAN_COMMAND_ROLE_ID)
 async def maskick(ctx: commands.Context, *targets: str) -> None:
-    await log_to_audit_channel(ctx, "maskick", f"Targets: {', '.join(targets) if targets else 'none'}")
     if not targets:
         await ctx.send(f"Usage: `{PREFIX}maskick <user_id1> <user_id2> ...`")
         return
@@ -5151,9 +4883,8 @@ async def maskick(ctx: commands.Context, *targets: str) -> None:
 
 
 @bot.command(name="masban")
-@commands.has_role(ALL_SERVER_BAN_COMMAND_ROLE_ID)
+@main_server_role_required(ALL_SERVER_BAN_COMMAND_ROLE_ID)
 async def masban(ctx: commands.Context, *targets: str) -> None:
-    await log_to_audit_channel(ctx, "masban", f"Targets: {', '.join(targets) if targets else 'none'}")
     if not targets:
         await ctx.send(f"Usage: `{PREFIX}masban <user_id1> <user_id2> ...`")
         return
@@ -5231,22 +4962,6 @@ async def masban(ctx: commands.Context, *targets: str) -> None:
 @bot.command(name="cmds")
 async def cmds(ctx: commands.Context) -> None:
     """Commands for the WARN/automod staff role."""
-    # Log command execution to audit channel
-    audit_channel = bot.get_channel(AUDIT_LOG_CHANNEL_ID)
-    if audit_channel:
-        embed = discord.Embed(
-            title="Audit Log: Command Executed",
-            description=f"**Command:** {PREFIX}cmds",
-            color=discord.Color.blue(),
-            timestamp=datetime.now(timezone.utc),
-        )
-        embed.add_field(name="User", value=f"{ctx.author} ({ctx.author.id})")
-        embed.add_field(name="Guild", value=f"{ctx.guild.name if ctx.guild else 'DM'} ({ctx.guild.id if ctx.guild else 'N/A'})")
-        try:
-            await audit_channel.send(embed=embed)
-        except (discord.Forbidden, discord.HTTPException):
-            pass
-    
     automod_role_commands = [
         f"{PREFIX}warn",
         f"{PREFIX}unwarn",
@@ -5313,22 +5028,6 @@ async def funcmds(ctx: commands.Context) -> None:
 @bot.command(name="owcmds")
 async def owcmds(ctx: commands.Context) -> None:
     """High-privilege controller/staff command list."""
-    # Log command execution to audit channel
-    audit_channel = bot.get_channel(AUDIT_LOG_CHANNEL_ID)
-    if audit_channel:
-        embed = discord.Embed(
-            title="Audit Log: Command Executed",
-            description=f"**Command:** {PREFIX}owcmds",
-            color=discord.Color.blue(),
-            timestamp=datetime.now(timezone.utc),
-        )
-        embed.add_field(name="User", value=f"{ctx.author} ({ctx.author.id})")
-        embed.add_field(name="Guild", value=f"{ctx.guild.name if ctx.guild else 'DM'} ({ctx.guild.id if ctx.guild else 'N/A'})")
-        try:
-            await audit_channel.send(embed=embed)
-        except (discord.Forbidden, discord.HTTPException):
-            pass
-    
     controller_commands = [
         f"{PREFIX}reload",
         f"{PREFIX}give_role",
