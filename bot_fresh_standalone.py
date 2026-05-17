@@ -5004,7 +5004,7 @@ async def mswban(ctx: commands.Context, *targets: str) -> None:
     target_guilds = get_all_server_ban_guilds(include_ban_appeal=True)
     processed_count = 0
     total_bans_count = 0
-    target_log_channel_ids = [MSWBAN_AUDIT_LOG_CHANNEL_ID, WARN_LOG_CHANNEL_ID]
+    target_log_channel_ids = [MSWBAN_AUDIT_LOG_CHANNEL_ID]
 
     for user_id in user_ids:
         try:
