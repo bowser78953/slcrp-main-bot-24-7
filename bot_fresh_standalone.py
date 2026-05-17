@@ -11,7 +11,6 @@ from urllib.parse import unquote
 from collections import deque
 from datetime import datetime, timedelta, timezone
 import discord
-from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 
@@ -162,7 +161,6 @@ RUNTIME_REACTION_ROLE_MESSAGE_IDS: set[int] = set()
 
 unban_task: asyncio.Task | None = None
 transcript_cleanup_task: asyncio.Task | None = None
-command_tree_synced = False
 
 LEET_TRANSLATION = str.maketrans(
     {
@@ -2080,20 +2078,9 @@ async def post_ticket_panel() -> None:
         print(f"Failed to post ticket rules message: {panel_error}")
 
 
-async def sync_slash_commands_now() -> tuple[int, int, str | None]:
-    try:
-        guild_obj = discord.Object(id=MAIN_SERVER_GUILD_ID)
-        bot.tree.copy_global_to(guild=guild_obj)
-        guild_synced_commands = await bot.tree.sync(guild=guild_obj)
-        global_synced_commands = await bot.tree.sync()
-        return len(guild_synced_commands), len(global_synced_commands), None
-    except Exception as sync_error:
-        return 0, 0, str(sync_error)
-
-
 @bot.event
 async def on_ready() -> None:
-    global unban_task, transcript_cleanup_task, command_tree_synced
+    global unban_task, transcript_cleanup_task
     await bot.change_presence(activity=discord.Game(name=STATUS_TEXT))
     bot.add_view(RPChannelView())
     bot.add_view(TicketTypeSelectView())
@@ -2107,16 +2094,6 @@ async def on_ready() -> None:
         unban_task = asyncio.create_task(process_pending_unbans())
     if transcript_cleanup_task is None or transcript_cleanup_task.done():
         transcript_cleanup_task = asyncio.create_task(run_ticket_transcript_cleanup_loop())
-    if not command_tree_synced:
-        guild_synced_count, global_synced_count, sync_error = await sync_slash_commands_now()
-        if sync_error is None:
-            command_tree_synced = True
-            print(
-                f"Slash commands synced: guild={guild_synced_count}, "
-                f"global={global_synced_count}"
-            )
-        else:
-            print(f"Failed to sync slash commands: {sync_error}")
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
     print(f"Prefix: {PREFIX}")
     registered_commands = sorted(cmd.qualified_name for cmd in bot.commands)
@@ -3556,32 +3533,29 @@ async def post_reaction_roles_panel(target_channel: discord.TextChannel) -> disc
     return panel_message
 
 
-@bot.tree.command(name="giveaway", description="Create a giveaway")
-@app_commands.checks.has_permissions(manage_guild=True)
-@app_commands.describe(
-    prize="Prize for the giveaway",
-    description="Description for the giveaway",
-    time_1s_1m_1h_1d="Duration (examples: 30s, 10m, 2h, 1d)",
-    channel="Channel where giveaway will be posted",
-)
+@bot.slash_command(name="giveaway", description="Create a giveaway")
 async def giveaway_slash(
-    interaction: discord.Interaction,
+    ctx: discord.ApplicationContext,
     prize: str,
     description: str,
     time_1s_1m_1h_1d: str,
     channel: discord.TextChannel,
 ) -> None:
-    if interaction.guild is None:
-        await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+    if ctx.guild is None:
+        await ctx.respond("This command can only be used in a server.", ephemeral=True)
+        return
+
+    if not ctx.author.guild_permissions.manage_guild:
+        await ctx.respond("You need Manage Server permission to use this command.", ephemeral=True)
         return
 
     duration_seconds = parse_duration_token(time_1s_1m_1h_1d)
     if duration_seconds is None:
-        await interaction.response.send_message("Invalid time format. Use values like `30s`, `10m`, `2h`, or `1d`.", ephemeral=True)
+        await ctx.respond("Invalid time format. Use values like `30s`, `10m`, `2h`, or `1d`.", ephemeral=True)
         return
 
     if len(prize.strip()) == 0 or len(description.strip()) == 0:
-        await interaction.response.send_message("Prize and description cannot be empty.", ephemeral=True)
+        await ctx.respond("Prize and description cannot be empty.", ephemeral=True)
         return
 
     end_time = datetime.now(timezone.utc) + timedelta(seconds=duration_seconds)
@@ -3593,7 +3567,7 @@ async def giveaway_slash(
     )
     giveaway_embed.add_field(name="Prize", value=prize.strip(), inline=False)
     giveaway_embed.add_field(name="Ends", value=discord.utils.format_dt(end_time, style="R"), inline=True)
-    giveaway_embed.add_field(name="Hosted By", value=interaction.user.mention, inline=True)
+    giveaway_embed.add_field(name="Hosted By", value=ctx.author.mention, inline=True)
     giveaway_embed.set_footer(text=f"React with {GIVEAWAY_ENTRY_EMOJI} to enter")
 
     try:
@@ -3604,12 +3578,12 @@ async def giveaway_slash(
         )
         await giveaway_message.add_reaction(GIVEAWAY_ENTRY_EMOJI)
     except (discord.Forbidden, discord.HTTPException) as send_error:
-        await interaction.response.send_message(f"Failed to post giveaway: {send_error}", ephemeral=True)
+        await ctx.respond(f"Failed to post giveaway: {send_error}", ephemeral=True)
         return
 
     asyncio.create_task(
         finish_giveaway_after_delay(
-            guild_id=interaction.guild.id,
+            guild_id=ctx.guild.id,
             channel_id=channel.id,
             message_id=giveaway_message.id,
             prize=prize.strip(),
@@ -3617,28 +3591,29 @@ async def giveaway_slash(
         )
     )
 
-    await interaction.response.send_message(
+    await ctx.respond(
         f"Giveaway posted in {channel.mention}. It ends {discord.utils.format_dt(end_time, style='R')}.",
         ephemeral=True,
     )
 
 
-@bot.tree.command(name="reactionroles", description="Post the reaction roles panel")
-@app_commands.checks.has_permissions(manage_guild=True)
-@app_commands.describe(channel="Channel where the reaction roles panel should be posted")
-async def reactionroles_slash(interaction: discord.Interaction, channel: discord.TextChannel) -> None:
-    if interaction.guild is None:
-        await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+@bot.slash_command(name="reactionroles", description="Post the reaction roles panel")
+async def reactionroles_slash(ctx: discord.ApplicationContext, channel: discord.TextChannel) -> None:
+    if ctx.guild is None:
+        await ctx.respond("This command can only be used in a server.", ephemeral=True)
         return
 
-    await interaction.response.defer(ephemeral=True)
+    if not ctx.author.guild_permissions.manage_guild:
+        await ctx.respond("You need Manage Server permission to use this command.", ephemeral=True)
+        return
+
     try:
         panel_message = await post_reaction_roles_panel(channel)
     except (discord.Forbidden, discord.HTTPException) as panel_error:
-        await interaction.followup.send(f"Failed to post reaction roles panel: {panel_error}", ephemeral=True)
+        await ctx.respond(f"Failed to post reaction roles panel: {panel_error}", ephemeral=True)
         return
 
-    await interaction.followup.send(
+    await ctx.respond(
         f"Reaction roles panel posted in {channel.mention}.\nMessage ID: `{panel_message.id}`",
         ephemeral=True,
     )
@@ -5244,24 +5219,15 @@ async def syncslash(ctx: commands.Context) -> None:
         await ctx.send(f"You need the **{role_name_text(reload_role_id, ctx.guild)}** role to use this command.")
         return
 
-    await ctx.send("Syncing slash commands now...")
-    guild_synced_count, global_synced_count, sync_error = await sync_slash_commands_now()
-    if sync_error is not None:
-        app_id = bot.user.id if bot.user else 0
-        invite_url = (
-            "https://discord.com/oauth2/authorize"
-            f"?client_id={app_id}&scope=bot%20applications.commands&permissions=8"
-        )
-        await ctx.send(
-            "Slash sync failed.\n"
-            f"Error: `{sync_error}`\n"
-            f"Re-authorize URL: {invite_url}"
-        )
-        return
-
+    app_id = bot.user.id if bot.user else 0
+    invite_url = (
+        "https://discord.com/oauth2/authorize"
+        f"?client_id={app_id}&scope=bot%20applications.commands&permissions=8"
+    )
     await ctx.send(
-        "Slash sync complete. "
-        f"Guild commands: **{guild_synced_count}**, Global commands: **{global_synced_count}**."
+        "This bot uses py-cord slash commands and registers them on startup.\n"
+        "If slash commands still do not appear, re-invite with this URL:\n"
+        f"{invite_url}"
     )
 
 
