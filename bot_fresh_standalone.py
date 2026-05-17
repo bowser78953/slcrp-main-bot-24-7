@@ -1592,7 +1592,7 @@ async def run_ticket_transcript_cleanup_loop() -> None:
             print(
                 "Transcript cleanup: "
                 f"deleted={deleted_count}, failed={failed_count}, "
-                f"retention_days={TICKET_TRANSCRIPT_RETENTION_DAYS}"
+                f"retention_days={TICKET
             )
         await asyncio.sleep(TICKET_TRANSCRIPT_CLEANUP_INTERVAL_SECONDS)
 
@@ -2771,9 +2771,9 @@ async def resolve_owned_temp_vc(
         await ctx.send("You do not currently own a temporary VC.")
         return None
 
-    _, _, text_channel = temp_vc
-    if ctx.channel.id != text_channel.id:
-        await ctx.send(f"Use this command in {text_channel.mention}.")
+    _, voice_channel, _ = temp_vc
+    if ctx.channel.id != voice_channel.id:
+        await ctx.send(f"Use this command in {voice_channel.mention}.")
         return None
 
     return temp_vc
@@ -2827,7 +2827,7 @@ async def lock(ctx: commands.Context) -> None:
         await ctx.send("I could not lock your VC.")
         return
 
-    await ctx.send("Your VC is now locked.")
+    await ctx
 
 
 @bot.command(name="unlock")
@@ -4708,14 +4708,6 @@ async def reload_category(ctx: commands.Context, category: str = "") -> None:
                 f"NSFW modified: **{nsfw_mtime}**\n"
                 f"NSFW last term: `{nsfw_last_term}`"
             )
-        elif normalized == "nsfwautomod":
-            term_count = refresh_runtime_nsfw_terms()
-            raw_lines, ignored_lines = get_blacklist_file_stats(AUTOMOD_NSFW_BLACKLIST_PATH)
-            details = (
-                f"Raw lines: **{raw_lines}**\n"
-                f"Ignored lines: **{ignored_lines}**\n"
-                f"Loaded terms: **{term_count}**"
-            )
         elif normalized == "invitesystem":
             invite_count = refresh_runtime_approved_invites()
             details = f"Loaded **{invite_count}** approved invite codes into runtime cache."
@@ -4882,7 +4874,7 @@ async def give_role(ctx: commands.Context, guild_id: str, role_id: str, user_id:
         await member.add_roles(role, reason=f"Given by {ctx.author} via give_role command.")
         await ctx.send(f"Gave **{role.name}** to <@{member.id}> in **{target_guild.name}**.")
     except discord.Forbidden:
-        await ctx.send("I don't have permission to assign that role in that server.")
+        await ctx.send("I do not have permission to assign that role in that server.")
     except discord.HTTPException as e:
         await ctx.send(f"Failed to assign role: {e}")
 
@@ -5238,6 +5230,33 @@ async def owcmds(ctx: commands.Context) -> None:
             await ctx.send("I sent your command list in DMs.")
     except (discord.Forbidden, discord.HTTPException):
         await ctx.send("I could not DM you. Please enable DMs and try again.")
+
+
+@bot.command(name="baninfo")
+@commands.has_permissions(ban_members=True)
+async def baninfo(ctx: commands.Context, user_id: int) -> None:
+    """Finds the reason for a user's ban."""
+    user = await bot.fetch_user(user_id)
+    if user is None:
+        await ctx.send("User not found.")
+        return
+
+    reason = "No reason provided"  # Default reason if none is found
+    for guild in bot.guilds:
+        try:
+            ban_entry = await guild.fetch_ban(user)
+            reason = ban_entry.reason or reason
+            break  # Exit loop once the ban reason is found
+        except discord.NotFound:
+            continue  # User not banned in this guild
+        except discord.Forbidden:
+            await ctx.send(f"Missing permissions to fetch bans in {guild.name}.")
+            return
+        except discord.HTTPException as e:
+            await ctx.send(f"Failed to fetch ban info: {e}")
+            return
+
+    await ctx.send(f"Ban reason for {user.mention}: {reason}")
 
 
 bot.run(TOKEN)
