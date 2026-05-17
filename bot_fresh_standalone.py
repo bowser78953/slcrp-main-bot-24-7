@@ -5006,6 +5006,7 @@ async def mswban(ctx: commands.Context, *targets: str) -> None:
                 deleted_count += await delete_recent_user_messages(guild, user.id, days=7)
             except (discord.Forbidden, discord.HTTPException):
                 failed_count += 1
+            await asyncio.sleep(0.5)
 
         appeal_invite_url = await get_ban_appeal_invite_url()
         main_dm_sent = False
@@ -5026,8 +5027,9 @@ async def mswban(ctx: commands.Context, *targets: str) -> None:
                 appeal_invite_url,
             )
         results.append(
-            f"{user.mention} — banned: **{banned_count}**, msgs deleted: **{deleted_count}**, failed: **{failed_count}**, main DM: **{'yes' if main_dm_sent else 'no'}**, modmail queued: **{'yes' if modmail_queued else 'no'}**"
+            f"{user.mention} ({user_id})"
         )
+        await asyncio.sleep(1)
 
     embed = discord.Embed(
         title="Mswban",
