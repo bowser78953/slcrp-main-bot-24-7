@@ -11,6 +11,7 @@ from urllib.parse import unquote
 from collections import deque
 from datetime import datetime, timedelta, timezone
 import discord
+from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 
@@ -137,8 +138,19 @@ APPROVED_BOTS_PATH = os.path.join(DATA_DIR, "approved_bots.json")
 TICKET_TRANSCRIPTS_DIR = os.path.join(DATA_DIR, "ticket_transcripts")
 LEVELS_PATH = os.path.join(DATA_DIR, "levels.json")
 RUNTIME_SETTINGS_PATH = os.path.join(DATA_DIR, "runtime_settings.json")
+REACTION_ROLE_MESSAGES_PATH = os.path.join(DATA_DIR, "reaction_role_messages.json")
 BAN_APPEAL_GUILD_ID = 1500595644220444752
 BAN_APPEAL_DM_QUEUE_PATH = os.path.join(DATA_DIR, "ban_appeal_dm_queue.jsonl")
+
+GIVEAWAY_ENTRY_EMOJI = "🎉"
+REACTION_ROLE_EMOJI_TO_ROLE_ID: dict[str, int] = {
+    "📸": 1505614008437313697,
+    "📊": 1505612901401104526,
+    "🎮": 1495572658199462018,
+    "🥳": 1505612508281442445,
+    "🎪": 1505612781796462602,
+    "👥": 1505612837089841172,
+}
 
 # Runtime caches refreshed by on_ready and ?reload
 RUNTIME_AUTOMOD_TERMS: list[str] = []
@@ -146,9 +158,11 @@ RUNTIME_NSFW_TERMS: list[str] = []
 RUNTIME_APPROVED_INVITE_CODES: set[str] = set()
 RUNTIME_APPROVED_BOT_IDS: set[int] = set()
 RUNTIME_SETTINGS: dict = {}
+RUNTIME_REACTION_ROLE_MESSAGE_IDS: set[int] = set()
 
 unban_task: asyncio.Task | None = None
 transcript_cleanup_task: asyncio.Task | None = None
+command_tree_synced = False
 
 LEET_TRANSLATION = str.maketrans(
     {
@@ -499,6 +513,72 @@ def format_duration_short(duration: timedelta) -> str:
     hours, remainder = divmod(total_seconds, 3600)
     minutes, seconds = divmod(remainder, 60)
     return f"{hours}h {minutes}m {seconds}s"
+
+
+def parse_duration_token(value: str) -> int | None:
+    match = re.fullmatch(r"\s*(\d+)\s*([smhdSMHD])\s*", value or "")
+    if not match:
+        return None
+
+    amount = int(match.group(1))
+    unit = match.group(2).lower()
+    if amount <= 0:
+        return None
+
+    multiplier = {
+        "s": 1,
+        "m": 60,
+        "h": 3600,
+        "d": 86400,
+    }.get(unit)
+    if multiplier is None:
+        return None
+    return amount * multiplier
+
+
+def ensure_reaction_role_messages_file() -> None:
+    if os.path.exists(REACTION_ROLE_MESSAGES_PATH):
+        return
+
+    os.makedirs(os.path.dirname(REACTION_ROLE_MESSAGES_PATH), exist_ok=True)
+    with open(REACTION_ROLE_MESSAGES_PATH, "w", encoding="utf-8") as file:
+        json.dump({"message_ids": []}, file, indent=2)
+
+
+def load_reaction_role_message_ids() -> set[int]:
+    ensure_reaction_role_messages_file()
+    try:
+        with open(REACTION_ROLE_MESSAGES_PATH, "r", encoding="utf-8") as file:
+            raw_data = json.load(file)
+    except (OSError, json.JSONDecodeError):
+        return set()
+
+    if isinstance(raw_data, dict):
+        raw_ids = raw_data.get("message_ids", [])
+    elif isinstance(raw_data, list):
+        raw_ids = raw_data
+    else:
+        raw_ids = []
+
+    parsed_ids: set[int] = set()
+    for entry in raw_ids:
+        try:
+            parsed_ids.add(int(entry))
+        except (TypeError, ValueError):
+            continue
+    return parsed_ids
+
+
+def save_reaction_role_message_ids(message_ids: set[int]) -> None:
+    os.makedirs(os.path.dirname(REACTION_ROLE_MESSAGES_PATH), exist_ok=True)
+    with open(REACTION_ROLE_MESSAGES_PATH, "w", encoding="utf-8") as file:
+        json.dump({"message_ids": sorted(message_ids)}, file, indent=2)
+
+
+def refresh_runtime_reaction_role_message_ids() -> int:
+    global RUNTIME_REACTION_ROLE_MESSAGE_IDS
+    RUNTIME_REACTION_ROLE_MESSAGE_IDS = load_reaction_role_message_ids()
+    return len(RUNTIME_REACTION_ROLE_MESSAGE_IDS)
 
 
 def get_sorted_level_entries(levels_data: dict) -> list[tuple[int, int, int]]:
@@ -1148,6 +1228,7 @@ def refresh_all_runtime_caches() -> None:
     refresh_runtime_approved_invites()
     refresh_runtime_approved_bots()
     refresh_runtime_settings()
+    refresh_runtime_reaction_role_message_ids()
 
 
 def normalize_text_for_detection(text: str) -> str:
@@ -2001,7 +2082,7 @@ async def post_ticket_panel() -> None:
 
 @bot.event
 async def on_ready() -> None:
-    global unban_task, transcript_cleanup_task
+    global unban_task, transcript_cleanup_task, command_tree_synced
     await bot.change_presence(activity=discord.Game(name=STATUS_TEXT))
     bot.add_view(RPChannelView())
     bot.add_view(TicketTypeSelectView())
@@ -2015,6 +2096,13 @@ async def on_ready() -> None:
         unban_task = asyncio.create_task(process_pending_unbans())
     if transcript_cleanup_task is None or transcript_cleanup_task.done():
         transcript_cleanup_task = asyncio.create_task(run_ticket_transcript_cleanup_loop())
+    if not command_tree_synced:
+        try:
+            synced_commands = await bot.tree.sync()
+            command_tree_synced = True
+            print(f"Slash commands synced: {len(synced_commands)}")
+        except Exception as sync_error:
+            print(f"Failed to sync slash commands: {sync_error}")
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
     print(f"Prefix: {PREFIX}")
     registered_commands = sorted(cmd.qualified_name for cmd in bot.commands)
@@ -2160,6 +2248,57 @@ async def on_voice_state_update(
         return
 
     await delete_temp_vc_resources(member.guild, owner_id)
+
+
+async def handle_reaction_role_event(payload: discord.RawReactionActionEvent, *, add_role: bool) -> None:
+    if payload.guild_id is None:
+        return
+    if payload.user_id == bot.user.id:
+        return
+    if payload.message_id not in RUNTIME_REACTION_ROLE_MESSAGE_IDS:
+        return
+
+    role_id = REACTION_ROLE_EMOJI_TO_ROLE_ID.get(str(payload.emoji))
+    if role_id is None:
+        return
+
+    guild = bot.get_guild(payload.guild_id)
+    if guild is None:
+        return
+
+    role = guild.get_role(role_id)
+    if role is None:
+        return
+
+    member = guild.get_member(payload.user_id)
+    if member is None:
+        try:
+            member = await guild.fetch_member(payload.user_id)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            return
+
+    if member.bot:
+        return
+
+    try:
+        if add_role:
+            if role not in member.roles:
+                await member.add_roles(role, reason="Reaction role selected")
+        else:
+            if role in member.roles:
+                await member.remove_roles(role, reason="Reaction role removed")
+    except (discord.Forbidden, discord.HTTPException):
+        return
+
+
+@bot.event
+async def on_raw_reaction_add(payload: discord.RawReactionActionEvent) -> None:
+    await handle_reaction_role_event(payload, add_role=True)
+
+
+@bot.event
+async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent) -> None:
+    await handle_reaction_role_event(payload, add_role=False)
 
 
 @bot.event
@@ -3298,6 +3437,197 @@ class RPChannelView(discord.ui.View):
             option,
         )
         await interaction.response.send_message(result, ephemeral=True)
+
+
+async def finish_giveaway_after_delay(
+    *,
+    guild_id: int,
+    channel_id: int,
+    message_id: int,
+    prize: str,
+    duration_seconds: int,
+) -> None:
+    await asyncio.sleep(max(duration_seconds, 1))
+
+    guild = bot.get_guild(guild_id)
+    if guild is None:
+        return
+
+    channel = guild.get_channel(channel_id) or bot.get_channel(channel_id)
+    if not isinstance(channel, discord.TextChannel):
+        return
+
+    try:
+        giveaway_message = await channel.fetch_message(message_id)
+    except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+        return
+
+    entrants: list[discord.abc.User] = []
+    for reaction in giveaway_message.reactions:
+        if str(reaction.emoji) != GIVEAWAY_ENTRY_EMOJI:
+            continue
+        try:
+            async for user in reaction.users():
+                if not user.bot:
+                    entrants.append(user)
+        except (discord.Forbidden, discord.HTTPException):
+            continue
+        break
+
+    winner = random.choice(entrants) if entrants else None
+
+    end_embed = discord.Embed(
+        title="Giveaway Ended",
+        color=discord.Color.gold(),
+        timestamp=datetime.now(timezone.utc),
+    )
+    end_embed.add_field(name="Prize", value=prize, inline=False)
+    end_embed.add_field(name="Entries", value=str(len(entrants)), inline=True)
+    if winner is None:
+        end_embed.add_field(name="Winner", value="No valid entries.", inline=True)
+        await channel.send(embed=end_embed)
+        return
+
+    end_embed.add_field(name="Winner", value=winner.mention, inline=True)
+    await channel.send(content=f"Congratulations {winner.mention}! You won **{prize}**.", embed=end_embed)
+
+
+async def post_reaction_roles_panel(target_channel: discord.TextChannel) -> discord.Message:
+    description = (
+        "This system allows members to customize their experience within the community by selecting roles through reactions. "
+        "By reacting to the designated messages, you can gain access to departments, notifications, pings, platform roles, colors, "
+        "and special community features without needing staff assistance.\n\n"
+        "Reaction roles help keep Salt Lake City Roleplay organized, efficient, and easy for everyone to navigate while giving members "
+        "full control over the roles they want. Be sure to select the roles that match your interests to stay updated with important "
+        "announcements, events, and department information throughout the community.\n\n"
+        "🎥 **Media Ping**\n"
+        "React to this role to receive notifications whenever Salt Lake City Roleplay uploads new media content, including screenshots, trailers, patrol highlights, event recordings, announcements, and community showcases. Stay updated with the latest photos, videos, and promotional content from around the community.\n\n"
+        "📊 **Poll Ping**\n"
+        "React to this role to receive notifications whenever new polls, community votes, feedback forms, or important decisions are posted within Salt Lake City Roleplay. Your opinion helps shape the future of the community, so stay informed and make your voice heard.\n\n"
+        "🎮 **Session Ping**\n"
+        "Session Ping is a server notification role used to alert members when an official session, training, meeting, or in-game event is starting. When this role is pinged, it means staff or leadership are actively hosting a structured session that requires player participation or attendance.\n\n"
+        "🥳 **Giveaway Ping**\n"
+        "Giveaway Ping is a notification role used to alert members whenever a giveaway is announced or going live within the server. When this role is pinged, it means there is an active opportunity to participate in a prize event such as in-game rewards, special roles, currency, or exclusive perks.\n\n"
+        "🎪 **Event Ping**\n"
+        "Event Ping is a notification role used to alert members about upcoming or live server events. This includes special roleplay scenarios, community activities, competitions, or seasonal events hosted by staff. When this role is pinged, it means an official event is starting or about to begin, and members are encouraged to join in and participate.\n\n"
+        "👥 **Partnership Ping**\n"
+        "Partnership Ping is a notification role used to announce updates, events, or important information from partnered servers or organizations. When this role is pinged, it means one of our official partners is hosting something or sharing an opportunity with the community."
+    )
+
+    embed = discord.Embed(
+        title="Welcome to Salt Lake City Roleplay Reaction Roles!",
+        description=description,
+        color=discord.Color.blue(),
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.add_field(
+        name="Reactions",
+        value=(
+            "📸 - Media Ping\n"
+            "📊 - Poll Ping\n"
+            "🎮 - Session Ping\n"
+            "🥳 - Giveaway Ping\n"
+            "🎪 - Event Ping\n"
+            "👥 - Partnership Ping"
+        ),
+        inline=False,
+    )
+
+    panel_message = await target_channel.send(embed=embed)
+    for emoji in REACTION_ROLE_EMOJI_TO_ROLE_ID:
+        await panel_message.add_reaction(emoji)
+
+    RUNTIME_REACTION_ROLE_MESSAGE_IDS.add(panel_message.id)
+    save_reaction_role_message_ids(RUNTIME_REACTION_ROLE_MESSAGE_IDS)
+    return panel_message
+
+
+@bot.tree.command(name="giveaway", description="Create a giveaway")
+@app_commands.checks.has_permissions(manage_guild=True)
+@app_commands.describe(
+    prize="Prize for the giveaway",
+    description="Description for the giveaway",
+    time_1s_1m_1h_1d="Duration (examples: 30s, 10m, 2h, 1d)",
+    channel="Channel where giveaway will be posted",
+)
+async def giveaway_slash(
+    interaction: discord.Interaction,
+    prize: str,
+    description: str,
+    time_1s_1m_1h_1d: str,
+    channel: discord.TextChannel,
+) -> None:
+    if interaction.guild is None:
+        await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+        return
+
+    duration_seconds = parse_duration_token(time_1s_1m_1h_1d)
+    if duration_seconds is None:
+        await interaction.response.send_message("Invalid time format. Use values like `30s`, `10m`, `2h`, or `1d`.", ephemeral=True)
+        return
+
+    if len(prize.strip()) == 0 or len(description.strip()) == 0:
+        await interaction.response.send_message("Prize and description cannot be empty.", ephemeral=True)
+        return
+
+    end_time = datetime.now(timezone.utc) + timedelta(seconds=duration_seconds)
+    giveaway_embed = discord.Embed(
+        title="Giveaway",
+        description=description.strip(),
+        color=discord.Color.gold(),
+        timestamp=datetime.now(timezone.utc),
+    )
+    giveaway_embed.add_field(name="Prize", value=prize.strip(), inline=False)
+    giveaway_embed.add_field(name="Ends", value=discord.utils.format_dt(end_time, style="R"), inline=True)
+    giveaway_embed.add_field(name="Hosted By", value=interaction.user.mention, inline=True)
+    giveaway_embed.set_footer(text=f"React with {GIVEAWAY_ENTRY_EMOJI} to enter")
+
+    try:
+        giveaway_message = await channel.send(
+            content=f"<@&{REACTION_ROLE_EMOJI_TO_ROLE_ID['🥳']}>",
+            embed=giveaway_embed,
+            allowed_mentions=discord.AllowedMentions(roles=True),
+        )
+        await giveaway_message.add_reaction(GIVEAWAY_ENTRY_EMOJI)
+    except (discord.Forbidden, discord.HTTPException) as send_error:
+        await interaction.response.send_message(f"Failed to post giveaway: {send_error}", ephemeral=True)
+        return
+
+    asyncio.create_task(
+        finish_giveaway_after_delay(
+            guild_id=interaction.guild.id,
+            channel_id=channel.id,
+            message_id=giveaway_message.id,
+            prize=prize.strip(),
+            duration_seconds=duration_seconds,
+        )
+    )
+
+    await interaction.response.send_message(
+        f"Giveaway posted in {channel.mention}. It ends {discord.utils.format_dt(end_time, style='R')}.",
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(name="reactionroles", description="Post the reaction roles panel")
+@app_commands.checks.has_permissions(manage_guild=True)
+@app_commands.describe(channel="Channel where the reaction roles panel should be posted")
+async def reactionroles_slash(interaction: discord.Interaction, channel: discord.TextChannel) -> None:
+    if interaction.guild is None:
+        await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    try:
+        panel_message = await post_reaction_roles_panel(channel)
+    except (discord.Forbidden, discord.HTTPException) as panel_error:
+        await interaction.followup.send(f"Failed to post reaction roles panel: {panel_error}", ephemeral=True)
+        return
+
+    await interaction.followup.send(
+        f"Reaction roles panel posted in {channel.mention}.\nMessage ID: `{panel_message.id}`",
+        ephemeral=True,
+    )
 
 
 @bot.command(name="rp")
