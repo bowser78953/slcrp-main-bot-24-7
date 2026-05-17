@@ -284,6 +284,23 @@ def member_has_any_named_role(member: discord.Member, role_names: set[str]) -> b
     return any(name in member_role_names for name in normalized_allowed)
 
 
+def role_name_text(role_id: int, guild: discord.Guild | None = None) -> str:
+    lookup_guilds: list[discord.Guild] = []
+    if guild is not None:
+        lookup_guilds.append(guild)
+
+    main_guild = bot.get_guild(MAIN_SERVER_GUILD_ID)
+    if main_guild is not None and (guild is None or main_guild.id != guild.id):
+        lookup_guilds.append(main_guild)
+
+    for lookup_guild in lookup_guilds:
+        role = lookup_guild.get_role(role_id)
+        if role is not None:
+            return role.name
+
+    return f"Role {role_id}"
+
+
 def main_server_role_required(role_id: int):
     async def predicate(ctx: commands.Context) -> bool:
         member = await get_main_server_member(ctx.author.id)
@@ -2500,7 +2517,7 @@ async def setsetting(ctx: commands.Context, key: str = "", *, value: str = "") -
     member_role_ids = {role.id for role in ctx.author.roles}
     reload_role_id = get_reload_command_role_id()
     if reload_role_id not in member_role_ids:
-        await ctx.send(f"You need <@&{reload_role_id}> to use this command.")
+        await ctx.send(f"You need the **{role_name_text(reload_role_id, ctx.guild)}** role to use this command.")
         return
 
     raw_key = key.strip()
@@ -2564,7 +2581,7 @@ async def setid(ctx: commands.Context, key: str = "", value: str = "") -> None:
     member_role_ids = {role.id for role in ctx.author.roles}
     reload_role_id = get_reload_command_role_id()
     if reload_role_id not in member_role_ids:
-        await ctx.send(f"You need <@&{reload_role_id}> to use this command.")
+        await ctx.send(f"You need the **{role_name_text(reload_role_id, ctx.guild)}** role to use this command.")
         return
 
     allowed_keys = {
@@ -2800,7 +2817,7 @@ async def soundboard(ctx: commands.Context, state: str) -> None:
         return
 
     if not isinstance(ctx.author, discord.Member) or ctx.author.get_role(BOOSTER_ROLE_ID) is None:
-        await ctx.send(f"You must have <@&{BOOSTER_ROLE_ID}> to use this command.")
+        await ctx.send(f"You must have the **{role_name_text(BOOSTER_ROLE_ID, ctx.guild)}** role to use this command.")
         return
 
     normalized_state = state.lower().strip()
@@ -4021,7 +4038,7 @@ async def sr(ctx: commands.Context, member: discord.Member | None = None) -> Non
     target_member = member or ctx.author
     member_role_ids = {role.id for role in ctx.author.roles}
     if target_member.id != ctx.author.id and ROLE_MANAGER_COMMAND_ROLE_ID not in member_role_ids:
-        await ctx.send(f"You need <@&{ROLE_MANAGER_COMMAND_ROLE_ID}> to save another member's roles.")
+        await ctx.send(f"You need the **{role_name_text(ROLE_MANAGER_COMMAND_ROLE_ID, ctx.guild)}** role to save another member's roles.")
         return
 
     staff_board_role = ctx.guild.get_role(BASE_ROLE_ID)
@@ -4505,7 +4522,7 @@ async def reload_category(ctx: commands.Context, category: str = "") -> None:
     member_role_ids = {role.id for role in ctx.author.roles}
     reload_role_id = get_reload_command_role_id()
     if reload_role_id not in member_role_ids:
-        await ctx.send(f"You need <@&{reload_role_id}> to use this command.")
+        await ctx.send(f"You need the **{role_name_text(reload_role_id, ctx.guild)}** role to use this command.")
         return
 
     ALL_CATEGORIES = ["all", "settings", "xpsystem", "spam", "automod", "nsfwautomod", "invitesystem", "botsystem", "ticketsystam"]
@@ -4693,7 +4710,7 @@ async def addbotid(ctx: commands.Context, bot_id: str = "") -> None:
     member_role_ids = {role.id for role in ctx.author.roles}
     reload_role_id = get_reload_command_role_id()
     if reload_role_id not in member_role_ids:
-        await ctx.send(f"You need <@&{reload_role_id}> to use this command.")
+        await ctx.send(f"You need the **{role_name_text(reload_role_id, ctx.guild)}** role to use this command.")
         return
 
     if not bot_id.strip():
@@ -4739,7 +4756,7 @@ async def removebotid(ctx: commands.Context, bot_id: str = "") -> None:
     member_role_ids = {role.id for role in ctx.author.roles}
     reload_role_id = get_reload_command_role_id()
     if reload_role_id not in member_role_ids:
-        await ctx.send(f"You need <@&{reload_role_id}> to use this command.")
+        await ctx.send(f"You need the **{role_name_text(reload_role_id, ctx.guild)}** role to use this command.")
         return
 
     if not bot_id.strip():
@@ -4816,7 +4833,7 @@ async def give_role(ctx: commands.Context, guild_id: str, role_id: str, user_id:
 
     try:
         await member.add_roles(role, reason=f"Given by {ctx.author} via give_role command.")
-        await ctx.send(f"Gave <@&{role.id}> to <@{member.id}> in **{target_guild.name}**.")
+        await ctx.send(f"Gave **{role.name}** to <@{member.id}> in **{target_guild.name}**.")
     except discord.Forbidden:
         await ctx.send("I don't have permission to assign that role in that server.")
     except discord.HTTPException as e:
@@ -4838,7 +4855,12 @@ async def on_command_error(ctx: commands.Context, error: Exception) -> None:
         return
 
     if isinstance(error, commands.MissingRole):
-        await ctx.send("You do not have the required role to use that command.")
+        missing_role_id = error.missing_role if isinstance(error.missing_role, int) else None
+        if missing_role_id is not None:
+            role_text = role_name_text(missing_role_id, ctx.guild)
+            await ctx.send(f"You need the **{role_text}** role to use this command.")
+        else:
+            await ctx.send("You do not have the required role to use that command.")
         return
 
     if isinstance(error, commands.BotMissingPermissions):
