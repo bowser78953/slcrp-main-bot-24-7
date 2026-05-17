@@ -50,6 +50,7 @@ bot = commands.Bot(command_prefix=PREFIX, intents=intents, help_command=None)
 BASE_ROLE_ID = 1493343098296598538
 WARN_COMMAND_ROLE_ID = 1493344271862988911
 WARN_LOG_CHANNEL_ID = 1493428931829825586
+MSWBAN_AUDIT_LOG_CHANNEL_ID = 1505310257436430387
 AUTOMOD_LOG_CHANNEL_ID = 1493437523798790275
 AUTOMOD_BYPASS_ROLE_ID = 1493712797203173417
 SPAM_BYPASS_ROLE_ID = 1493712904116113639
@@ -5018,15 +5019,31 @@ async def mswban(ctx: commands.Context, *targets: str) -> None:
             deleted_count = 0
             for guild in target_guilds:
                 try:
-                    await guild.ban(user, reason=f"Mass server-wide ban by {ctx.author}", delete_message_days=0)
+                    try:
+                        await guild.ban(
+                            user,
+                            reason=f"Mass server-wide ban by {ctx.author}",
+                            delete_message_seconds=0,
+                        )
+                    except TypeError:
+                        await guild.ban(
+                            user,
+                            reason=f"Mass server-wide ban by {ctx.author}",
+                            delete_message_days=0,
+                        )
                     banned_count += 1
                     try:
                         deleted_count += await delete_recent_user_messages(guild, user.id, days=7)
                     except Exception:
                         pass
-                except (discord.Forbidden, discord.HTTPException):
+                except discord.Forbidden as ban_error:
+                    print(f"mswban forbidden in guild {guild.id} for {user_id}: {ban_error}")
                     failed_count += 1
-                except Exception:
+                except discord.HTTPException as ban_error:
+                    print(f"mswban http error in guild {guild.id} for {user_id}: {ban_error}")
+                    failed_count += 1
+                except Exception as ban_error:
+                    print(f"mswban unexpected ban error in guild {guild.id} for {user_id}: {ban_error}")
                     failed_count += 1
                 await asyncio.sleep(0.5)
 
@@ -5104,23 +5121,29 @@ async def mswban(ctx: commands.Context, *targets: str) -> None:
     )
     embed.set_footer(text=f"Requested by {ctx.author}")
 
-    log_channel = None
-    if ctx.guild is not None:
-        log_channel = ctx.guild.get_channel(WARN_LOG_CHANNEL_ID)
-    if log_channel is None:
-        log_channel = bot.get_channel(WARN_LOG_CHANNEL_ID)
+    target_log_channel_ids = [MSWBAN_AUDIT_LOG_CHANNEL_ID, WARN_LOG_CHANNEL_ID]
+    sent_log_count = 0
+    for channel_id in dict.fromkeys(target_log_channel_ids):
+        log_channel = None
+        if ctx.guild is not None:
+            log_channel = ctx.guild.get_channel(channel_id)
+        if log_channel is None:
+            log_channel = bot.get_channel(channel_id)
 
-    if isinstance(log_channel, discord.TextChannel):
+        if not isinstance(log_channel, discord.TextChannel):
+            continue
+
         try:
             await log_channel.send(embed=embed)
+            sent_log_count += 1
         except discord.HTTPException as log_error:
-            print(f"mswban log send failed: {log_error}")
-            await ctx.send("Mass server-wide ban executed, but I could not send the audit log embed.")
-        else:
-            await ctx.send("Mass server-wide ban executed and logged to audit logs.")
+            print(f"mswban log send failed for {channel_id}: {log_error}")
+
+    if sent_log_count > 0:
+        await ctx.send(f"Mass server-wide ban executed and logged to **{sent_log_count}** audit channel(s).")
         return
 
-    await ctx.send("Mass server-wide ban executed, but the audit log channel is missing.")
+    await ctx.send("Mass server-wide ban executed, but I could not find any configured audit log channels.")
 
     try:
         await ctx.send(embed=embed)
