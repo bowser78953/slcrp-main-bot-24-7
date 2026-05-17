@@ -276,8 +276,12 @@ async def get_main_server_member(user_id: int) -> discord.Member | None:
 
 
 def member_has_any_named_role(member: discord.Member, role_names: set[str]) -> bool:
-    member_role_names = {role.name.lower().strip() for role in member.roles}
-    return any(name in member_role_names for name in role_names)
+    def normalize_role_name(value: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "", value.lower())
+
+    normalized_allowed = {normalize_role_name(name) for name in role_names}
+    member_role_names = {normalize_role_name(role.name) for role in member.roles}
+    return any(name in member_role_names for name in normalized_allowed)
 
 
 def main_server_role_required(role_id: int):
@@ -4777,9 +4781,6 @@ async def give_role(ctx: commands.Context, guild_id: str, role_id: str, user_id:
     if ctx.guild is None or not isinstance(ctx.author, discord.Member):
         await ctx.send("This command can only be used in a server.")
         return
-
-    # Temporary: Log that the command was called
-    await ctx.send(f"Command received! Guild: `{guild_id}`, Role: `{role_id}`, User: `{user_id}`")
     
     main_member = await get_main_server_member(ctx.author.id)
     if main_member is None or not member_has_any_named_role(main_member, MAIN_SERVER_ANY_ROLE_NAMES):
