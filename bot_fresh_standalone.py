@@ -2080,6 +2080,17 @@ async def post_ticket_panel() -> None:
         print(f"Failed to post ticket rules message: {panel_error}")
 
 
+async def sync_slash_commands_now() -> tuple[int, int, str | None]:
+    try:
+        guild_obj = discord.Object(id=MAIN_SERVER_GUILD_ID)
+        bot.tree.copy_global_to(guild=guild_obj)
+        guild_synced_commands = await bot.tree.sync(guild=guild_obj)
+        global_synced_commands = await bot.tree.sync()
+        return len(guild_synced_commands), len(global_synced_commands), None
+    except Exception as sync_error:
+        return 0, 0, str(sync_error)
+
+
 @bot.event
 async def on_ready() -> None:
     global unban_task, transcript_cleanup_task, command_tree_synced
@@ -2097,17 +2108,14 @@ async def on_ready() -> None:
     if transcript_cleanup_task is None or transcript_cleanup_task.done():
         transcript_cleanup_task = asyncio.create_task(run_ticket_transcript_cleanup_loop())
     if not command_tree_synced:
-        try:
-            guild_obj = discord.Object(id=MAIN_SERVER_GUILD_ID)
-            bot.tree.copy_global_to(guild=guild_obj)
-            guild_synced_commands = await bot.tree.sync(guild=guild_obj)
-            synced_commands = await bot.tree.sync()
+        guild_synced_count, global_synced_count, sync_error = await sync_slash_commands_now()
+        if sync_error is None:
             command_tree_synced = True
             print(
-                f"Slash commands synced: guild={len(guild_synced_commands)}, "
-                f"global={len(synced_commands)}"
+                f"Slash commands synced: guild={guild_synced_count}, "
+                f"global={global_synced_count}"
             )
-        except Exception as sync_error:
+        else:
             print(f"Failed to sync slash commands: {sync_error}")
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
     print(f"Prefix: {PREFIX}")
@@ -5222,6 +5230,39 @@ async def removebotid(ctx: commands.Context, bot_id: str = "") -> None:
 
     count = refresh_runtime_approved_bots()
     await ctx.send(f"Removed `{target_id}` from approved bots. Runtime cache now has **{count}** bot IDs.")
+
+
+@bot.command(name="syncslash")
+async def syncslash(ctx: commands.Context) -> None:
+    if ctx.guild is None or not isinstance(ctx.author, discord.Member):
+        await ctx.send("This command can only be used in a server.")
+        return
+
+    member_role_ids = {role.id for role in ctx.author.roles}
+    reload_role_id = get_reload_command_role_id()
+    if reload_role_id not in member_role_ids:
+        await ctx.send(f"You need the **{role_name_text(reload_role_id, ctx.guild)}** role to use this command.")
+        return
+
+    await ctx.send("Syncing slash commands now...")
+    guild_synced_count, global_synced_count, sync_error = await sync_slash_commands_now()
+    if sync_error is not None:
+        app_id = bot.user.id if bot.user else 0
+        invite_url = (
+            "https://discord.com/oauth2/authorize"
+            f"?client_id={app_id}&scope=bot%20applications.commands&permissions=8"
+        )
+        await ctx.send(
+            "Slash sync failed.\n"
+            f"Error: `{sync_error}`\n"
+            f"Re-authorize URL: {invite_url}"
+        )
+        return
+
+    await ctx.send(
+        "Slash sync complete. "
+        f"Guild commands: **{guild_synced_count}**, Global commands: **{global_synced_count}**."
+    )
 
 
 @bot.command(name="give_role")
