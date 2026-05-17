@@ -77,6 +77,17 @@ MAIN_SERVER_GUILD_ID = 1397084580816621618
 RELOAD_COMMAND_ROLE_ID = 1495581053862019215
 RP_COMMAND_ROLE_ID = 1493343098296598538
 TICKET_COMMAND_ROLE_ID = 1493343282820812872
+MAIN_SERVER_ANY_ROLE_NAMES = {
+    "->bot permissions<-",
+    "bypass automod",
+    "bypass spam",
+    "no-roles permissions",
+    "swban permissions",
+    "bot control permissions",
+    "->discord staff board<-",
+    "discord staff overseer",
+    "slcrp | discord staff board",
+}
 RP_CHANNEL_ID = 1504639818674471072
 RP_CHANNEL_OPTIONS = {
     "1": "⟨🏙️ ⟩ 𝐑𝐢𝐯𝐞𝐫 𝐂𝐢𝐭𝐲 𝐑𝐏",
@@ -249,21 +260,31 @@ def _is_staff_player(player: dict) -> bool:
     return "administrator" in permission or "moderator" in permission or "owner" in permission
 
 
+async def get_main_server_member(user_id: int) -> discord.Member | None:
+    main_guild = bot.get_guild(MAIN_SERVER_GUILD_ID)
+    if main_guild is None:
+        return None
+
+    member = main_guild.get_member(user_id)
+    if member is not None:
+        return member
+
+    try:
+        return await main_guild.fetch_member(user_id)
+    except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+        return None
+
+
+def member_has_any_named_role(member: discord.Member, role_names: set[str]) -> bool:
+    member_role_names = {role.name.lower().strip() for role in member.roles}
+    return any(name in member_role_names for name in role_names)
+
+
 def main_server_role_required(role_id: int):
     async def predicate(ctx: commands.Context) -> bool:
-        main_guild = bot.get_guild(MAIN_SERVER_GUILD_ID)
-        if main_guild is None:
+        member = await get_main_server_member(ctx.author.id)
+        if member is None:
             raise commands.CheckFailure("Main server is not available.")
-
-        member = main_guild.get_member(ctx.author.id)
-        if member is None:
-            try:
-                member = await main_guild.fetch_member(ctx.author.id)
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                member = None
-
-        if member is None:
-            raise commands.MissingRole(role_id)
 
         if any(role.id == role_id for role in member.roles):
             return True
@@ -4760,9 +4781,9 @@ async def give_role(ctx: commands.Context, guild_id: str, role_id: str, user_id:
     # Temporary: Log that the command was called
     await ctx.send(f"Command received! Guild: `{guild_id}`, Role: `{role_id}`, User: `{user_id}`")
     
-    member_role_ids = {role.id for role in ctx.author.roles}
-    if ROLE_MANAGER_COMMAND_ROLE_ID not in member_role_ids:
-        await ctx.send(f"You need <@&{ROLE_MANAGER_COMMAND_ROLE_ID}> to use this command.")
+    main_member = await get_main_server_member(ctx.author.id)
+    if main_member is None or not member_has_any_named_role(main_member, MAIN_SERVER_ANY_ROLE_NAMES):
+        await ctx.send("You need one of the approved staff board or bot permission roles in the main server to use this command.")
         return
 
     try:
