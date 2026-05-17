@@ -1401,7 +1401,9 @@ def queue_modmail_ban_appeal_dm(
         return False
 
 
-def get_all_server_ban_guilds() -> list[discord.Guild]:
+def get_all_server_ban_guilds(include_ban_appeal: bool = False) -> list[discord.Guild]:
+    if include_ban_appeal:
+        return list(bot.guilds)
     return [guild for guild in bot.guilds if guild.id != BAN_APPEAL_GUILD_ID]
 
 
@@ -4999,7 +5001,7 @@ async def mswban(ctx: commands.Context, *targets: str) -> None:
             return
 
     results: list[str] = []
-    target_guilds = get_all_server_ban_guilds()
+    target_guilds = get_all_server_ban_guilds(include_ban_appeal=True)
     for user_id in user_ids:
         try:
             user = await bot.fetch_user(user_id)
@@ -5018,7 +5020,10 @@ async def mswban(ctx: commands.Context, *targets: str) -> None:
                 try:
                     await guild.ban(user, reason=f"Mass server-wide ban by {ctx.author}", delete_message_days=0)
                     banned_count += 1
-                    deleted_count += await delete_recent_user_messages(guild, user.id, days=7)
+                    try:
+                        deleted_count += await delete_recent_user_messages(guild, user.id, days=7)
+                    except Exception:
+                        pass
                 except (discord.Forbidden, discord.HTTPException):
                     failed_count += 1
                 except Exception:
@@ -5048,7 +5053,9 @@ async def mswban(ctx: commands.Context, *targets: str) -> None:
                 except Exception:
                     pass
 
-            results.append(f"{user.mention} ({user_id})")
+            results.append(
+                f"{user.mention} ({user_id}) — banned: **{banned_count}/{len(target_guilds)}**, failed: **{failed_count}**, deleted: **{deleted_count}**"
+            )
             await asyncio.sleep(1)
         except Exception as user_error:
             print(f"mswban user processing error for {user_id}: {user_error}")
@@ -5096,6 +5103,25 @@ async def mswban(ctx: commands.Context, *targets: str) -> None:
         inline=False
     )
     embed.set_footer(text=f"Requested by {ctx.author}")
+
+    log_channel = None
+    if ctx.guild is not None:
+        log_channel = ctx.guild.get_channel(WARN_LOG_CHANNEL_ID)
+    if log_channel is None:
+        log_channel = bot.get_channel(WARN_LOG_CHANNEL_ID)
+
+    if isinstance(log_channel, discord.TextChannel):
+        try:
+            await log_channel.send(embed=embed)
+        except discord.HTTPException as log_error:
+            print(f"mswban log send failed: {log_error}")
+            await ctx.send("Mass server-wide ban executed, but I could not send the audit log embed.")
+        else:
+            await ctx.send("Mass server-wide ban executed and logged to audit logs.")
+        return
+
+    await ctx.send("Mass server-wide ban executed, but the audit log channel is missing.")
+
     try:
         await ctx.send(embed=embed)
     except discord.HTTPException as send_error:
