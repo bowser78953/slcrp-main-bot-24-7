@@ -748,6 +748,50 @@ def refresh_runtime_reaction_role_message_ids() -> int:
     return len(RUNTIME_REACTION_ROLE_MESSAGE_IDS)
 
 
+def is_reaction_role_panel_message(message: discord.Message) -> bool:
+    if not message.embeds:
+        return False
+
+    first_embed = message.embeds[0]
+    title = (first_embed.title or "").strip().lower()
+    return "reaction roles" in title
+
+
+async def reconcile_reaction_role_message_ids_from_history() -> int:
+    if bot.user is None:
+        return 0
+
+    discovered_ids: set[int] = set()
+    for guild in bot.guilds:
+        me = guild.me
+        if me is None:
+            continue
+
+        for channel in guild.text_channels:
+            permissions = channel.permissions_for(me)
+            if not permissions.read_message_history:
+                continue
+
+            try:
+                async for message in channel.history(limit=200):
+                    if message.author.id != bot.user.id:
+                        continue
+                    if is_reaction_role_panel_message(message):
+                        discovered_ids.add(message.id)
+            except (discord.Forbidden, discord.HTTPException):
+                continue
+
+    if not discovered_ids:
+        return 0
+
+    before_count = len(RUNTIME_REACTION_ROLE_MESSAGE_IDS)
+    RUNTIME_REACTION_ROLE_MESSAGE_IDS.update(discovered_ids)
+    if len(RUNTIME_REACTION_ROLE_MESSAGE_IDS) != before_count:
+        save_reaction_role_message_ids(RUNTIME_REACTION_ROLE_MESSAGE_IDS)
+
+    return len(discovered_ids)
+
+
 def get_sorted_level_entries(levels_data: dict) -> list[tuple[int, int, int]]:
     entries: list[tuple[int, int, int]] = []
     for user_id_text, record in levels_data.get("users", {}).items():
@@ -2239,6 +2283,7 @@ async def on_ready() -> None:
     ensure_approved_invites_file()
     ensure_approved_bots_file()
     refresh_all_runtime_caches()
+    recovered_reaction_role_ids = await reconcile_reaction_role_message_ids_from_history()
     delete_expired_ticket_transcripts()
     if unban_task is None or unban_task.done():
         unban_task = asyncio.create_task(process_pending_unbans())
@@ -2249,6 +2294,10 @@ async def on_ready() -> None:
     registered_commands = sorted(cmd.qualified_name for cmd in bot.commands)
     print(f"Loaded prefix commands: {len(registered_commands)}")
     print(f"baninfo loaded: {'baninfo' in registered_commands}")
+    print(
+        "Reaction role panels tracked: "
+        f"{len(RUNTIME_REACTION_ROLE_MESSAGE_IDS)} (recovered {recovered_reaction_role_ids} from history)"
+    )
 
     await post_ticket_panel()
 
@@ -3820,6 +3869,9 @@ async def giveaway_slash(
         await ctx.respond("Prize and description cannot be empty.", ephemeral=True)
         return
 
+    # Acknowledge interaction early to avoid Discord timeout on slower API calls.
+    await ctx.defer(ephemeral=True)
+
     end_time = datetime.now(timezone.utc) + timedelta(seconds=duration_seconds)
     giveaway_embed = discord.Embed(
         title="Giveaway",
@@ -3850,7 +3902,7 @@ async def giveaway_slash(
         }
         save_giveaway_state()
     except (discord.Forbidden, discord.HTTPException) as send_error:
-        await ctx.respond(f"Failed to post giveaway: {send_error}", ephemeral=True)
+        await ctx.followup.send(f"Failed to post giveaway: {send_error}", ephemeral=True)
         return
 
     asyncio.create_task(
@@ -3863,7 +3915,7 @@ async def giveaway_slash(
         )
     )
 
-    await ctx.respond(
+    await ctx.followup.send(
         f"Giveaway posted in {channel.mention}. It ends {discord.utils.format_dt(end_time, style='R')}.",
         ephemeral=True,
     )
@@ -3873,62 +3925,33 @@ async def giveaway_slash(
 async def reactionroles_slash(ctx: discord.ApplicationContext, channel: discord.TextChannel) -> None:
     if ctx.guild is None:
         await ctx.respond("This command can only be used in a server.", ephemeral=True)
+        return
 
-        @bot.event
-        async def on_ready() -> None:
-            global unban_task, transcript_cleanup_task
-            await bot.change_presence(activity=discord.Game(name=STATUS_TEXT))
-            bot.add_view(RPChannelView())
-            bot.add_view(GiveawayJoinView())
-            bot.add_view(TicketTypeSelectView())
-            ensure_automod_blacklist_file()
-            ensure_automod_nsfw_blacklist_file()
-            ensure_approved_invites_file()
-            ensure_approved_bots_file()
-            refresh_all_runtime_caches()
-            delete_expired_ticket_transcripts()
-            if unban_task is None or unban_task.done():
-                unban_task = asyncio.create_task(process_pending_unbans())
-            if transcript_cleanup_task is None or transcript_cleanup_task.done():
-                transcript_cleanup_task = asyncio.create_task(run_ticket_transcript_cleanup_loop())
-            print(f"Logged in as {bot.user} (ID: {bot.user.id})")
-            print(f"Prefix: {PREFIX}")
-            registered_commands = sorted(cmd.qualified_name for cmd in bot.commands)
-            print(f"Loaded prefix commands: {len(registered_commands)}")
-            print(f"baninfo loaded: {'baninfo' in registered_commands}")
+    if not ctx.author.guild_permissions.manage_guild:
+        await ctx.respond("You need Manage Server permission to use this command.", ephemeral=True)
+        return
 
-            # Restore giveaways from persistent storage
-            state = load_giveaway_state()
-            GIVEAWAY_ENTRIES.clear()
-            GIVEAWAY_ENTRIES.update(state.get("entries", {}))
-            GIVEAWAY_ACTIVE.clear()
-            GIVEAWAY_ACTIVE.update(state.get("active", {}))
-            now = datetime.now(timezone.utc)
-            for msg_id, info in list(GIVEAWAY_ACTIVE.items()):
-                try:
-                    end_time = datetime.fromisoformat(info["end_time"])
-                except Exception:
-                    end_time = now
-                remaining = (end_time - now).total_seconds()
-                if remaining > 0:
-                    asyncio.create_task(finish_giveaway_after_delay(
-                        guild_id=info["guild_id"],
-                        channel_id=info["channel_id"],
-                        message_id=int(msg_id),
-                        prize=info["prize"],
-                        duration_seconds=remaining,
-                    ))
-                else:
-                    # If overdue, finish immediately
-                    asyncio.create_task(finish_giveaway_after_delay(
-                        guild_id=info["guild_id"],
-                        channel_id=info["channel_id"],
-                        message_id=int(msg_id),
-                        prize=info["prize"],
-                        duration_seconds=1,
-                    ))
+    # Creating the panel and reactions can exceed 3 seconds; defer first.
+    await ctx.defer(ephemeral=True)
 
-            await post_ticket_panel()
+    try:
+        panel_message = await post_reaction_roles_panel(channel)
+    except (discord.Forbidden, discord.HTTPException) as panel_error:
+        await ctx.followup.send(f"Failed to post reaction roles panel: {panel_error}", ephemeral=True)
+        return
+
+    await ctx.followup.send(
+        f"Reaction roles panel posted in {channel.mention}. Message ID: `{panel_message.id}`",
+        ephemeral=True,
+    )
+
+
+@bot.command(name="rp")
+@main_server_role_required(RP_COMMAND_ROLE_ID)
+async def rp(ctx: commands.Context, action: str = "change", *, option: str | None = None) -> None:
+    if ctx.guild is None:
+        await ctx.send("This command can only be used in a server.")
+        return
 
     global RP_CURRENT_NAME, RP_CURRENT_SINCE
     action_lower = (action or "").lower().strip()
@@ -3978,7 +4001,11 @@ async def reactionroles_slash(ctx: discord.ApplicationContext, channel: discord.
             await ctx.send(result)
             return
 
-        await ctx.send("Select an RP mode:", view=RPChannelView())
+        await ctx.send(
+            "Select an RP mode from the buttons below, or run `!rp change <number>`:\n"
+            f"{format_rp_options_text()}",
+            view=RPChannelView(),
+        )
         return
 
     await ctx.send(f"Usage: `{PREFIX}rp change`, `{PREFIX}rp info`, or `{PREFIX}rp history`.")
