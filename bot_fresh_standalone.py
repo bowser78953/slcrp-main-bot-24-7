@@ -138,6 +138,7 @@ TICKET_TRANSCRIPTS_DIR = os.path.join(DATA_DIR, "ticket_transcripts")
 LEVELS_PATH = os.path.join(DATA_DIR, "levels.json")
 RUNTIME_SETTINGS_PATH = os.path.join(DATA_DIR, "runtime_settings.json")
 REACTION_ROLE_MESSAGES_PATH = os.path.join(DATA_DIR, "reaction_role_messages.json")
+AFK_PATH = os.path.join(DATA_DIR, "afk.json")
 BAN_APPEAL_GUILD_ID = 1500595644220444752
 BAN_APPEAL_DM_QUEUE_PATH = os.path.join(DATA_DIR, "ban_appeal_dm_queue.jsonl")
 
@@ -151,11 +152,39 @@ REACTION_ROLE_EMOJI_TO_ROLE_ID: dict[str, int] = {
     "🎪": 1505612781796462602,
     "👥": 1505612837089841172,
 }
+
+# Persistent giveaway storage
+GIVEAWAY_STATE_PATH = os.path.join(DATA_DIR, "giveaways.json")
 GIVEAWAY_ENTRIES: dict[int, set[int]] = {}
+GIVEAWAY_ACTIVE: dict[int, dict] = {}  # message_id -> {guild_id, channel_id, prize, end_time, duration_seconds}
+
+def load_giveaway_state() -> dict:
+    if not os.path.exists(GIVEAWAY_STATE_PATH):
+        return {}
+    try:
+        with open(GIVEAWAY_STATE_PATH, "r", encoding="utf-8") as file:
+            data = json.load(file)
+            # Convert entry sets from lists
+            entries = {int(k): set(v) for k, v in data.get("entries", {}).items()}
+            active = {int(k): v for k, v in data.get("active", {}).items()}
+            return {"entries": entries, "active": active}
+    except (json.JSONDecodeError, OSError):
+        return {"entries": {}, "active": {}}
+
+def save_giveaway_state() -> None:
+    os.makedirs(os.path.dirname(GIVEAWAY_STATE_PATH), exist_ok=True)
+    temp_path = GIVEAWAY_STATE_PATH + ".tmp"
+    with open(temp_path, "w", encoding="utf-8") as file:
+        json.dump({
+            "entries": {str(k): list(v) for k, v in GIVEAWAY_ENTRIES.items()},
+            "active": {str(k): v for k, v in GIVEAWAY_ACTIVE.items()},
+        }, file, indent=2)
+    os.replace(temp_path, GIVEAWAY_STATE_PATH)
 
 # Runtime caches refreshed by on_ready and ?reload
 RUNTIME_AUTOMOD_TERMS: list[str] = []
 RUNTIME_NSFW_TERMS: list[str] = []
+RUNTIME_AFK_USERS: dict[str, dict] = {}
 RUNTIME_APPROVED_INVITE_CODES: set[str] = set()
 RUNTIME_APPROVED_BOT_IDS: set[int] = set()
 RUNTIME_SETTINGS: dict = {}
@@ -429,6 +458,71 @@ def save_sanction_data(data: dict) -> None:
     with open(temp_path, "w", encoding="utf-8") as file:
         json.dump(data, file, indent=2)
     os.replace(temp_path, SANCTIONS_PATH)
+
+
+def ensure_afk_file() -> None:
+    if os.path.exists(AFK_PATH):
+        return
+
+    os.makedirs(os.path.dirname(AFK_PATH), exist_ok=True)
+    with open(AFK_PATH, "w", encoding="utf-8") as file:
+        json.dump({}, file, indent=2)
+
+
+def load_afk_data() -> dict[str, dict]:
+    ensure_afk_file()
+    try:
+        with open(AFK_PATH, "r", encoding="utf-8") as file:
+            data = json.load(file)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+    if not isinstance(data, dict):
+        return {}
+
+    normalized: dict[str, dict] = {}
+    for key, value in data.items():
+        user_id = str(key).strip()
+        if not user_id.isdigit() or not isinstance(value, dict):
+            continue
+        reason = str(value.get("reason", "AFK")).strip() or "AFK"
+        since = str(value.get("since", "")).strip()
+        original_nick = value.get("original_nick")
+        if original_nick is not None:
+            original_nick = str(original_nick)
+        normalized[user_id] = {
+            "reason": reason,
+            "since": since,
+            "original_nick": original_nick,
+        }
+    return normalized
+
+
+def save_afk_data(data: dict[str, dict]) -> None:
+    os.makedirs(os.path.dirname(AFK_PATH), exist_ok=True)
+    temp_path = AFK_PATH + ".tmp"
+    with open(temp_path, "w", encoding="utf-8") as file:
+        json.dump(data, file, indent=2)
+    os.replace(temp_path, AFK_PATH)
+
+
+def refresh_runtime_afk_users() -> int:
+    global RUNTIME_AFK_USERS
+    ensure_afk_file()
+    RUNTIME_AFK_USERS = load_afk_data()
+    return len(RUNTIME_AFK_USERS)
+
+
+def persist_runtime_afk_users() -> None:
+    save_afk_data(RUNTIME_AFK_USERS)
+
+
+def format_afk_nickname(current_display_name: str) -> str:
+    base_name = current_display_name.strip()
+    if base_name.lower().startswith("[afk]"):
+        base_name = base_name[5:].strip() or "User"
+    target = f"[AFK]{base_name}"
+    return target[:32]
 
 
 def ensure_levels_file() -> None:
@@ -1228,7 +1322,7 @@ def get_ticket_rules_channel_id() -> int:
     return get_runtime_id("ticket_rules_channel_id", TICKET_RULES_CHANNEL_ID)
 
 
-def get_rp_channel_id() -> int:
+def get_rp_channel_id() -> int: 
     return get_runtime_id("rp_channel_id", RP_CHANNEL_ID)
 
 
@@ -1298,6 +1392,7 @@ def get_blacklist_file_stats(file_path: str) -> tuple[int, int]:
 def refresh_all_runtime_caches() -> None:
     refresh_runtime_automod_terms()
     refresh_runtime_nsfw_terms()
+    refresh_runtime_afk_users()
     refresh_runtime_approved_invites()
     refresh_runtime_approved_bots()
     refresh_runtime_settings()
@@ -2390,6 +2485,35 @@ async def on_message(message: discord.Message) -> None:
         await bot.process_commands(message)
         return
 
+    if isinstance(message.author, discord.Member):
+        author_key = str(message.author.id)
+        author_afk_info = RUNTIME_AFK_USERS.pop(author_key, None)
+        if author_afk_info is not None:
+            persist_runtime_afk_users()
+            original_nick = author_afk_info.get("original_nick")
+            try:
+                await message.author.edit(nick=original_nick, reason="User returned from AFK")
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+            await message.channel.send(f"{message.author.mention} is no longer AFK.")
+
+    if message.mentions:
+        afk_lines: list[str] = []
+        seen_ids: set[int] = set()
+        for mentioned_user in message.mentions:
+            if mentioned_user.id == message.author.id or mentioned_user.id in seen_ids:
+                continue
+            seen_ids.add(mentioned_user.id)
+            afk_info = RUNTIME_AFK_USERS.get(str(mentioned_user.id))
+            if not afk_info:
+                continue
+
+            reason_text = str(afk_info.get("reason", "AFK")).strip() or "AFK"
+            afk_lines.append(f"{mentioned_user.display_name} is afk for {reason_text}")
+
+        if afk_lines:
+            await message.channel.send("\n".join(afk_lines[:5]))
+
     # Never treat command messages as automod violations.
     stripped_content = (message.content or "").lstrip()
     if stripped_content.startswith(PREFIX):
@@ -2708,6 +2832,42 @@ async def get_id(ctx: commands.Context, user: str = None) -> None:
     await ctx.send(embed=embed)
 
 
+@bot.command(name="afk")
+async def afk(ctx: commands.Context, *, reason: str | None = None) -> None:
+    if ctx.guild is None or not isinstance(ctx.author, discord.Member):
+        await ctx.send("This command can only be used in a server.")
+        return
+
+    clean_reason = (reason or "AFK").strip()
+    if len(clean_reason) > 200:
+        clean_reason = clean_reason[:200]
+
+    user_id = str(ctx.author.id)
+    RUNTIME_AFK_USERS[user_id] = {
+        "reason": clean_reason,
+        "since": datetime.now(timezone.utc).isoformat(),
+        "original_nick": ctx.author.nick,
+    }
+    persist_runtime_afk_users()
+
+    changed_nickname = False
+    target_nickname = format_afk_nickname(ctx.author.display_name)
+    try:
+        if ctx.author.nick != target_nickname:
+            await ctx.author.edit(nick=target_nickname, reason="User set AFK status")
+            changed_nickname = True
+    except (discord.Forbidden, discord.HTTPException):
+        changed_nickname = False
+
+    if changed_nickname:
+        await ctx.send(f"{ctx.author.mention} is now AFK: **{clean_reason}**")
+    else:
+        await ctx.send(
+            f"{ctx.author.mention} is now AFK: **{clean_reason}**\n"
+            "I could not change your nickname (missing permission or role hierarchy)."
+        )
+
+
 @bot.command(name="roleid")
 async def roleid(ctx: commands.Context, *, role_query: str | None = None) -> None:
     if ctx.guild is None:
@@ -2843,6 +3003,7 @@ async def setid(ctx: commands.Context, key: str = "", value: str = "") -> None:
     allowed_keys = {
         "reload_command_role_id": "Reload command access role",
         "ticket_rules_channel_id": "Ticket rules panel channel",
+        "rp_channel_id": "RP channel",
     }
 
     key_text = key.strip().lower()
@@ -2856,7 +3017,7 @@ async def setid(ctx: commands.Context, key: str = "", value: str = "") -> None:
     if key_text not in allowed_keys:
         await ctx.send(
             "Invalid ID key. Use: `reload_command_role_id`, "
-            "`ticket_rules_channel_id` or `list`."
+            "`ticket_rules_channel_id`, `rp_channel_id` or `list`."
         )
         return
 
@@ -3584,6 +3745,8 @@ async def finish_giveaway_after_delay(
         return
 
     entry_ids = list(GIVEAWAY_ENTRIES.pop(message_id, set()))
+    GIVEAWAY_ACTIVE.pop(message_id, None)
+    save_giveaway_state()
     winner_id = random.choice(entry_ids) if entry_ids else None
 
     end_embed = discord.Embed(
@@ -3699,6 +3862,14 @@ async def giveaway_slash(
             allowed_mentions=discord.AllowedMentions(roles=True),
         )
         GIVEAWAY_ENTRIES[giveaway_message.id] = set()
+        GIVEAWAY_ACTIVE[giveaway_message.id] = {
+            "guild_id": ctx.guild.id,
+            "channel_id": channel.id,
+            "prize": prize.strip(),
+            "end_time": (datetime.now(timezone.utc) + timedelta(seconds=duration_seconds)).isoformat(),
+            "duration_seconds": duration_seconds,
+        }
+        save_giveaway_state()
     except (discord.Forbidden, discord.HTTPException) as send_error:
         await ctx.respond(f"Failed to post giveaway: {send_error}", ephemeral=True)
         return
@@ -3723,30 +3894,62 @@ async def giveaway_slash(
 async def reactionroles_slash(ctx: discord.ApplicationContext, channel: discord.TextChannel) -> None:
     if ctx.guild is None:
         await ctx.respond("This command can only be used in a server.", ephemeral=True)
-        return
 
-    if not ctx.author.guild_permissions.manage_guild:
-        await ctx.respond("You need Manage Server permission to use this command.", ephemeral=True)
-        return
+        @bot.event
+        async def on_ready() -> None:
+            global unban_task, transcript_cleanup_task
+            await bot.change_presence(activity=discord.Game(name=STATUS_TEXT))
+            bot.add_view(RPChannelView())
+            bot.add_view(GiveawayJoinView())
+            bot.add_view(TicketTypeSelectView())
+            ensure_automod_blacklist_file()
+            ensure_automod_nsfw_blacklist_file()
+            ensure_approved_invites_file()
+            ensure_approved_bots_file()
+            refresh_all_runtime_caches()
+            delete_expired_ticket_transcripts()
+            if unban_task is None or unban_task.done():
+                unban_task = asyncio.create_task(process_pending_unbans())
+            if transcript_cleanup_task is None or transcript_cleanup_task.done():
+                transcript_cleanup_task = asyncio.create_task(run_ticket_transcript_cleanup_loop())
+            print(f"Logged in as {bot.user} (ID: {bot.user.id})")
+            print(f"Prefix: {PREFIX}")
+            registered_commands = sorted(cmd.qualified_name for cmd in bot.commands)
+            print(f"Loaded prefix commands: {len(registered_commands)}")
+            print(f"baninfo loaded: {'baninfo' in registered_commands}")
 
-    try:
-        panel_message = await post_reaction_roles_panel(channel)
-    except (discord.Forbidden, discord.HTTPException) as panel_error:
-        await ctx.respond(f"Failed to post reaction roles panel: {panel_error}", ephemeral=True)
-        return
+            # Restore giveaways from persistent storage
+            state = load_giveaway_state()
+            GIVEAWAY_ENTRIES.clear()
+            GIVEAWAY_ENTRIES.update(state.get("entries", {}))
+            GIVEAWAY_ACTIVE.clear()
+            GIVEAWAY_ACTIVE.update(state.get("active", {}))
+            now = datetime.now(timezone.utc)
+            for msg_id, info in list(GIVEAWAY_ACTIVE.items()):
+                try:
+                    end_time = datetime.fromisoformat(info["end_time"])
+                except Exception:
+                    end_time = now
+                remaining = (end_time - now).total_seconds()
+                if remaining > 0:
+                    asyncio.create_task(finish_giveaway_after_delay(
+                        guild_id=info["guild_id"],
+                        channel_id=info["channel_id"],
+                        message_id=int(msg_id),
+                        prize=info["prize"],
+                        duration_seconds=remaining,
+                    ))
+                else:
+                    # If overdue, finish immediately
+                    asyncio.create_task(finish_giveaway_after_delay(
+                        guild_id=info["guild_id"],
+                        channel_id=info["channel_id"],
+                        message_id=int(msg_id),
+                        prize=info["prize"],
+                        duration_seconds=1,
+                    ))
 
-    await ctx.respond(
-        f"Reaction roles panel posted in {channel.mention}.\nMessage ID: `{panel_message.id}`",
-        ephemeral=True,
-    )
-
-
-@bot.command(name="rp")
-@main_server_role_required(RP_COMMAND_ROLE_ID)
-async def rp(ctx: commands.Context, action: str | None = None, *, option: str | None = None) -> None:
-    if ctx.guild is None:
-        await ctx.send("This command can only be used in a server.")
-        return
+            await post_ticket_panel()
 
     global RP_CURRENT_NAME, RP_CURRENT_SINCE
     action_lower = (action or "").lower().strip()
