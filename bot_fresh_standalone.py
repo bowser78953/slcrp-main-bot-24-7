@@ -1415,46 +1415,25 @@ def collapse_repeated_characters(text: str) -> str:
 
 def find_blacklisted_term(message_content: str, terms: list[str]) -> str | None:
     content = message_content.lower()
-    detection_tokens = tokenize_text_for_detection(message_content)
-    collapsed_tokens = [collapse_repeated_characters(token) for token in detection_tokens]
 
     for term in terms:
         raw_term = term.strip().lower()
-        normalized_term = normalize_text_for_detection(raw_term)
-        collapsed_term = collapse_repeated_characters(normalized_term)
 
         if not raw_term:
             continue
 
-        # Raw substring matching is required for emoji and other symbolic terms.
-        # Plain alphanumeric terms still use stricter checks below to avoid false positives.
-        if not re.fullmatch(r"[a-z0-9 ]+", raw_term) and raw_term in content:
-            return term
-
-        if " " in raw_term:
-            phrase_pattern = rf"(?<![a-z0-9]){re.escape(raw_term)}(?![a-z0-9])"
-            if re.search(phrase_pattern, content):
-                return term
-            continue
-
-        # Whole-word check for plain alphanumeric terms.
-        if re.fullmatch(r"[a-z0-9]+", raw_term):
+        # Strict blacklist behavior:
+        # - If a term is in the file, match that term only.
+        # - If a term is not in the file, do not infer variants.
+        if re.fullmatch(r"[a-z0-9 ]+", raw_term):
             pattern = rf"(?<![a-z0-9]){re.escape(raw_term)}(?![a-z0-9])"
             if re.search(pattern, content):
                 return term
+            continue
 
-        if normalized_term and normalized_term in detection_tokens:
+        # Symbolic terms are matched exactly as typed in the file.
+        if raw_term in content:
             return term
-
-        # Catch stretched variants like fuuuuuck / shiiiit without matching inside larger words.
-        if collapsed_term and collapsed_term in collapsed_tokens:
-            return term
-
-        # Detect separators between letters, e.g. f.u.c.k / f u c k.
-        if normalized_term and len(normalized_term) >= 3:
-            split_pattern = rf"(?<![a-z0-9]){''.join(re.escape(char) + r'[\W_]*' for char in normalized_term)}(?![a-z0-9])"
-            if re.search(split_pattern, content):
-                return term
 
     return None
 
