@@ -3946,6 +3946,41 @@ async def reactionroles_slash(ctx: discord.ApplicationContext, channel: discord.
     )
 
 
+@bot.slash_command(name="review", description="Post a review message to the channel")
+async def review_slash(
+    ctx: discord.ApplicationContext,
+    review: str,
+) -> None:
+    if ctx.guild is None:
+        await ctx.respond("This command can only be used in a server.", ephemeral=True)
+        return
+
+    review_text = review.strip()
+    if not review_text:
+        await ctx.respond("Please provide a review message.", ephemeral=True)
+        return
+
+    await ctx.defer(ephemeral=True)
+
+    review_embed = discord.Embed(
+        title="New Review",
+        description=review_text,
+        color=discord.Color.gold(),
+        timestamp=datetime.now(timezone.utc),
+    )
+    review_embed.add_field(name="Posted By", value=ctx.author.mention, inline=False)
+    if ctx.author.display_avatar:
+        review_embed.set_thumbnail(url=ctx.author.display_avatar.url)
+
+    try:
+        await ctx.channel.send(embed=review_embed)
+    except (discord.Forbidden, discord.HTTPException) as send_error:
+        await ctx.followup.send(f"Failed to post review: {send_error}", ephemeral=True)
+        return
+
+    await ctx.followup.send("Review posted successfully.", ephemeral=True)
+
+
 @bot.command(name="rp")
 @main_server_role_required(RP_COMMAND_ROLE_ID)
 async def rp(ctx: commands.Context, action: str = "change", *, option: str | None = None) -> None:
