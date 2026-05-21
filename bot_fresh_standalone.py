@@ -90,7 +90,7 @@ MAIN_SERVER_ANY_ROLE_NAMES = {
     "discord staff overseer",
     "slcrp | discord staff board",
 }
-RP_CHANNEL_ID = 1504639818674471072
+RP_CHANNEL_ID = 1505680479238619166
 RP_CHANNEL_OPTIONS = {
     "1": "⟨🏙️ ⟩ 𝐑𝐢𝐯𝐞𝐫 𝐂𝐢𝐭𝐲 𝐑𝐏",
     "2": "⟨🛣️ ⟩ 𝐇𝐢𝐠𝐡𝐰𝐚𝐲 𝐑𝐏",
@@ -3586,9 +3586,11 @@ def resolve_rp_option(option_input: str) -> str | None:
 
 
 def resolve_rp_channel(guild: discord.Guild) -> discord.TextChannel | None:
-    configured_channel = guild.get_channel(get_rp_channel_id())
-    if isinstance(configured_channel, discord.TextChannel):
-        return configured_channel
+    candidate_ids = [get_rp_channel_id(), RP_CHANNEL_ID]
+    for channel_id in candidate_ids:
+        configured_channel = guild.get_channel(channel_id)
+        if isinstance(configured_channel, discord.TextChannel):
+            return configured_channel
 
     valid_names = {name.lower() for name in RP_CHANNEL_OPTIONS.values()}
     for channel in guild.text_channels:
@@ -4036,11 +4038,7 @@ async def rp(ctx: commands.Context, action: str = "change", *, option: str | Non
             await ctx.send(result)
             return
 
-        await ctx.send(
-            "Select an RP mode from the buttons below, or run `!rp change <number>`:\n"
-            f"{format_rp_options_text()}",
-            view=RPChannelView(),
-        )
+        await ctx.send(view=RPChannelView())
         return
 
     await ctx.send(f"Usage: `{PREFIX}rp change`, `{PREFIX}rp info`, or `{PREFIX}rp history`.")
