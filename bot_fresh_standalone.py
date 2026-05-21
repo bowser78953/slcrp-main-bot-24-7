@@ -2271,6 +2271,16 @@ async def post_ticket_panel() -> None:
         print(f"Failed to post ticket rules message: {panel_error}")
 
 
+async def sync_application_commands() -> int:
+    try:
+        synced = await bot.sync_commands()
+    except Exception as sync_error:
+        print(f"Slash command sync failed: {sync_error}")
+        return 0
+
+    return len(synced) if synced is not None else 0
+
+
 @bot.event
 async def on_ready() -> None:
     global unban_task, transcript_cleanup_task
@@ -2284,6 +2294,7 @@ async def on_ready() -> None:
     ensure_approved_bots_file()
     refresh_all_runtime_caches()
     recovered_reaction_role_ids = await reconcile_reaction_role_message_ids_from_history()
+    synced_command_count = await sync_application_commands()
     delete_expired_ticket_transcripts()
     if unban_task is None or unban_task.done():
         unban_task = asyncio.create_task(process_pending_unbans())
@@ -2298,6 +2309,7 @@ async def on_ready() -> None:
         "Reaction role panels tracked: "
         f"{len(RUNTIME_REACTION_ROLE_MESSAGE_IDS)} (recovered {recovered_reaction_role_ids} from history)"
     )
+    print(f"Synced slash commands: {synced_command_count}")
 
     await post_ticket_panel()
 
@@ -5590,16 +5602,9 @@ async def syncslash(ctx: commands.Context) -> None:
         await ctx.send(f"You need the **{role_name_text(reload_role_id, ctx.guild)}** role to use this command.")
         return
 
-    app_id = bot.user.id if bot.user else 0
-    invite_url = (
-        "https://discord.com/oauth2/authorize"
-        f"?client_id={app_id}&scope=bot%20applications.commands&permissions=8"
-    )
-    await ctx.send(
-        "This bot uses py-cord slash commands and registers them on startup.\n"
-        "If slash commands still do not appear, re-invite with this URL:\n"
-        f"{invite_url}"
-    )
+    await ctx.send("Syncing slash commands...")
+    synced_count = await sync_application_commands()
+    await ctx.send(f"Slash commands synced. Registered **{synced_count}** command(s).")
 
 
 @bot.command(name="alldeptswl")
