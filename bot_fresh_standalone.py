@@ -3585,12 +3585,19 @@ def resolve_rp_option(option_input: str) -> str | None:
     return None
 
 
-def resolve_rp_channel(guild: discord.Guild) -> discord.TextChannel | None:
+async def resolve_rp_channel(guild: discord.Guild) -> discord.TextChannel | None:
     candidate_ids = [get_rp_channel_id(), RP_CHANNEL_ID]
     for channel_id in candidate_ids:
         configured_channel = guild.get_channel(channel_id)
         if isinstance(configured_channel, discord.TextChannel):
             return configured_channel
+
+        try:
+            fetched_channel = guild.fetch_channel(channel_id)
+            if isinstance(fetched_channel, discord.TextChannel):
+                return fetched_channel
+        except (discord.Forbidden, discord.HTTPException, discord.NotFound):
+            pass
 
     valid_names = {name.lower() for name in RP_CHANNEL_OPTIONS.values()}
     for channel in guild.text_channels:
@@ -3609,7 +3616,7 @@ async def change_rp_channel(guild: discord.Guild, actor_name: str, actor_id: int
             remaining = int((cooldown_expiry - now).total_seconds())
             return f"❌ You can change RP again in {remaining} seconds."
 
-    channel = resolve_rp_channel(guild)
+    channel = await resolve_rp_channel(guild)
     if not isinstance(channel, discord.TextChannel):
         rp_channel_id = get_rp_channel_id()
         return (
@@ -3996,7 +4003,7 @@ async def rp(ctx: commands.Context, action: str = "change", *, option: str | Non
 
     if action_lower == "info":
         if RP_CURRENT_NAME is None:
-            channel = resolve_rp_channel(ctx.guild)
+            channel = await resolve_rp_channel(ctx.guild)
             if isinstance(channel, discord.TextChannel):
                 RP_CURRENT_NAME = channel.name
 
