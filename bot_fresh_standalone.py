@@ -1680,6 +1680,23 @@ def get_all_server_ban_guilds(include_ban_appeal: bool = False) -> list[discord.
     return [guild for guild in bot.guilds if guild.id != BAN_APPEAL_GUILD_ID]
 
 
+async def ban_user_compat(guild: discord.Guild, user: discord.abc.User, reason: str) -> None:
+    """Ban a user with kwargs compatible across py-cord/discord API variants."""
+    try:
+        await guild.ban(user, reason=reason, delete_message_seconds=0)
+        return
+    except TypeError:
+        pass
+
+    try:
+        await guild.ban(user, reason=reason, delete_message_days=0)
+        return
+    except TypeError:
+        pass
+
+    await guild.ban(user, reason=reason)
+
+
 TICKET_TYPES = [
     "General Support",
     "Production",
@@ -3375,7 +3392,14 @@ async def ban(
         await ctx.send("User was not found.")
         return
 
-    await ctx.guild.ban(target_user, reason=reason, delete_message_days=0)
+    try:
+        await ban_user_compat(ctx.guild, target_user, reason)
+    except discord.Forbidden:
+        await ctx.send("I do not have permission to ban that user.")
+        return
+    except discord.HTTPException as ban_error:
+        await ctx.send(f"Failed to ban user: {ban_error}")
+        return
     appeal_invite_url = await get_ban_appeal_invite_url()
     main_dm_sent = await send_main_bot_ban_appeal_dm(
         target_user,
@@ -3489,13 +3513,16 @@ async def swban(ctx: commands.Context, target: str, *, reason: str) -> None:
     target_guilds = get_all_server_ban_guilds()
     for guild in target_guilds:
         try:
-            await guild.ban(user, reason=f"Server-wide ban by {ctx.author}: {reason}", delete_message_days=0)
+            await ban_user_compat(guild, user, f"Server-wide ban by {ctx.author}: {reason}")
             banned_count += 1
 
             # After banning, remove recent messages from this user in the guild.
             deleted_messages_count += await delete_recent_user_messages(guild, user.id, days=7)
         except (discord.Forbidden, discord.HTTPException):
             failed_count += 1
+        except Exception as unexpected_error:
+            failed_count += 1
+            print(f"Unexpected swban error in guild {guild.id}: {unexpected_error!r}")
 
     appeal_invite_url = await get_ban_appeal_invite_url()
     main_dm_sent = False
