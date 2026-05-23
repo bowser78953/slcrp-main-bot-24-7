@@ -3342,21 +3342,50 @@ async def kick(
 @commands.has_permissions(ban_members=True)
 async def ban(
     ctx: commands.Context,
-    member: discord.Member,
+    target: str,
     *,
     reason: str = "No reason provided",
 ) -> None:
-    await member.ban(reason=reason)
+    if ctx.guild is None:
+        await ctx.send("This command can only be used in a server.")
+        return
+
+    user_id = parse_user_id(target)
+    target_user: discord.abc.User | None = None
+
+    if user_id is not None:
+        target_user = ctx.guild.get_member(user_id)
+        if target_user is None:
+            try:
+                target_user = await bot.fetch_user(user_id)
+            except discord.NotFound:
+                await ctx.send("User was not found.")
+                return
+            except discord.HTTPException:
+                await ctx.send("I could not fetch that user right now.")
+                return
+    else:
+        try:
+            target_user = await commands.MemberConverter().convert(ctx, target)
+        except commands.BadArgument:
+            await ctx.send("Use a user mention or numeric user ID.")
+            return
+
+    if target_user is None:
+        await ctx.send("User was not found.")
+        return
+
+    await ctx.guild.ban(target_user, reason=reason, delete_message_days=0)
     appeal_invite_url = await get_ban_appeal_invite_url()
     main_dm_sent = await send_main_bot_ban_appeal_dm(
-        member,
+        target_user,
         "banned",
         reason,
         str(ctx.author),
         appeal_invite_url,
     )
     modmail_queued = queue_modmail_ban_appeal_dm(
-        member.id,
+        target_user.id,
         "banned",
         reason,
         str(ctx.author),
@@ -3366,7 +3395,7 @@ async def ban(
     dm_status = []
     dm_status.append("main bot DM sent" if main_dm_sent else "main bot DM failed")
     dm_status.append("modmail DM queued" if modmail_queued else "modmail DM queue failed")
-    await ctx.send(f"Banned {member.mention}. Reason: {reason} ({', '.join(dm_status)})")
+    await ctx.send(f"Banned <@{target_user.id}>. Reason: {reason} ({', '.join(dm_status)})")
 
 
 async def run_baninfo_lookup(ctx: commands.Context, target: str) -> None:
@@ -3423,8 +3452,23 @@ async def baninfo(ctx: commands.Context, target: str) -> None:
 
 
 @bot.command(name="swban")
-@main_server_role_required(ALL_SERVER_BAN_COMMAND_ROLE_ID)
 async def swban(ctx: commands.Context, target: str, *, reason: str) -> None:
+    if ctx.guild is None or not isinstance(ctx.author, discord.Member):
+        await ctx.send("This command can only be used in a server.")
+        return
+
+    has_perm_override = ctx.author.guild_permissions.administrator or ctx.author.guild_permissions.ban_members
+    has_required_role = False
+    main_member = await get_main_server_member(ctx.author.id)
+    if main_member is not None:
+        has_required_role = any(role.id == ALL_SERVER_BAN_COMMAND_ROLE_ID for role in main_member.roles)
+
+    if not (has_perm_override or has_required_role):
+        await ctx.send(
+            f"You need the **{role_name_text(ALL_SERVER_BAN_COMMAND_ROLE_ID, ctx.guild)}** role or Ban Members permission to use this command."
+        )
+        return
+
     user_id = parse_user_id(target)
     if user_id is None:
         await ctx.send("Use a user mention or numeric user ID.")
