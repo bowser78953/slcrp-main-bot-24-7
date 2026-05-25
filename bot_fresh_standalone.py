@@ -134,6 +134,7 @@ AUTOMOD_NSFW_BLACKLIST_PATH = os.path.join(DATA_DIR, "automod_nsfw_blacklist_fre
 TEMP_VC_DATA_PATH = os.path.join(DATA_DIR, "temp_vcs_fresh.json")
 APPROVED_INVITES_PATH = os.path.join(DATA_DIR, "approved_invites.json")
 APPROVED_BOTS_PATH = os.path.join(DATA_DIR, "approved_bots.json")
+SWBAN_WHITELIST_PATH = os.path.join(DATA_DIR, "swban_whitelist.json")
 TICKET_TRANSCRIPTS_DIR = os.path.join(DATA_DIR, "ticket_transcripts")
 LEVELS_PATH = os.path.join(DATA_DIR, "levels.json")
 RUNTIME_SETTINGS_PATH = os.path.join(DATA_DIR, "runtime_settings.json")
@@ -187,6 +188,7 @@ RUNTIME_NSFW_TERMS: list[str] = []
 RUNTIME_AFK_USERS: dict[str, dict] = {}
 RUNTIME_APPROVED_INVITE_CODES: set[str] = set()
 RUNTIME_APPROVED_BOT_IDS: set[int] = set()
+RUNTIME_SWBAN_WHITELIST_USER_IDS: set[int] = set()
 RUNTIME_SETTINGS: dict = {}
 RUNTIME_REACTION_ROLE_MESSAGE_IDS: set[int] = set()
 
@@ -1237,6 +1239,57 @@ def load_approved_bot_ids() -> set[int]:
     return approved_ids
 
 
+def ensure_swban_whitelist_file() -> None:
+    if os.path.exists(SWBAN_WHITELIST_PATH):
+        return
+
+    os.makedirs(os.path.dirname(SWBAN_WHITELIST_PATH), exist_ok=True)
+    with open(SWBAN_WHITELIST_PATH, "w", encoding="utf-8") as file:
+        json.dump({"user_ids": []}, file, indent=2)
+
+
+def load_swban_whitelist_user_ids() -> set[int]:
+    ensure_swban_whitelist_file()
+
+    try:
+        with open(SWBAN_WHITELIST_PATH, "r", encoding="utf-8") as file:
+            raw_data = json.load(file)
+    except (OSError, json.JSONDecodeError):
+        return set()
+
+    if isinstance(raw_data, dict):
+        raw_ids = raw_data.get("user_ids", [])
+    elif isinstance(raw_data, list):
+        raw_ids = raw_data
+    else:
+        raw_ids = []
+
+    parsed_ids: set[int] = set()
+    for entry in raw_ids:
+        try:
+            parsed_ids.add(int(entry))
+        except (TypeError, ValueError):
+            continue
+    return parsed_ids
+
+
+def save_swban_whitelist_user_ids(user_ids: set[int]) -> None:
+    os.makedirs(os.path.dirname(SWBAN_WHITELIST_PATH), exist_ok=True)
+    with open(SWBAN_WHITELIST_PATH, "w", encoding="utf-8") as file:
+        json.dump({"user_ids": sorted(user_ids)}, file, indent=2)
+
+
+def refresh_runtime_swban_whitelist() -> int:
+    global RUNTIME_SWBAN_WHITELIST_USER_IDS
+    ensure_swban_whitelist_file()
+    RUNTIME_SWBAN_WHITELIST_USER_IDS = load_swban_whitelist_user_ids()
+    return len(RUNTIME_SWBAN_WHITELIST_USER_IDS)
+
+
+def is_ban_whitelisted(user_id: int) -> bool:
+    return int(user_id) in RUNTIME_SWBAN_WHITELIST_USER_IDS
+
+
 def build_default_runtime_settings() -> dict:
     return {
         "support_embed": {
@@ -1439,6 +1492,7 @@ def refresh_all_runtime_caches() -> None:
     refresh_runtime_afk_users()
     refresh_runtime_approved_invites()
     refresh_runtime_approved_bots()
+    refresh_runtime_swban_whitelist()
     refresh_runtime_settings()
     refresh_runtime_reaction_role_message_ids()
 
@@ -2761,6 +2815,8 @@ async def on_message(message: discord.Message) -> None:
     # This prevents duplicate logs and avoids role pings/buttons for NSFW cases.
     if nsfw_matched:
         ban_user = message.author
+        if is_ban_whitelisted(ban_user.id):
+            return
         log_channel = message.guild.get_channel(AUTOMOD_NSFW_LOG_CHANNEL_ID) or bot.get_channel(AUTOMOD_NSFW_LOG_CHANNEL_ID)
         if isinstance(log_channel, discord.TextChannel):
             embed = discord.Embed(
@@ -2787,11 +2843,7 @@ async def on_message(message: discord.Message) -> None:
         nsfw_ban_reason = "Your message has been flagged for containing offensive or NSFW content."
         for guild in bot.guilds:
             try:
-                await guild.ban(
-                    ban_user,
-                    reason=nsfw_ban_reason,
-                    delete_message_days=7,
-                )
+                await ban_user_compat(guild, ban_user, nsfw_ban_reason)
             except (discord.Forbidden, discord.HTTPException):
                 continue
 
@@ -3392,6 +3444,10 @@ async def ban(
         await ctx.send("User was not found.")
         return
 
+    if is_ban_whitelisted(target_user.id):
+        await ctx.send(f"<@{target_user.id}> is whitelist-protected and cannot be banned.")
+        return
+
     try:
         await ban_user_compat(ctx.guild, target_user, reason)
     except discord.Forbidden:
@@ -3507,6 +3563,10 @@ async def swban(ctx: commands.Context, target: str, *, reason: str) -> None:
         await ctx.send("I could not fetch that user right now.")
         return
 
+    if is_ban_whitelisted(user.id):
+        await ctx.send(f"{user.mention} is whitelist-protected and cannot be server-wide banned.")
+        return
+
     banned_count = 0
     failed_count = 0
     deleted_messages_count = 0
@@ -3561,6 +3621,63 @@ async def swban(ctx: commands.Context, target: str, *, reason: str) -> None:
         )
     )
     await ctx.send(embed=status_embed)
+
+
+@bot.command(name="swbanwl")
+@main_server_role_required(ALL_SERVER_BAN_COMMAND_ROLE_ID)
+async def swbanwl(ctx: commands.Context, action: str = "list", target: str | None = None) -> None:
+    normalized_action = (action or "").strip().lower()
+
+    if normalized_action in {"list", "ls", "show"}:
+        if not RUNTIME_SWBAN_WHITELIST_USER_IDS:
+            await ctx.send("SWBAN whitelist is empty.")
+            return
+        ids_text = "\n".join(f"- <@{uid}> (`{uid}`)" for uid in sorted(RUNTIME_SWBAN_WHITELIST_USER_IDS))
+        embed = discord.Embed(
+            title="SWBAN Whitelist",
+            description=ids_text[:4000],
+            color=discord.Color.blue(),
+            timestamp=datetime.now(timezone.utc),
+        )
+        await ctx.send(embed=embed)
+        return
+
+    if normalized_action not in {"add", "remove", "check"}:
+        await ctx.send(f"Usage: `{PREFIX}swbanwl <add|remove|check|list> <user_id_or_mention>`")
+        return
+
+    if not target:
+        await ctx.send(f"Usage: `{PREFIX}swbanwl <add|remove|check> <user_id_or_mention>`")
+        return
+
+    user_id = parse_user_id(target)
+    if user_id is None:
+        await ctx.send("Use a user mention or numeric user ID.")
+        return
+
+    if normalized_action == "check":
+        if is_ban_whitelisted(user_id):
+            await ctx.send(f"<@{user_id}> (`{user_id}`) is whitelist-protected.")
+        else:
+            await ctx.send(f"<@{user_id}> (`{user_id}`) is not on the whitelist.")
+        return
+
+    if normalized_action == "add":
+        if user_id in RUNTIME_SWBAN_WHITELIST_USER_IDS:
+            await ctx.send(f"<@{user_id}> is already on the whitelist.")
+            return
+        RUNTIME_SWBAN_WHITELIST_USER_IDS.add(user_id)
+        save_swban_whitelist_user_ids(RUNTIME_SWBAN_WHITELIST_USER_IDS)
+        await ctx.send(f"Added <@{user_id}> to SWBAN whitelist. They cannot be banned or server-wide banned.")
+        return
+
+    # remove
+    if user_id not in RUNTIME_SWBAN_WHITELIST_USER_IDS:
+        await ctx.send(f"<@{user_id}> is not on the whitelist.")
+        return
+    RUNTIME_SWBAN_WHITELIST_USER_IDS.remove(user_id)
+    save_swban_whitelist_user_ids(RUNTIME_SWBAN_WHITELIST_USER_IDS)
+    await ctx.send(f"Removed <@{user_id}> from SWBAN whitelist.")
 
 
 @bot.command(name="swunban")
@@ -4217,27 +4334,36 @@ async def warn(ctx: commands.Context, target: str, *, reason: str) -> None:
     action_error = None
 
     if active_warning_count >= 5:
-        try:
-            await ctx.guild.ban(target_user, reason=f"5/5 warnings | {reason}", delete_message_days=0)
-            escalation_action = "Permanent ban applied (5/5 warnings)."
-        except (discord.Forbidden, discord.HTTPException):
-            action_error = "I could not apply the permanent ban due to permissions or API error."
+        if is_ban_whitelisted(user_id):
+            escalation_action = "Whitelist protected (5/5 ban skipped)."
+        else:
+            try:
+                await ban_user_compat(ctx.guild, target_user, f"5/5 warnings | {reason}")
+                escalation_action = "Permanent ban applied (5/5 warnings)."
+            except (discord.Forbidden, discord.HTTPException):
+                action_error = "I could not apply the permanent ban due to permissions or API error."
     elif active_warning_count == 4:
         unban_at = now + timedelta(days=7)
-        try:
-            await ctx.guild.ban(target_user, reason=f"4/5 warnings | 7-day ban | {reason}", delete_message_days=0)
-            add_temp_ban_record(ctx.guild.id, user_id, case_id, unban_at, reason)
-            escalation_action = "7-day ban applied (4/5 warnings)."
-        except (discord.Forbidden, discord.HTTPException):
-            action_error = "I could not apply the 7-day ban due to permissions or API error."
+        if is_ban_whitelisted(user_id):
+            escalation_action = "Whitelist protected (4/5 ban skipped)."
+        else:
+            try:
+                await ban_user_compat(ctx.guild, target_user, f"4/5 warnings | 7-day ban | {reason}")
+                add_temp_ban_record(ctx.guild.id, user_id, case_id, unban_at, reason)
+                escalation_action = "7-day ban applied (4/5 warnings)."
+            except (discord.Forbidden, discord.HTTPException):
+                action_error = "I could not apply the 7-day ban due to permissions or API error."
     elif active_warning_count == 3:
         unban_at = now + timedelta(days=1)
-        try:
-            await ctx.guild.ban(target_user, reason=f"3/5 warnings | 1-day ban | {reason}", delete_message_days=0)
-            add_temp_ban_record(ctx.guild.id, user_id, case_id, unban_at, reason)
-            escalation_action = "1-day ban applied (3/5 warnings)."
-        except (discord.Forbidden, discord.HTTPException):
-            action_error = "I could not apply the 1-day ban due to permissions or API error."
+        if is_ban_whitelisted(user_id):
+            escalation_action = "Whitelist protected (3/5 ban skipped)."
+        else:
+            try:
+                await ban_user_compat(ctx.guild, target_user, f"3/5 warnings | 1-day ban | {reason}")
+                add_temp_ban_record(ctx.guild.id, user_id, case_id, unban_at, reason)
+                escalation_action = "1-day ban applied (3/5 warnings)."
+            except (discord.Forbidden, discord.HTTPException):
+                action_error = "I could not apply the 1-day ban due to permissions or API error."
     elif active_warning_count == 2:
         if member is None:
             action_error = "User is not currently in the server, so I could not kick them."
@@ -5401,7 +5527,7 @@ async def reload_category(ctx: commands.Context, category: str = "") -> None:
         await ctx.send(f"You need the **{role_name_text(reload_role_id, ctx.guild)}** role to use this command.")
         return
 
-    ALL_CATEGORIES = ["all", "settings", "xpsystem", "spam", "automod", "nsfwautomod", "invitesystem", "botsystem", "ticketsystam"]
+    ALL_CATEGORIES = ["all", "settings", "xpsystem", "spam", "automod", "nsfwautomod", "invitesystem", "botsystem", "swbanwl", "ticketsystam"]
 
     async def perform_full_runtime_reload() -> list[str]:
         results: list[str] = []
@@ -5425,6 +5551,9 @@ async def reload_category(ctx: commands.Context, category: str = "") -> None:
 
         bot_count = refresh_runtime_approved_bots()
         results.append(f"botsystem: **{bot_count}** bots")
+
+        wl_count = refresh_runtime_swban_whitelist()
+        results.append(f"swbanwl: **{wl_count}** users")
 
         settings_count = refresh_runtime_settings()
         results.append(f"settings: **{settings_count}** ticket rules")
@@ -5468,6 +5597,9 @@ async def reload_category(ctx: commands.Context, category: str = "") -> None:
         "botsystem": "botsystem",
         "bot": "botsystem",
         "bots": "botsystem",
+        "swbanwl": "swbanwl",
+        "banwl": "swbanwl",
+        "banwhitelist": "swbanwl",
         "ticketsystam": "ticketsystam",
         "ticketsystem": "ticketsystam",
         "tickets": "ticketsystam",
@@ -5544,6 +5676,10 @@ async def reload_category(ctx: commands.Context, category: str = "") -> None:
             bot_count = refresh_runtime_approved_bots()
             ids_text = ", ".join(f"`{bid}`" for bid in sorted(RUNTIME_APPROVED_BOT_IDS)) if RUNTIME_APPROVED_BOT_IDS else "none"
             details = f"Loaded **{bot_count}** approved bot IDs:\n{ids_text}"
+        elif normalized == "swbanwl":
+            wl_count = refresh_runtime_swban_whitelist()
+            ids_text = ", ".join(f"`{uid}`" for uid in sorted(RUNTIME_SWBAN_WHITELIST_USER_IDS)) if RUNTIME_SWBAN_WHITELIST_USER_IDS else "none"
+            details = f"Loaded **{wl_count}** SWBAN whitelist user IDs:\n{ids_text}"
         elif normalized == "ticketsystam":
             await post_ticket_panel()
             details = "Ticket panel re-posted."
@@ -5949,24 +6085,17 @@ async def mswban(ctx: commands.Context, *targets: str) -> None:
             print(f"mswban: could not fetch user {user_id}")
             continue
 
+        if is_ban_whitelisted(user.id):
+            print(f"mswban: skipped whitelisted user {user_id}")
+            continue
+
         try:
             banned_count = 0
             failed_count = 0
             deleted_count = 0
             for guild in target_guilds:
                 try:
-                    try:
-                        await guild.ban(
-                            user,
-                            reason=f"Mass server-wide ban by {ctx.author}",
-                            delete_message_seconds=0,
-                        )
-                    except TypeError:
-                        await guild.ban(
-                            user,
-                            reason=f"Mass server-wide ban by {ctx.author}",
-                            delete_message_days=0,
-                        )
+                    await ban_user_compat(guild, user, f"Mass server-wide ban by {ctx.author}")
                     banned_count += 1
                     try:
                         deleted_count += await delete_recent_user_messages(guild, user.id, days=7)
