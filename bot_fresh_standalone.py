@@ -3553,6 +3553,39 @@ async def vcban(
     )
 
 
+@bot.command(name="unvcban")
+async def unvcban(ctx: commands.Context, target: str) -> None:
+    if ctx.guild is None:
+        await ctx.send("This command can only be used in a server.")
+        return
+
+    has_vcban_role = False
+    if isinstance(ctx.author, discord.Member):
+        has_vcban_role = any(role.id == ALL_SERVER_BAN_COMMAND_ROLE_ID for role in ctx.author.roles)
+
+    if not has_vcban_role:
+        main_member = await get_main_server_member(ctx.author.id)
+        if main_member is not None:
+            has_vcban_role = any(role.id == ALL_SERVER_BAN_COMMAND_ROLE_ID for role in main_member.roles)
+
+    if not has_vcban_role:
+        await ctx.send(f"You need the **{role_name_text(ALL_SERVER_BAN_COMMAND_ROLE_ID, ctx.guild)}** role to use this command.")
+        return
+
+    user_id = parse_user_id(target)
+    if user_id is None:
+        await ctx.send("Use a user mention or numeric user ID.")
+        return
+
+    removed_entry = RUNTIME_VC_BANS.pop(user_id, None)
+    if removed_entry is None:
+        await ctx.send(f"<@{user_id}> does not have an active VC ban.")
+        return
+
+    save_vc_bans(RUNTIME_VC_BANS)
+    await ctx.send(f"Removed VC ban from <@{user_id}>. They can join voice channels again.")
+
+
 @bot.command(name="ban")
 @commands.has_permissions(ban_members=True)
 async def ban(
@@ -3769,7 +3802,7 @@ async def swban(ctx: commands.Context, target: str, *, reason: str) -> None:
     await ctx.send(embed=status_embed)
 
 
-@bot.command(name="swbanwl")
+@bot.command(name="swbanwl", aliases=["mswbanwl"])
 @main_server_role_required(ALL_SERVER_BAN_COMMAND_ROLE_ID)
 async def swbanwl(ctx: commands.Context, action: str = "list", target: str | None = None) -> None:
     normalized_action = (action or "").strip().lower()
@@ -4318,14 +4351,17 @@ async def review_slash(
     await ctx.defer(ephemeral=True)
 
     review_embed = discord.Embed(
-        title="New Review",
+        title="Staff Review",
         description=review_text,
-        color=discord.Color.gold(),
+        color=discord.Color.blue(),
         timestamp=datetime.now(timezone.utc),
     )
+    review_embed.set_author(
+        name=ctx.author.display_name,
+        icon_url=ctx.author.display_avatar.url if ctx.author.display_avatar else None,
+    )
     review_embed.add_field(name="Posted By", value=ctx.author.mention, inline=False)
-    if ctx.author.display_avatar:
-        review_embed.set_thumbnail(url=ctx.author.display_avatar.url)
+    review_embed.set_footer(text="SLCRP | Staff Reviews")
 
     try:
         await ctx.channel.send(embed=review_embed)
@@ -5860,7 +5896,7 @@ async def reload_category(ctx: commands.Context, category: str = "") -> None:
     await ctx.send(embed=embed)
 
 
-@bot.command(name="addbotid")
+@bot.command(name="addbotid", aliases=["maddbotid"])
 async def addbotid(ctx: commands.Context, bot_id: str = "") -> None:
     if ctx.guild is None or not isinstance(ctx.author, discord.Member):
         await ctx.send("This command can only be used in a server.")
