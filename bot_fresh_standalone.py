@@ -3497,7 +3497,6 @@ async def kick(
 
 
 @bot.command(name="vcban")
-@commands.has_permissions(move_members=True)
 async def vcban(
     ctx: commands.Context,
     target: str,
@@ -3507,6 +3506,19 @@ async def vcban(
 ) -> None:
     if ctx.guild is None:
         await ctx.send("This command can only be used in a server.")
+        return
+
+    has_vcban_role = False
+    if isinstance(ctx.author, discord.Member):
+        has_vcban_role = any(role.id == ALL_SERVER_BAN_COMMAND_ROLE_ID for role in ctx.author.roles)
+
+    if not has_vcban_role:
+        main_member = await get_main_server_member(ctx.author.id)
+        if main_member is not None:
+            has_vcban_role = any(role.id == ALL_SERVER_BAN_COMMAND_ROLE_ID for role in main_member.roles)
+
+    if not has_vcban_role:
+        await ctx.send(f"You need the **{role_name_text(ALL_SERVER_BAN_COMMAND_ROLE_ID, ctx.guild)}** role to use this command.")
         return
 
     user_id = parse_user_id(target)
