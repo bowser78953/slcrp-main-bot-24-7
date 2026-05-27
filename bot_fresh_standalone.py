@@ -135,6 +135,7 @@ TEMP_VC_DATA_PATH = os.path.join(DATA_DIR, "temp_vcs_fresh.json")
 APPROVED_INVITES_PATH = os.path.join(DATA_DIR, "approved_invites.json")
 APPROVED_BOTS_PATH = os.path.join(DATA_DIR, "approved_bots.json")
 SWBAN_WHITELIST_PATH = os.path.join(DATA_DIR, "swban_whitelist.json")
+VC_BANS_PATH = os.path.join(DATA_DIR, "vc_bans.json")
 TICKET_TRANSCRIPTS_DIR = os.path.join(DATA_DIR, "ticket_transcripts")
 LEVELS_PATH = os.path.join(DATA_DIR, "levels.json")
 RUNTIME_SETTINGS_PATH = os.path.join(DATA_DIR, "runtime_settings.json")
@@ -189,6 +190,7 @@ RUNTIME_AFK_USERS: dict[str, dict] = {}
 RUNTIME_APPROVED_INVITE_CODES: set[str] = set()
 RUNTIME_APPROVED_BOT_IDS: set[int] = set()
 RUNTIME_SWBAN_WHITELIST_USER_IDS: set[int] = set()
+RUNTIME_VC_BANS: dict[int, dict] = {}
 RUNTIME_SETTINGS: dict = {}
 RUNTIME_REACTION_ROLE_MESSAGE_IDS: set[int] = set()
 
@@ -1290,6 +1292,83 @@ def is_ban_whitelisted(user_id: int) -> bool:
     return int(user_id) in RUNTIME_SWBAN_WHITELIST_USER_IDS
 
 
+def ensure_vc_bans_file() -> None:
+    if os.path.exists(VC_BANS_PATH):
+        return
+
+    os.makedirs(os.path.dirname(VC_BANS_PATH), exist_ok=True)
+    with open(VC_BANS_PATH, "w", encoding="utf-8") as file:
+        json.dump({"entries": {}}, file, indent=2)
+
+
+def load_vc_bans() -> dict[int, dict]:
+    ensure_vc_bans_file()
+
+    try:
+        with open(VC_BANS_PATH, "r", encoding="utf-8") as file:
+            raw_data = json.load(file)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+    entries_raw = raw_data.get("entries", {}) if isinstance(raw_data, dict) else {}
+    if not isinstance(entries_raw, dict):
+        return {}
+
+    parsed: dict[int, dict] = {}
+    for key, value in entries_raw.items():
+        if not isinstance(value, dict):
+            continue
+        try:
+            user_id = int(key)
+        except (TypeError, ValueError):
+            continue
+
+        expires_at = str(value.get("expires_at", "")).strip()
+        if not expires_at:
+            continue
+
+        parsed[user_id] = {
+            "expires_at": expires_at,
+            "reason": str(value.get("reason", "No reason provided")),
+            "moderator_id": int(value.get("moderator_id", 0)) if str(value.get("moderator_id", "")).isdigit() else 0,
+            "created_at": str(value.get("created_at", "")),
+        }
+
+    return parsed
+
+
+def save_vc_bans(entries: dict[int, dict]) -> None:
+    os.makedirs(os.path.dirname(VC_BANS_PATH), exist_ok=True)
+    temp_path = VC_BANS_PATH + ".tmp"
+    payload = {
+        "entries": {str(user_id): data for user_id, data in entries.items()}
+    }
+    with open(temp_path, "w", encoding="utf-8") as file:
+        json.dump(payload, file, indent=2)
+    os.replace(temp_path, VC_BANS_PATH)
+
+
+def refresh_runtime_vc_bans() -> int:
+    global RUNTIME_VC_BANS
+    RUNTIME_VC_BANS = load_vc_bans()
+    return len(RUNTIME_VC_BANS)
+
+
+def get_active_vc_ban_entry(user_id: int) -> dict | None:
+    entry = RUNTIME_VC_BANS.get(int(user_id))
+    if entry is None:
+        return None
+
+    expires_at = parse_iso_datetime(entry.get("expires_at"))
+    now = datetime.now(timezone.utc)
+    if expires_at is None or expires_at <= now:
+        RUNTIME_VC_BANS.pop(int(user_id), None)
+        save_vc_bans(RUNTIME_VC_BANS)
+        return None
+
+    return entry
+
+
 def build_default_runtime_settings() -> dict:
     return {
         "support_embed": {
@@ -1493,6 +1572,7 @@ def refresh_all_runtime_caches() -> None:
     refresh_runtime_approved_invites()
     refresh_runtime_approved_bots()
     refresh_runtime_swban_whitelist()
+    refresh_runtime_vc_bans()
     refresh_runtime_settings()
     refresh_runtime_reaction_role_message_ids()
 
@@ -2506,6 +2586,15 @@ async def on_voice_state_update(
     if member.bot:
         return
 
+    if after.channel is not None:
+        ban_entry = get_active_vc_ban_entry(member.id)
+        if ban_entry is not None:
+            try:
+                await member.move_to(None, reason="Active VC ban")
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+            return
+
     if after.channel is not None and after.channel.id == TEMP_VC_TRIGGER_CHANNEL_ID:
         await create_or_get_temp_vc(member, after.channel)
 
@@ -3405,6 +3494,51 @@ async def kick(
 ) -> None:
     await member.kick(reason=reason)
     await ctx.send(f"Kicked {member.mention}. Reason: {reason}")
+
+
+@bot.command(name="vcban")
+@commands.has_permissions(move_members=True)
+async def vcban(
+    ctx: commands.Context,
+    target: str,
+    duration_1s_1m_1h_1d: str,
+    *,
+    reason: str = "No reason provided",
+) -> None:
+    if ctx.guild is None:
+        await ctx.send("This command can only be used in a server.")
+        return
+
+    user_id = parse_user_id(target)
+    if user_id is None:
+        await ctx.send("Use a user mention or numeric user ID.")
+        return
+
+    duration_seconds = parse_duration_token(duration_1s_1m_1h_1d)
+    if duration_seconds is None:
+        await ctx.send("Invalid duration. Use values like `1s`, `5m`, `2h`, or `1d`.")
+        return
+
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=duration_seconds)
+    RUNTIME_VC_BANS[user_id] = {
+        "expires_at": expires_at.isoformat(),
+        "reason": reason,
+        "moderator_id": ctx.author.id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    save_vc_bans(RUNTIME_VC_BANS)
+
+    member = ctx.guild.get_member(user_id)
+    if member is not None and member.voice and member.voice.channel is not None:
+        try:
+            await member.move_to(None, reason=f"VC ban by {ctx.author}")
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+
+    await ctx.send(
+        f"Applied VC ban to <@{user_id}> for **{duration_1s_1m_1h_1d}** "
+        f"(expires {discord.utils.format_dt(expires_at, style='R')})."
+    )
 
 
 @bot.command(name="ban")
@@ -5527,7 +5661,7 @@ async def reload_category(ctx: commands.Context, category: str = "") -> None:
         await ctx.send(f"You need the **{role_name_text(reload_role_id, ctx.guild)}** role to use this command.")
         return
 
-    ALL_CATEGORIES = ["all", "settings", "xpsystem", "spam", "automod", "nsfwautomod", "invitesystem", "botsystem", "swbanwl", "ticketsystam"]
+    ALL_CATEGORIES = ["all", "settings", "xpsystem", "spam", "automod", "nsfwautomod", "invitesystem", "botsystem", "swbanwl", "vcban", "ticketsystam"]
 
     async def perform_full_runtime_reload() -> list[str]:
         results: list[str] = []
@@ -5554,6 +5688,9 @@ async def reload_category(ctx: commands.Context, category: str = "") -> None:
 
         wl_count = refresh_runtime_swban_whitelist()
         results.append(f"swbanwl: **{wl_count}** users")
+
+        vcban_count = refresh_runtime_vc_bans()
+        results.append(f"vcban: **{vcban_count}** active entries")
 
         settings_count = refresh_runtime_settings()
         results.append(f"settings: **{settings_count}** ticket rules")
@@ -5600,6 +5737,9 @@ async def reload_category(ctx: commands.Context, category: str = "") -> None:
         "swbanwl": "swbanwl",
         "banwl": "swbanwl",
         "banwhitelist": "swbanwl",
+        "vcban": "vcban",
+        "voiceban": "vcban",
+        "vcbans": "vcban",
         "ticketsystam": "ticketsystam",
         "ticketsystem": "ticketsystam",
         "tickets": "ticketsystam",
@@ -5680,6 +5820,9 @@ async def reload_category(ctx: commands.Context, category: str = "") -> None:
             wl_count = refresh_runtime_swban_whitelist()
             ids_text = ", ".join(f"`{uid}`" for uid in sorted(RUNTIME_SWBAN_WHITELIST_USER_IDS)) if RUNTIME_SWBAN_WHITELIST_USER_IDS else "none"
             details = f"Loaded **{wl_count}** SWBAN whitelist user IDs:\n{ids_text}"
+        elif normalized == "vcban":
+            vcban_count = refresh_runtime_vc_bans()
+            details = f"Loaded **{vcban_count}** active VC ban entries."
         elif normalized == "ticketsystam":
             await post_ticket_panel()
             details = "Ticket panel re-posted."
