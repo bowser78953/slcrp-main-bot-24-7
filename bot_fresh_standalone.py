@@ -3804,8 +3804,15 @@ async def swban(ctx: commands.Context, target: str, *, reason: str) -> None:
 
 @bot.command(name="swbanwl", aliases=["mswbanwl"])
 @main_server_role_required(ALL_SERVER_BAN_COMMAND_ROLE_ID)
-async def swbanwl(ctx: commands.Context, action: str = "list", target: str | None = None) -> None:
-    normalized_action = (action or "").strip().lower()
+async def swbanwl(ctx: commands.Context, action_or_target: str = "list", *targets: str) -> None:
+    normalized_action = (action_or_target or "").strip().lower()
+    target_tokens: list[str]
+
+    if normalized_action in {"list", "ls", "show", "add", "remove", "check"}:
+        target_tokens = split_identifier_values(targets)
+    else:
+        target_tokens = split_identifier_values((action_or_target, *targets))
+        normalized_action = "add"
 
     if normalized_action in {"list", "ls", "show"}:
         if not RUNTIME_SWBAN_WHITELIST_USER_IDS:
@@ -3822,41 +3829,71 @@ async def swbanwl(ctx: commands.Context, action: str = "list", target: str | Non
         return
 
     if normalized_action not in {"add", "remove", "check"}:
-        await ctx.send(f"Usage: `{PREFIX}swbanwl <add|remove|check|list> <user_id_or_mention>`")
+        await ctx.send(f"Usage: `{PREFIX}swbanwl <add|remove|check|list> <user_id_or_mention...>`")
         return
 
-    if not target:
-        await ctx.send(f"Usage: `{PREFIX}swbanwl <add|remove|check> <user_id_or_mention>`")
+    if not target_tokens:
+        await ctx.send(f"Usage: `{PREFIX}swbanwl <add|remove|check> <user_id_or_mention...>`")
         return
 
-    user_id = parse_user_id(target)
-    if user_id is None:
-        await ctx.send("Use a user mention or numeric user ID.")
+    user_ids: list[int] = []
+    invalid_tokens: list[str] = []
+    for token in target_tokens:
+        user_id = parse_user_id(token)
+        if user_id is None:
+            invalid_tokens.append(token)
+            continue
+        if user_id not in user_ids:
+            user_ids.append(user_id)
+
+    if invalid_tokens:
+        await ctx.send(f"Use user mentions or numeric user IDs only. Invalid entries: {', '.join(invalid_tokens[:5])}")
         return
 
     if normalized_action == "check":
-        if is_ban_whitelisted(user_id):
-            await ctx.send(f"<@{user_id}> (`{user_id}`) is whitelist-protected.")
-        else:
-            await ctx.send(f"<@{user_id}> (`{user_id}`) is not on the whitelist.")
+        results = []
+        for user_id in user_ids:
+            if is_ban_whitelisted(user_id):
+                results.append(f"<@{user_id}> (`{user_id}`) is whitelist-protected.")
+            else:
+                results.append(f"<@{user_id}> (`{user_id}`) is not on the whitelist.")
+        await ctx.send("\n".join(results))
         return
 
     if normalized_action == "add":
-        if user_id in RUNTIME_SWBAN_WHITELIST_USER_IDS:
-            await ctx.send(f"<@{user_id}> is already on the whitelist.")
-            return
-        RUNTIME_SWBAN_WHITELIST_USER_IDS.add(user_id)
+        added_ids: list[int] = []
+        already_present_ids: list[int] = []
+        for user_id in user_ids:
+            if user_id in RUNTIME_SWBAN_WHITELIST_USER_IDS:
+                already_present_ids.append(user_id)
+                continue
+            RUNTIME_SWBAN_WHITELIST_USER_IDS.add(user_id)
+            added_ids.append(user_id)
         save_swban_whitelist_user_ids(RUNTIME_SWBAN_WHITELIST_USER_IDS)
-        await ctx.send(f"Added <@{user_id}> to SWBAN whitelist. They cannot be banned or server-wide banned.")
+        response_parts = []
+        if added_ids:
+            response_parts.append("Added " + ", ".join(f"<@{user_id}>" for user_id in added_ids) + " to SWBAN whitelist.")
+        if already_present_ids:
+            response_parts.append("Already on whitelist: " + ", ".join(f"<@{user_id}>" for user_id in already_present_ids) + ".")
+        await ctx.send(" ".join(response_parts) if response_parts else "No changes were made.")
         return
 
     # remove
-    if user_id not in RUNTIME_SWBAN_WHITELIST_USER_IDS:
-        await ctx.send(f"<@{user_id}> is not on the whitelist.")
-        return
-    RUNTIME_SWBAN_WHITELIST_USER_IDS.remove(user_id)
+    removed_ids: list[int] = []
+    missing_ids: list[int] = []
+    for user_id in user_ids:
+        if user_id not in RUNTIME_SWBAN_WHITELIST_USER_IDS:
+            missing_ids.append(user_id)
+            continue
+        RUNTIME_SWBAN_WHITELIST_USER_IDS.remove(user_id)
+        removed_ids.append(user_id)
     save_swban_whitelist_user_ids(RUNTIME_SWBAN_WHITELIST_USER_IDS)
-    await ctx.send(f"Removed <@{user_id}> from SWBAN whitelist.")
+    response_parts = []
+    if removed_ids:
+        response_parts.append("Removed " + ", ".join(f"<@{user_id}>" for user_id in removed_ids) + " from SWBAN whitelist.")
+    if missing_ids:
+        response_parts.append("Not on whitelist: " + ", ".join(f"<@{user_id}>" for user_id in missing_ids) + ".")
+    await ctx.send(" ".join(response_parts) if response_parts else "No changes were made.")
 
 
 @bot.command(name="swunban")
@@ -5897,7 +5934,7 @@ async def reload_category(ctx: commands.Context, category: str = "") -> None:
 
 
 @bot.command(name="addbotid", aliases=["maddbotid"])
-async def addbotid(ctx: commands.Context, bot_id: str = "") -> None:
+async def addbotid(ctx: commands.Context, *bot_ids: str) -> None:
     if ctx.guild is None or not isinstance(ctx.author, discord.Member):
         await ctx.send("This command can only be used in a server.")
         return
@@ -5908,14 +5945,23 @@ async def addbotid(ctx: commands.Context, bot_id: str = "") -> None:
         await ctx.send(f"You need the **{role_name_text(reload_role_id, ctx.guild)}** role to use this command.")
         return
 
-    if not bot_id.strip():
-        await ctx.send("Usage: `?addbotid <bot_id>`")
+    parsed_ids: list[int] = []
+    invalid_tokens: list[str] = []
+    for token in split_identifier_values(bot_ids):
+        try:
+            new_id = int(token)
+        except ValueError:
+            invalid_tokens.append(token)
+            continue
+        if new_id not in parsed_ids:
+            parsed_ids.append(new_id)
+
+    if not parsed_ids:
+        await ctx.send("Usage: `?addbotid <bot_id...>`")
         return
 
-    try:
-        new_id = int(bot_id.strip())
-    except ValueError:
-        await ctx.send("Invalid bot ID. Must be a numeric Discord user ID.")
+    if invalid_tokens:
+        await ctx.send(f"Invalid bot ID(s): {', '.join(invalid_tokens[:5])}. Must be numeric Discord user IDs.")
         return
 
     ensure_approved_bots_file()
@@ -5929,17 +5975,27 @@ async def addbotid(ctx: commands.Context, bot_id: str = "") -> None:
         file_data = {"bot_ids": []}
 
     existing = file_data.get("bot_ids", [])
-    if new_id in existing:
-        await ctx.send(f"Bot ID `{new_id}` is already in the approved list.")
-        return
+    added_ids: list[int] = []
+    already_present_ids: list[int] = []
+    for new_id in parsed_ids:
+        if new_id in existing:
+            already_present_ids.append(new_id)
+            continue
+        existing.append(new_id)
+        added_ids.append(new_id)
 
-    existing.append(new_id)
     file_data["bot_ids"] = existing
     with open(APPROVED_BOTS_PATH, "w", encoding="utf-8") as f:
         json.dump(file_data, f, indent=2)
 
     count = refresh_runtime_approved_bots()
-    await ctx.send(f"Added `{new_id}` to approved bots. Runtime cache now has **{count}** bot IDs.")
+    response_parts = []
+    if added_ids:
+        response_parts.append("Added " + ", ".join(f"`{new_id}`" for new_id in added_ids) + " to approved bots.")
+    if already_present_ids:
+        response_parts.append("Already approved: " + ", ".join(f"`{new_id}`" for new_id in already_present_ids) + ".")
+    response_parts.append(f"Runtime cache now has **{count}** bot IDs.")
+    await ctx.send(" ".join(response_parts))
 
 
 @bot.command(name="removebotid")
@@ -6003,6 +6059,103 @@ async def syncslash(ctx: commands.Context) -> None:
     await ctx.send("Syncing slash commands...")
     synced_count = await sync_application_commands()
     await ctx.send(f"Slash commands synced. Registered **{synced_count}** command(s).")
+
+
+def normalize_department_lookup_text(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", value.strip().lower())
+
+
+def split_identifier_values(values: tuple[str, ...]) -> list[str]:
+    identifiers: list[str] = []
+    for raw_value in values:
+        for part in re.split(r"[\s,]+", raw_value.strip()):
+            if part:
+                identifiers.append(part)
+    return identifiers
+
+
+def resolve_department_link_channel(guild: discord.Guild, query: str) -> discord.abc.GuildChannel | None:
+    normalized_query = normalize_department_lookup_text(query)
+    if not normalized_query:
+        return None
+
+    text_channels = list(guild.text_channels)
+    exact_matches: list[discord.abc.GuildChannel] = []
+    partial_matches: list[discord.abc.GuildChannel] = []
+
+    for channel in text_channels:
+        channel_name = normalize_department_lookup_text(channel.name)
+        if channel_name == normalized_query:
+            exact_matches.append(channel)
+            continue
+
+        if normalized_query in channel_name or channel_name in normalized_query:
+            partial_matches.append(channel)
+
+    if exact_matches:
+        return exact_matches[0]
+
+    for category in guild.categories:
+        category_name = normalize_department_lookup_text(category.name)
+        if category_name == normalized_query:
+            for channel in text_channels:
+                if channel.category_id == category.id:
+                    return channel
+
+    if partial_matches:
+        return partial_matches[0]
+
+    for channel in text_channels:
+        if channel.category is None:
+            continue
+        category_name = normalize_department_lookup_text(channel.category.name)
+        if normalized_query in category_name or category_name in normalized_query:
+            return channel
+
+    return None
+
+
+async def create_temporary_department_invite(channel: discord.abc.GuildChannel, *, requested_by: discord.abc.User) -> str:
+    invite = await channel.create_invite(
+        max_age=60 * 60 * 3,
+        max_uses=0,
+        unique=True,
+        reason=f"Department link requested by {requested_by}",
+    )
+    return invite.url
+
+
+@bot.command(name="link")
+@commands.has_permissions(manage_channels=True)
+async def link(ctx: commands.Context, *, department_name_or_abbreviation: str) -> None:
+    if ctx.guild is None:
+        await ctx.send("This command can only be used in a server.")
+        return
+
+    target_channel = resolve_department_link_channel(ctx.guild, department_name_or_abbreviation)
+    if target_channel is None:
+        await ctx.send(
+            "I could not find a department channel for that name or abbreviation. "
+            "Try the exact department channel or category name."
+        )
+        return
+
+    try:
+        invite_url = await create_temporary_department_invite(target_channel, requested_by=ctx.author)
+    except (discord.Forbidden, discord.HTTPException):
+        await ctx.send("I could not create a temporary invite for that department channel.")
+        return
+
+    response_text = (
+        f"Department link for **{department_name_or_abbreviation}**: {invite_url}\n"
+        "This link expires in 3 hours."
+    )
+
+    try:
+        await ctx.author.send(response_text)
+        await ctx.send("I sent the department link to your DMs.")
+    except (discord.Forbidden, discord.HTTPException):
+        await ctx.send(response_text)
 
 
 @bot.command(name="alldeptswl")
