@@ -1328,8 +1328,12 @@ def load_department_links() -> dict[str, dict]:
 
         department_name = str(raw_entry.get("department_name", "")).strip()
         abbreviation = str(raw_entry.get("abbreviation", "")).strip()
-        link_url = str(raw_entry.get("link", "")).strip()
-        if not department_name or not abbreviation or not link_url:
+        server_id_raw = raw_entry.get("server_id", raw_entry.get("guild_id", raw_entry.get("server", "")))
+        try:
+            server_id = int(server_id_raw)
+        except (TypeError, ValueError):
+            continue
+        if not department_name or not abbreviation:
             continue
 
         normalized_name = normalize_department_key(department_name)
@@ -1337,7 +1341,7 @@ def load_department_links() -> dict[str, dict]:
         entry = {
             "department_name": department_name,
             "abbreviation": abbreviation,
-            "link": link_url,
+            "server_id": server_id,
             "created_at": str(raw_entry.get("created_at", "")),
             "updated_at": str(raw_entry.get("updated_at", "")),
         }
@@ -1351,20 +1355,23 @@ def load_department_links() -> dict[str, dict]:
 
 def save_department_links(links: dict[str, dict]) -> None:
     os.makedirs(os.path.dirname(DEPARTMENT_LINKS_PATH), exist_ok=True)
-    unique_entries: dict[tuple[str, str, str], dict] = {}
+    unique_entries: dict[tuple[str, str, int], dict] = {}
 
     for entry in links.values():
         if not isinstance(entry, dict):
             continue
         department_name = str(entry.get("department_name", "")).strip()
         abbreviation = str(entry.get("abbreviation", "")).strip()
-        link_url = str(entry.get("link", "")).strip()
-        if not department_name or not abbreviation or not link_url:
+        try:
+            server_id = int(entry.get("server_id", 0))
+        except (TypeError, ValueError):
+            server_id = 0
+        if not department_name or not abbreviation or server_id <= 0:
             continue
-        unique_entries[(department_name.lower(), abbreviation.lower(), link_url.lower())] = {
+        unique_entries[(department_name.lower(), abbreviation.lower(), server_id)] = {
             "department_name": department_name,
             "abbreviation": abbreviation,
-            "link": link_url,
+            "server_id": server_id,
             "created_at": str(entry.get("created_at", "")),
             "updated_at": str(entry.get("updated_at", "")),
         }
@@ -1382,6 +1389,26 @@ def refresh_runtime_department_links() -> int:
         for value in RUNTIME_DEPARTMENT_LINKS.values()
         if isinstance(value, dict)
     })
+
+
+def find_department_link_entry(query: str) -> dict | None:
+    normalized_query = normalize_department_key(query)
+    if not normalized_query:
+        return None
+
+    entry = RUNTIME_DEPARTMENT_LINKS.get(normalized_query)
+    if isinstance(entry, dict):
+        return entry
+
+    for candidate in RUNTIME_DEPARTMENT_LINKS.values():
+        if not isinstance(candidate, dict):
+            continue
+        department_name = normalize_department_key(str(candidate.get("department_name", "")))
+        abbreviation = normalize_department_key(str(candidate.get("abbreviation", "")))
+        if normalized_query in {department_name, abbreviation}:
+            return candidate
+
+    return None
 
 
 def ensure_vc_bans_file() -> None:
@@ -6172,7 +6199,7 @@ def split_identifier_values(values: tuple[str, ...]) -> list[str]:
     return identifiers
 
 
-def parse_department_link_command(raw_text: str) -> tuple[str, str, str] | None:
+def parse_department_link_command(raw_text: str) -> tuple[str, str, int] | None:
     try:
         tokens = shlex.split(raw_text)
     except ValueError:
@@ -6183,58 +6210,130 @@ def parse_department_link_command(raw_text: str) -> tuple[str, str, str] | None:
 
     department_name = " ".join(tokens[:-2]).strip()
     abbreviation = tokens[-2].strip()
-    link_url = tokens[-1].strip()
+    server_id_raw = tokens[-1].strip()
 
-    if not department_name or not abbreviation or not link_url:
+    if not department_name or not abbreviation or not server_id_raw:
         return None
 
-    if not re.match(r"^https?://", link_url, re.IGNORECASE):
-        link_url = f"https://{link_url}"
+    try:
+        server_id = int(server_id_raw)
+    except ValueError:
+        return None
 
-    return department_name, abbreviation, link_url
+    return department_name, abbreviation, server_id
+
+
+async def create_department_server_invite(guild: discord.Guild, *, requested_by: discord.abc.User) -> str:
+    bot_member = guild.get_member(bot.user.id) if bot.user else None
+    if bot_member is None:
+        raise discord.Forbidden(None, None)
+
+    candidate_channels: list[discord.abc.GuildChannel] = []
+    if guild.system_channel is not None:
+        candidate_channels.append(guild.system_channel)
+    candidate_channels.extend(channel for channel in guild.text_channels if channel not in candidate_channels)
+
+    for channel in candidate_channels:
+        permissions = channel.permissions_for(bot_member)
+        if not permissions.create_instant_invite:
+            continue
+
+        invite = await channel.create_invite(
+            max_age=0,
+            max_uses=0,
+            unique=True,
+            reason=f"Department link requested by {requested_by}",
+        )
+        return invite.url
+
+    raise discord.Forbidden(None, None)
+
+
+class DepartmentLinkButtonView(discord.ui.View):
+    def __init__(self, invite_url: str, department_name: str) -> None:
+        super().__init__(timeout=None)
+        self.add_item(
+            discord.ui.Button(
+                label=f"Here is the link to {department_name}",
+                style=discord.ButtonStyle.link,
+                url=invite_url,
+            )
+        )
 
 
 @bot.command(name="link")
-@commands.has_permissions(manage_channels=True)
-async def link(ctx: commands.Context) -> None:
+async def link(ctx: commands.Context, *, department_or_abbreviation: str) -> None:
     if ctx.guild is None:
         await ctx.send("This command can only be used in a server.")
         return
 
-    if ctx.message is None:
-        await ctx.send("I could not read the command text.")
+    entry = find_department_link_entry(department_or_abbreviation)
+    if entry is None:
+        await ctx.send("I could not find that department in the link registry. Use `!addlink` first.")
         return
 
-    raw_args = ctx.message.content[len(ctx.prefix + ctx.invoked_with):].strip()
-    parsed = parse_department_link_command(raw_args)
+    department_name = str(entry.get("department_name", "")).strip()
+    abbreviation = str(entry.get("abbreviation", "")).strip()
+    try:
+        server_id = int(entry.get("server_id", 0))
+    except (TypeError, ValueError):
+        await ctx.send(f"The saved entry for **{department_name or department_or_abbreviation}** is invalid. Re-run `!addlink`.")
+        return
+
+    target_guild = bot.get_guild(server_id)
+    if target_guild is None:
+        await ctx.send(f"I am not in the server for **{entry['department_name']}** (`{server_id}`).")
+        return
+
+    try:
+        invite_url = await create_department_server_invite(target_guild, requested_by=ctx.author)
+    except (discord.Forbidden, discord.HTTPException):
+        await ctx.send(f"I could not create an invite for **{entry['department_name']}** right now.")
+        return
+
+    view = DepartmentLinkButtonView(invite_url, entry["department_name"])
+    await ctx.send(
+        content=f"Here is the link to **{entry['department_name']}**",
+        view=view,
+        reference=ctx.message,
+        mention_author=False,
+    )
+
+
+@bot.command(name="addlink")
+@commands.has_permissions(manage_guild=True)
+async def addlink(ctx: commands.Context, *, raw_link_data: str) -> None:
+    if ctx.guild is None:
+        await ctx.send("This command can only be used in a server.")
+        return
+
+    parsed = parse_department_link_command(raw_link_data)
     if parsed is None:
-        await ctx.send(f"Usage: `{PREFIX}link <Department Name> <Abbreviation> <Link>`")
+        await ctx.send(f"Usage: `{PREFIX}addlink <Department Name> <Abbreviation> <Server ID>`")
         return
 
-    department_name, abbreviation, link_url = parsed
-    normalized_name = normalize_department_key(department_name)
-    normalized_abbreviation = normalize_department_key(abbreviation)
-    if not normalized_name or not normalized_abbreviation:
-        await ctx.send("Department name and abbreviation must contain letters or numbers.")
+    department_name, abbreviation, server_id = parsed
+    if server_id <= 0:
+        await ctx.send("Server ID must be a numeric Discord server ID.")
         return
 
-    existing_entry = RUNTIME_DEPARTMENT_LINKS.get(normalized_name) or RUNTIME_DEPARTMENT_LINKS.get(normalized_abbreviation)
     timestamp = datetime.now(timezone.utc).isoformat()
+    existing_entry = find_department_link_entry(department_name) or find_department_link_entry(abbreviation)
     entry = {
         "department_name": department_name,
         "abbreviation": abbreviation,
-        "link": link_url,
+        "server_id": server_id,
         "created_at": existing_entry.get("created_at", timestamp) if isinstance(existing_entry, dict) else timestamp,
         "updated_at": timestamp,
     }
 
+    normalized_name = normalize_department_key(department_name)
+    normalized_abbreviation = normalize_department_key(abbreviation)
     RUNTIME_DEPARTMENT_LINKS[normalized_name] = entry
     RUNTIME_DEPARTMENT_LINKS[normalized_abbreviation] = entry
     save_department_links(RUNTIME_DEPARTMENT_LINKS)
 
-    await ctx.send(
-        f"Saved department link for **{department_name}** (`{abbreviation}`): {link_url}"
-    )
+    await ctx.send(f"Saved **{department_name}** (`{abbreviation}`) -> server `{server_id}`.")
 
 
 @bot.command(name="alldeptswl")
