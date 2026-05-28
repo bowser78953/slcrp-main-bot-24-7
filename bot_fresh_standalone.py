@@ -1,6 +1,7 @@
 ﻿import os
 import json
 import re
+import shlex
 import asyncio
 import random
 import time
@@ -135,6 +136,7 @@ TEMP_VC_DATA_PATH = os.path.join(DATA_DIR, "temp_vcs_fresh.json")
 APPROVED_INVITES_PATH = os.path.join(DATA_DIR, "approved_invites.json")
 APPROVED_BOTS_PATH = os.path.join(DATA_DIR, "approved_bots.json")
 SWBAN_WHITELIST_PATH = os.path.join(DATA_DIR, "swban_whitelist.json")
+DEPARTMENT_LINKS_PATH = os.path.join(DATA_DIR, "department_links.json")
 VC_BANS_PATH = os.path.join(DATA_DIR, "vc_bans.json")
 TICKET_TRANSCRIPTS_DIR = os.path.join(DATA_DIR, "ticket_transcripts")
 LEVELS_PATH = os.path.join(DATA_DIR, "levels.json")
@@ -190,6 +192,7 @@ RUNTIME_AFK_USERS: dict[str, dict] = {}
 RUNTIME_APPROVED_INVITE_CODES: set[str] = set()
 RUNTIME_APPROVED_BOT_IDS: set[int] = set()
 RUNTIME_SWBAN_WHITELIST_USER_IDS: set[int] = set()
+RUNTIME_DEPARTMENT_LINKS: dict[str, dict] = {}
 RUNTIME_VC_BANS: dict[int, dict] = {}
 RUNTIME_SETTINGS: dict = {}
 RUNTIME_REACTION_ROLE_MESSAGE_IDS: set[int] = set()
@@ -1292,6 +1295,95 @@ def is_ban_whitelisted(user_id: int) -> bool:
     return int(user_id) in RUNTIME_SWBAN_WHITELIST_USER_IDS
 
 
+def normalize_department_key(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", value.strip().lower())
+
+
+def ensure_department_links_file() -> None:
+    if os.path.exists(DEPARTMENT_LINKS_PATH):
+        return
+
+    os.makedirs(os.path.dirname(DEPARTMENT_LINKS_PATH), exist_ok=True)
+    with open(DEPARTMENT_LINKS_PATH, "w", encoding="utf-8") as file:
+        json.dump({"entries": []}, file, indent=2)
+
+
+def load_department_links() -> dict[str, dict]:
+    ensure_department_links_file()
+
+    try:
+        with open(DEPARTMENT_LINKS_PATH, "r", encoding="utf-8") as file:
+            raw_data = json.load(file)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+    entries_raw = raw_data.get("entries", []) if isinstance(raw_data, dict) else []
+    if not isinstance(entries_raw, list):
+        return {}
+
+    parsed: dict[str, dict] = {}
+    for raw_entry in entries_raw:
+        if not isinstance(raw_entry, dict):
+            continue
+
+        department_name = str(raw_entry.get("department_name", "")).strip()
+        abbreviation = str(raw_entry.get("abbreviation", "")).strip()
+        link_url = str(raw_entry.get("link", "")).strip()
+        if not department_name or not abbreviation or not link_url:
+            continue
+
+        normalized_name = normalize_department_key(department_name)
+        normalized_abbreviation = normalize_department_key(abbreviation)
+        entry = {
+            "department_name": department_name,
+            "abbreviation": abbreviation,
+            "link": link_url,
+            "created_at": str(raw_entry.get("created_at", "")),
+            "updated_at": str(raw_entry.get("updated_at", "")),
+        }
+        if normalized_name:
+            parsed[normalized_name] = entry
+        if normalized_abbreviation:
+            parsed[normalized_abbreviation] = entry
+
+    return parsed
+
+
+def save_department_links(links: dict[str, dict]) -> None:
+    os.makedirs(os.path.dirname(DEPARTMENT_LINKS_PATH), exist_ok=True)
+    unique_entries: dict[tuple[str, str, str], dict] = {}
+
+    for entry in links.values():
+        if not isinstance(entry, dict):
+            continue
+        department_name = str(entry.get("department_name", "")).strip()
+        abbreviation = str(entry.get("abbreviation", "")).strip()
+        link_url = str(entry.get("link", "")).strip()
+        if not department_name or not abbreviation or not link_url:
+            continue
+        unique_entries[(department_name.lower(), abbreviation.lower(), link_url.lower())] = {
+            "department_name": department_name,
+            "abbreviation": abbreviation,
+            "link": link_url,
+            "created_at": str(entry.get("created_at", "")),
+            "updated_at": str(entry.get("updated_at", "")),
+        }
+
+    with open(DEPARTMENT_LINKS_PATH, "w", encoding="utf-8") as file:
+        json.dump({"entries": list(unique_entries.values())}, file, indent=2)
+
+
+def refresh_runtime_department_links() -> int:
+    global RUNTIME_DEPARTMENT_LINKS
+    ensure_department_links_file()
+    RUNTIME_DEPARTMENT_LINKS = load_department_links()
+    return len({
+        value.get("department_name", "")
+        for value in RUNTIME_DEPARTMENT_LINKS.values()
+        if isinstance(value, dict)
+    })
+
+
 def ensure_vc_bans_file() -> None:
     if os.path.exists(VC_BANS_PATH):
         return
@@ -1572,6 +1664,7 @@ def refresh_all_runtime_caches() -> None:
     refresh_runtime_approved_invites()
     refresh_runtime_approved_bots()
     refresh_runtime_swban_whitelist()
+    refresh_runtime_department_links()
     refresh_runtime_vc_bans()
     refresh_runtime_settings()
     refresh_runtime_reaction_role_message_ids()
@@ -5746,7 +5839,7 @@ async def reload_category(ctx: commands.Context, category: str = "") -> None:
         await ctx.send(f"You need the **{role_name_text(reload_role_id, ctx.guild)}** role to use this command.")
         return
 
-    ALL_CATEGORIES = ["all", "settings", "xpsystem", "spam", "automod", "nsfwautomod", "invitesystem", "botsystem", "swbanwl", "vcban", "ticketsystam"]
+    ALL_CATEGORIES = ["all", "settings", "xpsystem", "spam", "automod", "nsfwautomod", "invitesystem", "botsystem", "swbanwl", "departmentlinks", "vcban", "ticketsystam"]
 
     async def perform_full_runtime_reload() -> list[str]:
         results: list[str] = []
@@ -5773,6 +5866,9 @@ async def reload_category(ctx: commands.Context, category: str = "") -> None:
 
         wl_count = refresh_runtime_swban_whitelist()
         results.append(f"swbanwl: **{wl_count}** users")
+
+        department_link_count = refresh_runtime_department_links()
+        results.append(f"departmentlinks: **{department_link_count}** departments")
 
         vcban_count = refresh_runtime_vc_bans()
         results.append(f"vcban: **{vcban_count}** active entries")
@@ -5822,6 +5918,9 @@ async def reload_category(ctx: commands.Context, category: str = "") -> None:
         "swbanwl": "swbanwl",
         "banwl": "swbanwl",
         "banwhitelist": "swbanwl",
+        "departmentlinks": "departmentlinks",
+        "departmentlink": "departmentlinks",
+        "linksystem": "departmentlinks",
         "vcban": "vcban",
         "voiceban": "vcban",
         "vcbans": "vcban",
@@ -5905,6 +6004,9 @@ async def reload_category(ctx: commands.Context, category: str = "") -> None:
             wl_count = refresh_runtime_swban_whitelist()
             ids_text = ", ".join(f"`{uid}`" for uid in sorted(RUNTIME_SWBAN_WHITELIST_USER_IDS)) if RUNTIME_SWBAN_WHITELIST_USER_IDS else "none"
             details = f"Loaded **{wl_count}** SWBAN whitelist user IDs:\n{ids_text}"
+        elif normalized == "departmentlinks":
+            department_link_count = refresh_runtime_department_links()
+            details = f"Loaded **{department_link_count}** department links into runtime cache."
         elif normalized == "vcban":
             vcban_count = refresh_runtime_vc_bans()
             details = f"Loaded **{vcban_count}** active VC ban entries."
@@ -6061,10 +6163,6 @@ async def syncslash(ctx: commands.Context) -> None:
     await ctx.send(f"Slash commands synced. Registered **{synced_count}** command(s).")
 
 
-def normalize_department_lookup_text(value: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "", value.strip().lower())
-
-
 def split_identifier_values(values: tuple[str, ...]) -> list[str]:
     identifiers: list[str] = []
     for raw_value in values:
@@ -6074,88 +6172,69 @@ def split_identifier_values(values: tuple[str, ...]) -> list[str]:
     return identifiers
 
 
-def resolve_department_link_channel(guild: discord.Guild, query: str) -> discord.abc.GuildChannel | None:
-    normalized_query = normalize_department_lookup_text(query)
-    if not normalized_query:
+def parse_department_link_command(raw_text: str) -> tuple[str, str, str] | None:
+    try:
+        tokens = shlex.split(raw_text)
+    except ValueError:
         return None
 
-    text_channels = list(guild.text_channels)
-    exact_matches: list[discord.abc.GuildChannel] = []
-    partial_matches: list[discord.abc.GuildChannel] = []
+    if len(tokens) < 3:
+        return None
 
-    for channel in text_channels:
-        channel_name = normalize_department_lookup_text(channel.name)
-        if channel_name == normalized_query:
-            exact_matches.append(channel)
-            continue
+    department_name = " ".join(tokens[:-2]).strip()
+    abbreviation = tokens[-2].strip()
+    link_url = tokens[-1].strip()
 
-        if normalized_query in channel_name or channel_name in normalized_query:
-            partial_matches.append(channel)
+    if not department_name or not abbreviation or not link_url:
+        return None
 
-    if exact_matches:
-        return exact_matches[0]
+    if not re.match(r"^https?://", link_url, re.IGNORECASE):
+        link_url = f"https://{link_url}"
 
-    for category in guild.categories:
-        category_name = normalize_department_lookup_text(category.name)
-        if category_name == normalized_query:
-            for channel in text_channels:
-                if channel.category_id == category.id:
-                    return channel
-
-    if partial_matches:
-        return partial_matches[0]
-
-    for channel in text_channels:
-        if channel.category is None:
-            continue
-        category_name = normalize_department_lookup_text(channel.category.name)
-        if normalized_query in category_name or category_name in normalized_query:
-            return channel
-
-    return None
-
-
-async def create_temporary_department_invite(channel: discord.abc.GuildChannel, *, requested_by: discord.abc.User) -> str:
-    invite = await channel.create_invite(
-        max_age=60 * 60 * 3,
-        max_uses=0,
-        unique=True,
-        reason=f"Department link requested by {requested_by}",
-    )
-    return invite.url
+    return department_name, abbreviation, link_url
 
 
 @bot.command(name="link")
 @commands.has_permissions(manage_channels=True)
-async def link(ctx: commands.Context, *, department_name_or_abbreviation: str) -> None:
+async def link(ctx: commands.Context) -> None:
     if ctx.guild is None:
         await ctx.send("This command can only be used in a server.")
         return
 
-    target_channel = resolve_department_link_channel(ctx.guild, department_name_or_abbreviation)
-    if target_channel is None:
-        await ctx.send(
-            "I could not find a department channel for that name or abbreviation. "
-            "Try the exact department channel or category name."
-        )
+    if ctx.message is None:
+        await ctx.send("I could not read the command text.")
         return
 
-    try:
-        invite_url = await create_temporary_department_invite(target_channel, requested_by=ctx.author)
-    except (discord.Forbidden, discord.HTTPException):
-        await ctx.send("I could not create a temporary invite for that department channel.")
+    raw_args = ctx.message.content[len(ctx.prefix + ctx.invoked_with):].strip()
+    parsed = parse_department_link_command(raw_args)
+    if parsed is None:
+        await ctx.send(f"Usage: `{PREFIX}link <Department Name> <Abbreviation> <Link>`")
         return
 
-    response_text = (
-        f"Department link for **{department_name_or_abbreviation}**: {invite_url}\n"
-        "This link expires in 3 hours."
+    department_name, abbreviation, link_url = parsed
+    normalized_name = normalize_department_key(department_name)
+    normalized_abbreviation = normalize_department_key(abbreviation)
+    if not normalized_name or not normalized_abbreviation:
+        await ctx.send("Department name and abbreviation must contain letters or numbers.")
+        return
+
+    existing_entry = RUNTIME_DEPARTMENT_LINKS.get(normalized_name) or RUNTIME_DEPARTMENT_LINKS.get(normalized_abbreviation)
+    timestamp = datetime.now(timezone.utc).isoformat()
+    entry = {
+        "department_name": department_name,
+        "abbreviation": abbreviation,
+        "link": link_url,
+        "created_at": existing_entry.get("created_at", timestamp) if isinstance(existing_entry, dict) else timestamp,
+        "updated_at": timestamp,
+    }
+
+    RUNTIME_DEPARTMENT_LINKS[normalized_name] = entry
+    RUNTIME_DEPARTMENT_LINKS[normalized_abbreviation] = entry
+    save_department_links(RUNTIME_DEPARTMENT_LINKS)
+
+    await ctx.send(
+        f"Saved department link for **{department_name}** (`{abbreviation}`): {link_url}"
     )
-
-    try:
-        await ctx.author.send(response_text)
-        await ctx.send("I sent the department link to your DMs.")
-    except (discord.Forbidden, discord.HTTPException):
-        await ctx.send(response_text)
 
 
 @bot.command(name="alldeptswl")
