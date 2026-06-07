@@ -4128,10 +4128,21 @@ async def resolve_rp_channel(guild: discord.Guild) -> discord.TextChannel | None
         if isinstance(configured_channel, discord.TextChannel):
             return configured_channel
 
+        cached_global_channel = bot.get_channel(channel_id)
+        if isinstance(cached_global_channel, discord.TextChannel):
+            return cached_global_channel
+
         try:
             fetched_channel = await guild.fetch_channel(channel_id)
             if isinstance(fetched_channel, discord.TextChannel):
                 return fetched_channel
+        except (discord.Forbidden, discord.HTTPException, discord.NotFound):
+            pass
+
+        try:
+            fetched_global_channel = await bot.fetch_channel(channel_id)
+            if isinstance(fetched_global_channel, discord.TextChannel):
+                return fetched_global_channel
         except (discord.Forbidden, discord.HTTPException, discord.NotFound):
             pass
 
