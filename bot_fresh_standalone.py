@@ -4238,12 +4238,20 @@ class RPChannelView(discord.ui.View):
         await self._change_rp(interaction, "10")
 
     async def _change_rp(self, interaction: discord.Interaction, option: str) -> None:
-        if interaction.guild is None:
-            await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+        target_guild = bot.get_guild(MAIN_SERVER_GUILD_ID)
+        if target_guild is None:
+            try:
+                await bot.fetch_guild(MAIN_SERVER_GUILD_ID)
+            except (discord.Forbidden, discord.HTTPException, discord.NotFound):
+                pass
+            target_guild = bot.get_guild(MAIN_SERVER_GUILD_ID)
+
+        if target_guild is None:
+            await interaction.response.send_message("❌ Main server is unavailable right now.", ephemeral=True)
             return
 
         result = await change_rp_channel(
-            interaction.guild,
+            target_guild,
             str(interaction.user),
             interaction.user.id,
             option,
@@ -4547,13 +4555,25 @@ async def rp(ctx: commands.Context, action: str = "change", *, option: str | Non
         await ctx.send("This command can only be used in a server.")
         return
 
+    target_guild = bot.get_guild(MAIN_SERVER_GUILD_ID)
+    if target_guild is None:
+        try:
+            await bot.fetch_guild(MAIN_SERVER_GUILD_ID)
+        except (discord.Forbidden, discord.HTTPException, discord.NotFound):
+            pass
+        target_guild = bot.get_guild(MAIN_SERVER_GUILD_ID)
+
+    if target_guild is None:
+        await ctx.send("❌ Main server is unavailable right now. Try again in a moment.")
+        return
+
     global RP_CURRENT_NAME, RP_CURRENT_SINCE
     action_lower = (action or "").lower().strip()
     now = datetime.now(timezone.utc)
 
     if action_lower == "info":
         if RP_CURRENT_NAME is None:
-            channel = await resolve_rp_channel(ctx.guild)
+            channel = await resolve_rp_channel(target_guild)
             if isinstance(channel, discord.TextChannel):
                 RP_CURRENT_NAME = channel.name
 
@@ -4591,7 +4611,7 @@ async def rp(ctx: commands.Context, action: str = "change", *, option: str | Non
 
     if action_lower == "change":
         if option:
-            result = await change_rp_channel(ctx.guild, str(ctx.author), ctx.author.id, option)
+            result = await change_rp_channel(target_guild, str(ctx.author), ctx.author.id, option)
             await ctx.send(result)
             return
 
