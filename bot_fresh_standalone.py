@@ -4016,7 +4016,7 @@ async def swbanwl(ctx: commands.Context, action_or_target: str = "list", *target
     await ctx.send(" ".join(response_parts) if response_parts else "No changes were made.")
 
 
-@bot.command(name="swunban")
+@bot.command(name="swunban", aliases=["unswban", "munswban"])
 @main_server_role_required(ALL_SERVER_BAN_COMMAND_ROLE_ID)
 async def swunban(ctx: commands.Context, target: str, *, reason: str = "No reason provided") -> None:
     user_id = parse_user_id(target)
@@ -4129,7 +4129,7 @@ async def resolve_rp_channel(guild: discord.Guild) -> discord.TextChannel | None
             return configured_channel
 
         try:
-            fetched_channel = guild.fetch_channel(channel_id)
+            fetched_channel = await guild.fetch_channel(channel_id)
             if isinstance(fetched_channel, discord.TextChannel):
                 return fetched_channel
         except (discord.Forbidden, discord.HTTPException, discord.NotFound):
