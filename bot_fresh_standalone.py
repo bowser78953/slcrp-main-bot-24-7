@@ -4510,57 +4510,27 @@ async def reactionroles_slash(ctx: discord.ApplicationContext, channel: discord.
     )
 
 
-@bot.slash_command(name="review", description="Post a review message to the channel")
+@bot.slash_command(name="review", description="Submit a staff review")
 async def review_slash(
     ctx: discord.ApplicationContext,
-    review: str,
+    staff_member: discord.Member,
+    rating: float,
+    reason: str,
 ) -> None:
     if ctx.guild is None:
         await ctx.respond("This command can only be used in a server.", ephemeral=True)
         return
 
-    review_text = review.strip()
-    if not review_text:
-        await ctx.respond("Usage: /review >Staff_Member> <Rating> <Reason>", ephemeral=True)
+    if rating < 1 or rating > 10:
+        await ctx.respond("Rating must be between 1 and 10.", ephemeral=True)
         return
 
-    parts = [part.strip() for part in review_text.split(">") if part.strip()]
-    if len(parts) < 3:
-        await ctx.respond("Usage: /review >Staff_Member> <Rating> <Reason>", ephemeral=True)
-        return
-
-    staff_token = parts[0]
-    rating_token = parts[1]
-    reason_text = " > ".join(parts[2:]).strip().rstrip(">").strip()
+    reason_text = reason.strip().rstrip(">").strip()
     if not reason_text:
         await ctx.respond("Reason cannot be empty.", ephemeral=True)
         return
 
-    try:
-        rating_value = float(rating_token)
-    except ValueError:
-        await ctx.respond("Rating must be a number between 1 and 10.", ephemeral=True)
-        return
-
-    if rating_value < 1 or rating_value > 10:
-        await ctx.respond("Rating must be between 1 and 10.", ephemeral=True)
-        return
-
-    staff_display = staff_token
-    staff_member_id = parse_user_id(staff_token)
-    if staff_member_id is not None:
-        member = ctx.guild.get_member(staff_member_id)
-        if member is None:
-            try:
-                member = await ctx.guild.fetch_member(staff_member_id)
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                member = None
-        if member is not None:
-            staff_display = member.mention
-        else:
-            staff_display = f"<@{staff_member_id}>"
-
-    rating_text = f"{rating_value:.2f}".rstrip("0").rstrip(".")
+    rating_text = f"{rating:.2f}".rstrip("0").rstrip(".")
 
     await ctx.defer(ephemeral=True)
 
@@ -4569,7 +4539,7 @@ async def review_slash(
         color=discord.Color.blue(),
         timestamp=datetime.now(timezone.utc),
     )
-    review_embed.add_field(name="Staff Member", value=staff_display, inline=False)
+    review_embed.add_field(name="Staff Member", value=staff_member.mention, inline=False)
     review_embed.add_field(name="Rating", value=f"{rating_text}/10", inline=False)
     review_embed.add_field(name="Reason", value=reason_text, inline=False)
     review_embed.set_author(
