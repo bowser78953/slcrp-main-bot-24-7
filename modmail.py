@@ -111,6 +111,30 @@ async def get_ban_appeal_invite_url(guild):
     return None
 
 
+def format_staff_tag(user: discord.abc.User) -> str:
+    discriminator = getattr(user, 'discriminator', None)
+    if discriminator and discriminator != '0':
+        return f"{user.name}{discriminator}"
+    return user.name
+
+
+def build_blocked_banned_embed() -> discord.Embed:
+    return discord.Embed(
+        title='Blocked & Banned',
+        description=(
+            'You have been blocked and banned from using the Mod Mail system.\n\n'
+            'This could be due to:\n'
+            '- Rule violation\n'
+            '- Spam or trolling\n'
+            '- Misuse of Mod Mail\n\n'
+            'You are not allowed to appeal.\n\n'
+            'Thank you for understanding.'
+        ),
+        color=discord.Color.red(),
+        timestamp=datetime.utcnow(),
+    )
+
+
 async def send_modmail_ban_appeal_dm(payload):
     user_id = int(payload.get('user_id'))
     user = await bot.fetch_user(user_id)
@@ -410,8 +434,14 @@ async def handle_dm(message):
     if staff_role:
         await ticket_channel.send(f"{staff_role.mention} New ticket opened!")
     
-    # Confirm to user
-    await message.author.send("✅ Your message has been sent to the staff team. They will respond shortly.")
+    # Confirm to user with a styled open-notice card.
+    opened_embed = discord.Embed(
+        title='Mod Mail Opened',
+        description='Your ban appeal has been opened.\nPlease remain respectful.',
+        color=discord.Color.blue(),
+        timestamp=datetime.utcnow(),
+    )
+    await message.author.send(embed=opened_embed)
     await message.add_reaction('✅')
     
     # Log in log channel
@@ -464,12 +494,13 @@ async def handle_ticket_reply(message):
         )
         return
     
-    # Send staff message to user as plain text DM.
+    # Send staff message in the screenshot style.
     content_text = message.content.strip() if message.content else "[No text content]"
-    dm_lines = [f"Staff ({message.author.display_name}): {content_text}"]
+    staff_tag = format_staff_tag(message.author)
+    dm_lines = [f"Staff {staff_tag}: {content_text}"]
     if message.attachments:
         for attachment in message.attachments:
-            dm_lines.append(f"Attachment: {attachment.url}")
+            dm_lines.append(f"Staff {staff_tag}: {attachment.url}")
 
     try:
         await user.send("\n".join(dm_lines))
@@ -507,9 +538,9 @@ async def reply(ctx, *, message: str):
     
     user = await bot.fetch_user(user_id)
     
-    # Send message to user as plain text DM.
+    # Send message in the screenshot style.
     try:
-        await user.send(f"Staff ({ctx.author.display_name}): {message}")
+        await user.send(f"Staff {format_staff_tag(ctx.author)}: {message}")
         await ctx.message.delete()
         await ctx.send("✅ Message sent!", delete_after=3)
     except discord.Forbidden:
@@ -632,16 +663,14 @@ async def ban(ctx, target: str, *, reason: str = "No reason provided"):
         if log_channel:
             await log_channel.send(embed=ban_embed)
         
-        # Try to DM the user
+        # Try to DM the user in the same style shown in screenshots
         try:
-            dm_embed = discord.Embed(
-                title="🔨 You have been banned",
-                description=f"You have been banned from **{guild.name}**.",
-                color=discord.Color.red()
-            )
-            dm_embed.add_field(name="Reason", value=reason, inline=False)
-            dm_embed.add_field(name="Banned By", value=str(ctx.author), inline=False)
-            await user.send(embed=dm_embed)
+            staff_tag = format_staff_tag(ctx.author)
+            invite_link = await get_ban_appeal_invite_url(guild)
+            await user.send(f"Staff {staff_tag}: {reason}")
+            if invite_link:
+                await user.send(f"Staff {staff_tag}: {invite_link}")
+            await user.send(embed=build_blocked_banned_embed())
         except:
             pass  # User has DMs disabled
             
@@ -713,37 +742,16 @@ async def unban(ctx, target: str, *, reason: str = "No reason provided"):
         if log_channel:
             await log_channel.send(embed=unban_embed)
         
-        # Try to DM the user
+        # Try to DM the user in the same style shown in screenshots
         try:
-            dm_embed = discord.Embed(
-                title="✅ You have been unbanned",
-                description=f"You have been unbanned from **{guild.name}**.",
-                color=discord.Color.green()
+            staff_tag = format_staff_tag(ctx.author)
+            invite_link = await get_ban_appeal_invite_url(guild)
+            await user.send(f"Staff {staff_tag}: Unbanned.")
+            if invite_link:
+                await user.send(f"Staff {staff_tag}: {invite_link}")
+            await user.send(
+                f"Staff {staff_tag}: You are unbanned. You may rejoin your departments if they allow it via tickets inside your previous WL Departments."
             )
-            dm_embed.add_field(name="Reason", value=reason, inline=False)
-            dm_embed.add_field(name="Unbanned By", value=str(ctx.author), inline=False)
-            
-            # Include invite link
-            try:
-                invites = await guild.invites()
-                invite_link = None
-                for invite in invites:
-                    if invite.max_age == 0:
-                        invite_link = invite.url
-                        break
-                
-                if not invite_link:
-                    channel = guild.text_channels[0] if guild.text_channels else None
-                    if channel:
-                        invite = await channel.create_invite(max_age=0, max_uses=0)
-                        invite_link = invite.url
-                
-                if invite_link:
-                    dm_embed.add_field(name="Rejoin Server", value=invite_link, inline=False)
-            except:
-                pass
-            
-            await user.send(embed=dm_embed)
         except:
             pass  # User has DMs disabled
             
