@@ -1,1 +1,1 @@
-﻿worker: python bot_fresh_standalone.py
+﻿worker: python run_bots.py
