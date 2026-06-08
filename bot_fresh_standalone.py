@@ -1790,6 +1790,25 @@ def parse_user_id(input_value: str) -> int | None:
     return None
 
 
+def parse_channel_id_input(input_value: str) -> int | None:
+    text = (input_value or "").strip()
+    if not text:
+        return None
+
+    mention_match = re.fullmatch(r"<#(\d+)>", text)
+    if mention_match:
+        return int(mention_match.group(1))
+
+    if text.isdigit():
+        return int(text)
+
+    link_match = re.search(r"discord(?:app)?\.com/channels/\d+/(\d+)", text)
+    if link_match:
+        return int(link_match.group(1))
+
+    return None
+
+
 def count_active_warnings(warning_data: dict, guild_id: int, user_id: int, now: datetime) -> int:
     active_warning_count = 0
     for entry in warning_data.get("warnings", []):
@@ -3495,6 +3514,35 @@ async def out(ctx: commands.Context, member: discord.Member) -> None:
         return
 
     await ctx.send(f"Removed {member.mention} from your VC.")
+
+
+@bot.command(name="vcpick")
+async def vcpick(ctx: commands.Context, vc_link: str) -> None:
+    if ctx.guild is None:
+        await ctx.send("This command can only be used in a server.")
+        return
+
+    channel_id = parse_channel_id_input(vc_link)
+    if channel_id is None:
+        await ctx.send(f"Usage: `{PREFIX}vcpick <VC_link>`")
+        return
+
+    channel = ctx.guild.get_channel(channel_id) or bot.get_channel(channel_id)
+    if not isinstance(channel, (discord.VoiceChannel, discord.StageChannel)):
+        await ctx.send("I could not find that voice channel.")
+        return
+
+    if channel.guild.id != ctx.guild.id:
+        await ctx.send("That voice channel is not in this server.")
+        return
+
+    eligible_members = [member for member in channel.members if not member.bot]
+    if not eligible_members:
+        await ctx.send(f"No eligible users found in {channel.mention}.")
+        return
+
+    winner = random.choice(eligible_members)
+    await ctx.send(f"Random pick from {channel.mention}: {winner.mention}")
 
 
 @bot.command(name="lock")
