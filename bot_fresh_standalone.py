@@ -1897,7 +1897,13 @@ async def send_main_bot_ban_appeal_dm(
         )
 
     try:
-        await user.send(embed=embed)
+        if invite_url:
+            await user.send(
+                content=f"Ban appeal server link: {invite_url}",
+                embed=embed,
+            )
+        else:
+            await user.send(embed=embed)
         return True
     except (discord.Forbidden, discord.HTTPException):
         return False
