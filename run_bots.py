@@ -1,4 +1,4 @@
-import os
+from pathlib import Path
 import signal
 import subprocess
 import sys
@@ -6,7 +6,9 @@ import time
 
 
 def start_process(script_name: str) -> subprocess.Popen:
-    return subprocess.Popen([sys.executable, script_name])
+    repo_root = Path(__file__).resolve().parent
+    script_path = repo_root / script_name
+    return subprocess.Popen([sys.executable, str(script_path)], cwd=str(repo_root))
 
 
 def main() -> int:
