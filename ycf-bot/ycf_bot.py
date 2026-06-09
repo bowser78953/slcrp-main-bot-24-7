@@ -1,5 +1,6 @@
 import os
 import re
+import asyncio
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 from datetime import timedelta
@@ -26,10 +27,25 @@ SPAM_NOTIFICATION_CHANNEL_ID = 1510463018717413386
 SPAM_LOG_CHANNEL_ID = 1513995796151013486
 CM_NOTIFICATION_CHANNEL_ID = 1510463018717413386
 INSTA_BAN_WORDS = {"cunt", "nigger", "nigga", "whore", "pussy", "cock"}
+APPLICATION_LOG_CHANNEL_ID = 1514004708497424454
 
 # Track recent message times and warning count per user for anti-spam handling.
 spam_message_times: dict[int, Deque[tuple[float, str]]] = defaultdict(deque)
 spam_warning_counts: dict[int, int] = defaultdict(int)
+trigger_words_enabled: dict[int, bool] = defaultdict(lambda: True)
+
+APPLICATION_QUESTIONS = [
+    "1. Question 1: What is your Discord username and user ID?\n-# Do !myid to get your discord ID",
+    "2. Question 2: How old are you?",
+    "3. Question 3: What timezone are you in?",
+    "4. Question 4: How many hours can you be active each week?",
+    "5. Question 5: What moderation experience do you have?",
+    "6. Question 6: Why do you want to become Santos C.F. Modrator?",
+    "7. Question 7: How would you handle arguments between members?",
+    "8. Question 8: How would you handle a spammer or raider?",
+    "9. Question 9: Have you ever been punished in this server? Timedout? Warninged? Kicked? Baned?",
+    "10. Question 10: Anything else we should know about you?",
+]
 
 
 def parse_duration(duration: str) -> timedelta | None:
@@ -84,6 +100,171 @@ def get_insta_ban_word(content: str) -> str | None:
     return None
 
 
+def build_application_prompt_embed() -> discord.Embed:
+    embed = discord.Embed(
+        description=(
+            "Want to apply to become a moderator? Say !apply or !application.\n"
+            "-# Note: Do !settigns and turn of trigger words if you are sick of these messages!"
+        ),
+        color=discord.Color.blue(),
+    )
+    return embed
+
+
+def build_settings_embed(user: discord.abc.User) -> discord.Embed:
+    enabled = trigger_words_enabled[user.id]
+    status = "Trigger Words 🟢" if enabled else "Trigger Words 🔴"
+    next_hint = (
+        "Trigger words off 🔴 (If off say Trrigger words on 🟢)"
+        if enabled
+        else "Trigger words on 🟢 (If off say Trrigger words on 🟢)"
+    )
+    embed = discord.Embed(
+        title=f"Here is {user.display_name} Settigns",
+        description=(
+            "Trigger Words 🟢=If on 🔴= If off\n"
+            f"Current: {status}\n"
+            f"{next_hint}"
+        ),
+        color=discord.Color.blue(),
+    )
+    return embed
+
+
+class TriggerWordsSelect(discord.ui.Select):
+    def __init__(self) -> None:
+        super().__init__(
+            placeholder="Choose trigger word setting",
+            min_values=1,
+            max_values=1,
+            options=[
+                discord.SelectOption(
+                    label="Trigger words off [OFF]",
+                    value="off",
+                    description="Turn off application trigger replies",
+                ),
+                discord.SelectOption(
+                    label="Trigger words on [ON]",
+                    value="on",
+                    description="Turn on application trigger replies",
+                ),
+            ],
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if self.values[0] == "off":
+            trigger_words_enabled[interaction.user.id] = False
+        else:
+            trigger_words_enabled[interaction.user.id] = True
+
+        embed = build_settings_embed(interaction.user)
+        await interaction.response.edit_message(embed=embed, view=TriggerWordsView())
+
+
+class TriggerWordsView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=300)
+        self.add_item(TriggerWordsSelect())
+
+
+class ApplicationDecisionModal(discord.ui.Modal):
+    def __init__(self, applicant_id: int, action: str) -> None:
+        super().__init__(title=f"Application {action.title()}")
+        self.applicant_id = applicant_id
+        self.action = action
+
+        self.reason = discord.ui.InputText(
+            label="Reason",
+            style=discord.InputTextStyle.long,
+            required=True,
+            max_length=1000,
+            placeholder="Enter decision reason",
+        )
+        self.add_item(self.reason)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        reason_text = self.reason.value.strip()
+        decision = "Approved" if self.action == "approve" else "Denied"
+
+        try:
+            user = await bot.fetch_user(self.applicant_id)
+        except discord.HTTPException:
+            await interaction.response.send_message("Could not find that applicant.", ephemeral=True)
+            return
+
+        if self.action == "approve":
+            dm_embed = discord.Embed(
+                title="Application Approved",
+                description=(
+                    "Your staff application has been approved.\n\n"
+                    f"Reason: {reason_text}\n\n"
+                    "Information about staff: check your staff channels, follow staff guidance, "
+                    "and contact leadership if you need onboarding support."
+                ),
+                color=discord.Color.green(),
+                timestamp=discord.utils.utcnow(),
+            )
+        else:
+            dm_embed = discord.Embed(
+                title="Application Denied",
+                description=(
+                    "Your staff application has been denied.\n\n"
+                    f"Reason: {reason_text}\n\n"
+                    "You can re-apply in 7 days."
+                ),
+                color=discord.Color.red(),
+                timestamp=discord.utils.utcnow(),
+            )
+
+        dm_status = "DM sent"
+        try:
+            await user.send(embed=dm_embed)
+        except discord.Forbidden:
+            dm_status = "Could not DM applicant"
+
+        if interaction.message and interaction.message.embeds:
+            updated = interaction.message.embeds[0]
+        else:
+            updated = discord.Embed(title="Staff Application Submission")
+
+        updated.color = discord.Color.green() if self.action == "approve" else discord.Color.red()
+        updated.add_field(name="Decision", value=decision, inline=True)
+        updated.add_field(name="Handled By", value=interaction.user.mention, inline=True)
+        updated.add_field(name="Decision Reason", value=reason_text[:1024], inline=False)
+        updated.add_field(name="Applicant DM", value=dm_status, inline=False)
+        updated.set_footer(text=f"Application status: {decision}")
+
+        view = ApplicationReviewView(self.applicant_id)
+        for item in view.children:
+            if isinstance(item, discord.ui.Button):
+                item.disabled = True
+
+        await interaction.response.edit_message(embed=updated, view=view)
+
+
+class ApplicationReviewView(discord.ui.View):
+    def __init__(self, applicant_id: int) -> None:
+        super().__init__(timeout=None)
+        self.applicant_id = applicant_id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if not isinstance(interaction.user, discord.Member):
+            await interaction.response.send_message("Only staff can review applications.", ephemeral=True)
+            return False
+        if not interaction.user.guild_permissions.manage_guild:
+            await interaction.response.send_message("You need Manage Server permission.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="Approve", style=discord.ButtonStyle.green)
+    async def approve(self, button: discord.ui.Button, interaction: discord.Interaction) -> None:
+        await interaction.response.send_modal(ApplicationDecisionModal(self.applicant_id, "approve"))
+
+    @discord.ui.button(label="Deny", style=discord.ButtonStyle.red)
+    async def deny(self, button: discord.ui.Button, interaction: discord.Interaction) -> None:
+        await interaction.response.send_modal(ApplicationDecisionModal(self.applicant_id, "deny"))
+
+
 @bot.event
 async def on_ready() -> None:
     activity = discord.Activity(type=discord.ActivityType.watching, name=STATUS_TEXT)
@@ -96,6 +277,28 @@ async def on_message(message: discord.Message) -> None:
     if message.author.bot or message.guild is None:
         await bot.process_commands(message)
         return
+
+    message_text = (message.content or "").strip()
+    lowered_text = message_text.lower()
+
+    if lowered_text in {"trigger words off", "trrigger words off"}:
+        trigger_words_enabled[message.author.id] = False
+        await message.channel.send("Trigger words are now off [OFF].")
+        await bot.process_commands(message)
+        return
+
+    if lowered_text in {"trigger words on", "trrigger words on"}:
+        trigger_words_enabled[message.author.id] = True
+        await message.channel.send("Trigger words are now on [ON].")
+        await bot.process_commands(message)
+        return
+
+    if (
+        trigger_words_enabled[message.author.id]
+        and not message_text.startswith(PREFIX)
+        and lowered_text in {"application", "apply"}
+    ):
+        await message.channel.send(embed=build_application_prompt_embed())
 
     banned_word = get_insta_ban_word(message.content)
     if banned_word is not None:
@@ -272,6 +475,10 @@ async def help_command(ctx: commands.Context) -> None:
         "**YCF Bot Commands**\n"
         f"`{PREFIX}ping` - Check bot latency\n"
         f"`{PREFIX}help` - Show this command list\n"
+        f"`{PREFIX}applications` - Show application info\n"
+        f"`{PREFIX}apply` or `{PREFIX}application` - Start mod application in DMs\n"
+        f"`{PREFIX}settigns` - Trigger-word settings\n"
+        f"`{PREFIX}myid` - Show your user ID\n"
         f"`{PREFIX}tick` - Send friendly tick announcement\n"
         f"`{PREFIX}ticklg <time> <date> <format> <against> <cup> <reward>` - Send league game tick announcement\n"
         f"`{PREFIX}ban @user <reason>` - Ban a member\n"
@@ -281,6 +488,134 @@ async def help_command(ctx: commands.Context) -> None:
         f"`{PREFIX}timeout @user <duration> <reason>` - Timeout a member (10m, 2h, 1d)\n"
         f"`{PREFIX}vcmove @user <channel_link>` - Move user to voice channel"
     )
+
+
+@bot.command(name="applications")
+async def applications_info(ctx: commands.Context) -> None:
+    await ctx.send(embed=build_application_prompt_embed())
+
+
+@bot.command(name="settigns")
+async def settings_command(ctx: commands.Context) -> None:
+    await ctx.send(embed=build_settings_embed(ctx.author), view=TriggerWordsView())
+
+
+@bot.command(name="myid")
+async def myid_command(ctx: commands.Context) -> None:
+    await ctx.send(f"Your Discord ID is: `{ctx.author.id}`")
+
+
+@bot.command(name="apply", aliases=["application"])
+async def apply_command(ctx: commands.Context) -> None:
+    dm_channel = await ctx.author.create_dm()
+
+    await dm_channel.send(
+        "Welcome to the Santos C.F. Moderation Application. Please answer each question one by one. "
+        "You have 15 minutes per question. If you agree say \"I agree to the following\" "
+        "If you do not your application will end."
+    )
+
+    def dm_check(dm_message: discord.Message) -> bool:
+        return dm_message.author.id == ctx.author.id and dm_message.channel.id == dm_channel.id
+
+    try:
+        agreement = await bot.wait_for("message", timeout=900, check=dm_check)
+    except asyncio.TimeoutError:
+        await dm_channel.send("Application ended due to timeout.")
+        return
+
+    if agreement.content.strip().lower() != "i agree to the following":
+        await dm_channel.send("Application ended because agreement was not confirmed.")
+        return
+
+    answers: list[str] = []
+    for question in APPLICATION_QUESTIONS:
+        await dm_channel.send(question)
+        try:
+            answer = await bot.wait_for("message", timeout=900, check=dm_check)
+        except asyncio.TimeoutError:
+            await dm_channel.send("Application ended due to timeout.")
+            return
+        answers.append(answer.content.strip() or "[No answer]")
+
+    await dm_channel.send("Thank you. Your staff application has been submitted to staff.")
+
+    log_channel = ctx.guild.get_channel(APPLICATION_LOG_CHANNEL_ID) if ctx.guild else None
+    if not isinstance(log_channel, discord.TextChannel):
+        await dm_channel.send("I could not find the staff application review channel.")
+        return
+
+    application_embed = discord.Embed(
+        title="Staff Application Submission",
+        color=discord.Color.blue(),
+        timestamp=discord.utils.utcnow(),
+    )
+    application_embed.add_field(name="Applicant", value=ctx.author.mention, inline=False)
+    application_embed.add_field(name="Applicant ID", value=str(ctx.author.id), inline=False)
+
+    for index, question in enumerate(APPLICATION_QUESTIONS):
+        short_question = question.split("\n", 1)[0]
+        answer_text = answers[index][:1024]
+        application_embed.add_field(name=short_question, value=answer_text, inline=False)
+
+    application_embed.add_field(
+        name="Staff Review",
+        value=(
+            "Use buttons below to approve or deny with a reason.\n"
+            f"Fallback: `{PREFIX}appapprove {ctx.author.id} <reason>` or `{PREFIX}appdeny {ctx.author.id} <reason>`"
+        ),
+        inline=False,
+    )
+    application_embed.set_footer(text="Application status: Pending")
+
+    await log_channel.send(embed=application_embed, view=ApplicationReviewView(ctx.author.id))
+
+
+@bot.command(name="appapprove")
+@commands.has_permissions(manage_guild=True)
+async def appapprove_command(ctx: commands.Context, user: discord.User, *, reason: str) -> None:
+    approve_embed = discord.Embed(
+        title="Application Approved",
+        description=(
+            "Congratulations, your Santos C.F. moderator application has been approved.\n\n"
+            f"Reason: {reason}\n\n"
+            "Staff Information: Please check all staff channels, follow staff rules, "
+            "and contact leadership if you need onboarding help."
+        ),
+        color=discord.Color.green(),
+        timestamp=discord.utils.utcnow(),
+    )
+
+    try:
+        await user.send(embed=approve_embed)
+    except discord.Forbidden:
+        await ctx.send("Approved, but I could not DM that user.")
+        return
+
+    await ctx.send(f"Approved application for {user.mention}. Reason sent in DM.")
+
+
+@bot.command(name="appdeny")
+@commands.has_permissions(manage_guild=True)
+async def appdeny_command(ctx: commands.Context, user: discord.User, *, reason: str) -> None:
+    deny_embed = discord.Embed(
+        title="Application Denied",
+        description=(
+            "Your Santos C.F. moderator application has been denied.\n\n"
+            f"Reason: {reason}\n\n"
+            "You can improve based on this feedback and re-apply in 7 days."
+        ),
+        color=discord.Color.red(),
+        timestamp=discord.utils.utcnow(),
+    )
+
+    try:
+        await user.send(embed=deny_embed)
+    except discord.Forbidden:
+        await ctx.send("Denied, but I could not DM that user.")
+        return
+
+    await ctx.send(f"Denied application for {user.mention}. Reason sent in DM.")
 
 
 @bot.command(name="tick")
@@ -458,6 +793,8 @@ async def move_voice_member(ctx: commands.Context, member: discord.Member, chann
 @warn_member.error
 @timeout_member.error
 @move_voice_member.error
+@appapprove_command.error
+@appdeny_command.error
 async def moderation_command_error(ctx: commands.Context, error: commands.CommandError) -> None:
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("You do not have permission to use this command.")
