@@ -582,6 +582,29 @@ async def modmail(ctx):
     
     await ctx.send(embed=embed)
 
+
+@bot.command(name='cmds', aliases=['commands'])
+async def cmds(ctx):
+    """List all ModMail commands"""
+    embed = discord.Embed(
+        title="ModMail Command List",
+        color=discord.Color.blurple(),
+        timestamp=datetime.utcnow(),
+    )
+    embed.description = (
+        "Use either `-` or `s!` as the prefix.\n\n"
+        "`-cmds` - Show this command list\n"
+        "`-modmail` - Show ModMail info\n"
+        "`-tickets` - List open tickets\n"
+        "`-close` - Close current ticket channel\n"
+        "`-reply <message>` - Reply to ticket user\n"
+        "`-ban <user> <reason>` - Ban user in appeal server\n"
+        "`-unban <user> <reason>` - Unban user in appeal server\n"
+        "`-banappeal <user> <reason>` - Notify main server staff of appeal\n"
+        "`-restart_bot` - Restart ModMail bot (admin)"
+    )
+    await ctx.send(embed=embed)
+
 @bot.command()
 async def restart_bot(ctx):
     """Restart the ModMail bot (Admin only)"""
