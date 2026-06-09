@@ -13,8 +13,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 TOKEN = os.getenv("YCF_BOT_TOKEN", "")
-PREFIX = os.getenv("YCF_BOT_PREFIX", "!")
-STATUS_TEXT = os.getenv("YCF_BOT_STATUS", "Running YCF Bot")
+PREFIX = os.getenv("YCF_BOT_PREFIX", "?")
+STATUS_TEXT = os.getenv("YCF_BOT_STATUS", "Running SCF Bot")
 
 intents = discord.Intents.default()
 intents.message_content = True
