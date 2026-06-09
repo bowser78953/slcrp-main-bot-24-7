@@ -368,10 +368,10 @@ async def handle_dm(message):
         
         if channel:
             content_text = message.content.strip() if message.content else "[No text content]"
-            forward_lines = [f"{user.mention} ({user.id}): {content_text}"]
+            forward_lines = [f"**{user.name}** Sent: {content_text}"]
             if message.attachments:
                 for attachment in message.attachments:
-                    forward_lines.append(f"Attachment: {attachment.url}")
+                    forward_lines.append(f"**{user.name}** Sent: {attachment.url}")
 
             await channel.send("\n".join(forward_lines))
             await message.add_reaction('✅')
@@ -424,10 +424,10 @@ async def handle_dm(message):
     
     # Send user's first message as plain text in the ticket channel.
     content_text = message.content.strip() if message.content else "[No text content]"
-    first_lines = [f"{user.mention} ({user.id}): {content_text}"]
+    first_lines = [f"**{user.name}** Sent: {content_text}"]
     if message.attachments:
         for attachment in message.attachments:
-            first_lines.append(f"Attachment: {attachment.url}")
+            first_lines.append(f"**{user.name}** Sent: {attachment.url}")
 
     await ticket_channel.send("\n".join(first_lines))
     
@@ -503,10 +503,10 @@ async def handle_ticket_reply(message):
     # Send staff message in the screenshot style.
     content_text = message.content.strip() if message.content else "[No text content]"
     staff_tag = format_staff_tag(message.author)
-    dm_lines = [f"Staff {staff_tag}: {content_text}"]
+    dm_lines = [f"`Staff` **{staff_tag}** Sent: {content_text}"]
     if message.attachments:
         for attachment in message.attachments:
-            dm_lines.append(f"Staff {staff_tag}: {attachment.url}")
+            dm_lines.append(f"`Staff` **{staff_tag}** Sent: {attachment.url}")
 
     try:
         await user.send("\n".join(dm_lines))
@@ -546,7 +546,7 @@ async def reply(ctx, *, message: str):
     
     # Send message in the screenshot style.
     try:
-        await user.send(f"Staff {format_staff_tag(ctx.author)}: {message}")
+        await user.send(f"`Staff` **{format_staff_tag(ctx.author)}** Sent: {message}")
         await ctx.message.delete()
         await ctx.send("✅ Message sent!", delete_after=3)
     except discord.Forbidden:
@@ -696,9 +696,9 @@ async def ban(ctx, target: str, *, reason: str = "No reason provided"):
         try:
             staff_tag = format_staff_tag(ctx.author)
             invite_link = await get_ban_appeal_invite_url(guild)
-            await user.send(f"Staff {staff_tag}: {reason}")
+            await user.send(f"`Staff` **{staff_tag}** Sent: {reason}")
             if invite_link:
-                await user.send(f"Staff {staff_tag}: {invite_link}")
+                await user.send(f"`Staff` **{staff_tag}** Sent: {invite_link}")
             await user.send(embed=build_blocked_banned_embed())
         except:
             pass  # User has DMs disabled
@@ -775,11 +775,11 @@ async def unban(ctx, target: str, *, reason: str = "No reason provided"):
         try:
             staff_tag = format_staff_tag(ctx.author)
             invite_link = await get_ban_appeal_invite_url(guild)
-            await user.send(f"Staff {staff_tag}: Unbanned.")
+            await user.send(f"`Staff` **{staff_tag}** Sent: Unbanned.")
             if invite_link:
-                await user.send(f"Staff {staff_tag}: {invite_link}")
+                await user.send(f"`Staff` **{staff_tag}** Sent: {invite_link}")
             await user.send(
-                f"Staff {staff_tag}: You are unbanned. You may rejoin your departments if they allow it via tickets inside your previous WL Departments."
+                f"`Staff` **{staff_tag}** Sent: You are unbanned. You may rejoin your departments if they allow it via tickets inside your previous WL Departments."
             )
         except:
             pass  # User has DMs disabled
