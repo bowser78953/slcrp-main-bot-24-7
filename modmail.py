@@ -374,7 +374,6 @@ async def handle_dm(message):
                     forward_lines.append(f"**{user.name}** Sent: {attachment.url}")
 
             await channel.send("\n".join(forward_lines))
-            await message.add_reaction('✅')
             return
     
     # Create new ticket
@@ -443,7 +442,6 @@ async def handle_dm(message):
         timestamp=datetime.utcnow(),
     )
     await message.author.send(embed=opened_embed)
-    await message.add_reaction('✅')
     
     # Log in log channel
     log_channel = discord.utils.get(guild.text_channels, name=LOG_CHANNEL_NAME)
@@ -487,7 +485,6 @@ async def handle_ticket_reply(message):
         and any(role.id == staff_role.id for role in message.role_mentions)
     )
     if opener_pinged_staff:
-        await message.add_reaction('✅')
         await close_ticket_channel(
             message.channel,
             message.author,
@@ -497,7 +494,6 @@ async def handle_ticket_reply(message):
 
     # Let the ticket opener type in-server without DM echoing to themselves.
     if message.author.id == user_id:
-        await message.add_reaction('✅')
         return
     
     # Send staff message in the screenshot style.
@@ -510,7 +506,6 @@ async def handle_ticket_reply(message):
 
     try:
         await user.send("\n".join(dm_lines))
-        await message.add_reaction('✅')
     except discord.Forbidden:
         await message.channel.send("❌ Cannot send message to user. They may have DMs disabled.")
 
