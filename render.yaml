@@ -11,6 +11,8 @@ services:
         sync: false
       - key: MODMAIL_TOKEN
         sync: false
+      - key: THIRD_BOT_TOKEN
+        sync: false
       - key: NEW_BOT_STATUS
         value: Watching over SLCRP
       - key: ERLC_API_KEY

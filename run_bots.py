@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 import signal
 import subprocess
 import sys
@@ -13,6 +14,13 @@ def start_process(script_name: str) -> subprocess.Popen:
 
 def main() -> int:
     processes: list[subprocess.Popen] = []
+
+    def maybe_start(script_name: str, token_env_var: str | None = None) -> None:
+        if token_env_var and not os.getenv(token_env_var):
+            print(f"Skipping {script_name}: missing {token_env_var}")
+            return
+        print(f"Starting {script_name}...")
+        processes.append(start_process(script_name))
 
     def stop_all() -> None:
         for process in processes:
@@ -34,9 +42,14 @@ def main() -> int:
     if hasattr(signal, "SIGTERM"):
         signal.signal(signal.SIGTERM, handle_signal)
 
-    print("Starting main bot and modmail bot...")
-    processes.append(start_process("bot_fresh_standalone.py"))
-    processes.append(start_process("modmail.py"))
+    print("Starting bot processes...")
+    maybe_start("bot_fresh_standalone.py", "NEW_BOT_TOKEN")
+    maybe_start("modmail.py", "MODMAIL_TOKEN")
+    maybe_start("bot_third.py", "THIRD_BOT_TOKEN")
+
+    if not processes:
+        print("No bot processes started. Set at least one bot token.")
+        return 1
 
     try:
         while True:
