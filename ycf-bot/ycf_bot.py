@@ -1,10 +1,7 @@
 import os
 import re
-import asyncio
 from collections import defaultdict, deque
-from datetime import datetime, timezone
 from datetime import timedelta
-from typing import Deque
 
 import discord
 from discord.ext import commands
@@ -13,8 +10,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 TOKEN = os.getenv("YCF_BOT_TOKEN", "")
-PREFIX = os.getenv("YCF_BOT_PREFIX", "?")
-STATUS_TEXT = os.getenv("YCF_BOT_STATUS", "Running SCF Bot")
+PREFIX = os.getenv("YCF_BOT_PREFIX", "!")
+STATUS_TEXT = os.getenv("YCF_BOT_STATUS", "Running YCF Bot")
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -24,36 +21,15 @@ bot = commands.Bot(command_prefix=PREFIX, intents=intents, help_command=None)
 SPAM_MESSAGE_COUNT = 4
 SPAM_WINDOW_SECONDS = 4
 SPAM_NOTIFICATION_CHANNEL_ID = 1510463018717413386
-SPAM_LOG_CHANNEL_ID = 1513995796151013486
 CM_NOTIFICATION_CHANNEL_ID = 1510463018717413386
 INSTA_BAN_WORDS = {"cunt", "nigger", "nigga", "whore", "pussy", "cock"}
-APPLICATION_LOG_CHANNEL_ID = 1514004708497424454
-
-LOCKDOWN_ROLE_ID = 1513997243915436142
-TICK_COMMAND_ROLE_ID = 1513997062306267167
-SPAM_BYPASS_ROLE_ID = 1513996972074340452
-AUTOMOD_BYPASS_ROLE_ID = 1513996922749325464
-BAN_ROLE_ID = 1513997158108364921
-UNBAN_ROLE_ID = 1513997196436050080
+BOT_MANAGER_PANEL_CHANNEL_ID = 1514012975499837460
+BOT_MANAGER_TICKET_CATEGORY_ID = 1514013394775052429
+BOT_MANAGER_PING_USER_ID = 1332458947067773072
 
 # Track recent message times and warning count per user for anti-spam handling.
-spam_message_times: dict[int, Deque[tuple[float, str]]] = defaultdict(deque)
+spam_message_times: dict[int, deque[float]] = defaultdict(deque)
 spam_warning_counts: dict[int, int] = defaultdict(int)
-trigger_words_enabled: dict[int, bool] = defaultdict(lambda: True)
-channel_lock_original_send: dict[int, bool | None] = {}
-
-APPLICATION_QUESTIONS = [
-    "1. Question 1: What is your Discord username and user ID?\n-# Do !myid to get your discord ID",
-    "2. Question 2: How old are you?",
-    "3. Question 3: What timezone are you in?",
-    "4. Question 4: How active are you on a scale of 1-10?",
-    "5. Question 5: What moderation experience do you have?",
-    "6. Question 6: Why do you want to become Santos C.F. Modrator?",
-    "7. Question 7: How would you handle arguments between members?",
-    "8. Question 8: How would you handle a spammer or raider?",
-    "9. Question 9: Have you ever been punished in this server? Timedout? Warninged? Kicked? Baned?",
-    "10. Question 10: Anything else we should know about you?",
-]
 
 
 def parse_duration(duration: str) -> timedelta | None:
@@ -82,39 +58,6 @@ def parse_duration(duration: str) -> timedelta | None:
     return None
 
 
-def parse_lockdown_duration(duration: str) -> int | None:
-    value = duration.strip().lower()
-    if value == "forever":
-        return None
-
-    if len(value) < 2:
-        raise ValueError("Invalid duration format")
-
-    unit = value[-1]
-    amount_text = value[:-1]
-    if not amount_text.isdigit():
-        raise ValueError("Invalid duration format")
-
-    amount = int(amount_text)
-    if amount <= 0:
-        raise ValueError("Duration must be greater than zero")
-
-    if unit == "m":
-        return amount * 60
-    if unit == "h":
-        return amount * 3600
-    if unit == "d":
-        return amount * 86400
-    if unit == "w":
-        return amount * 604800
-
-    raise ValueError("Invalid duration unit")
-
-
-def member_has_role(member: discord.Member, role_id: int) -> bool:
-    return any(role.id == role_id for role in member.roles)
-
-
 def parse_channel_id(channel_input: str) -> int | None:
     value = channel_input.strip()
 
@@ -141,173 +84,131 @@ def get_insta_ban_word(content: str) -> str | None:
     return None
 
 
-def build_application_prompt_embed() -> discord.Embed:
+def sanitize_ticket_name(name: str) -> str:
+    cleaned = re.sub(r"[^a-z0-9-]", "-", name.lower())
+    cleaned = re.sub(r"-+", "-", cleaned).strip("-")
+    return cleaned or "user"
+
+
+def build_bot_manager_panel_embed() -> discord.Embed:
     embed = discord.Embed(
+        title="Bot Manager TIckets",
         description=(
-            "Want to apply to become a moderator? Say !apply or !application.\n"
-            "-# Note: Do !settigns and turn of trigger words if you are sick of these messages!"
+            "*Opening a Bot Manager Ticket shows you have found a bug or you have a suggestion fot the bot*\n"
+            f"**DO NOT ping <@{BOT_MANAGER_PING_USER_ID}> DO NOT Troll or you will be blacklisted from opening a ticket**"
         ),
         color=discord.Color.blue(),
     )
     return embed
 
 
-def build_settings_embed(user: discord.abc.User) -> discord.Embed:
-    enabled = trigger_words_enabled[user.id]
-    status = "Trigger Words 🟢" if enabled else "Trigger Words 🔴"
-    next_hint = (
-        "Trigger words off 🔴 (If off say Trrigger words on 🟢)"
-        if enabled
-        else "Trigger words on 🟢 (If off say Trrigger words on 🟢)"
-    )
-    embed = discord.Embed(
-        title=f"Here is {user.display_name} Settigns",
-        description=(
-            "Trigger Words 🟢=If on 🔴= If off\n"
-            f"Current: {status}\n"
-            f"{next_hint}"
-        ),
-        color=discord.Color.blue(),
-    )
-    return embed
-
-
-class TriggerWordsSelect(discord.ui.Select):
+class BotManagerTicketModal(discord.ui.Modal):
     def __init__(self) -> None:
-        super().__init__(
-            placeholder="Choose trigger word setting",
-            min_values=1,
-            max_values=1,
-            options=[
-                discord.SelectOption(
-                    label="Trigger words off [OFF]",
-                    value="off",
-                    description="Turn off application trigger replies",
-                ),
-                discord.SelectOption(
-                    label="Trigger words on [ON]",
-                    value="on",
-                    description="Turn on application trigger replies",
-                ),
-            ],
+        super().__init__(title="Open Bot Manager Ticket")
+
+        self.discord_user = discord.ui.InputText(
+            label="Discord user",
+            style=discord.InputTextStyle.short,
+            required=True,
+            max_length=100,
         )
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if self.values[0] == "off":
-            trigger_words_enabled[interaction.user.id] = False
-        else:
-            trigger_words_enabled[interaction.user.id] = True
-
-        embed = build_settings_embed(interaction.user)
-        await interaction.response.edit_message(embed=embed, view=TriggerWordsView())
-
-
-class TriggerWordsView(discord.ui.View):
-    def __init__(self) -> None:
-        super().__init__(timeout=300)
-        self.add_item(TriggerWordsSelect())
-
-
-class ApplicationDecisionModal(discord.ui.Modal):
-    def __init__(self, applicant_id: int, action: str) -> None:
-        super().__init__(title=f"Application {action.title()}")
-        self.applicant_id = applicant_id
-        self.action = action
-
-        self.reason = discord.ui.InputText(
-            label="Reason",
+        self.suggestion_or_bug = discord.ui.InputText(
+            label="Suggestion or Bug Fix??",
+            style=discord.InputTextStyle.short,
+            required=True,
+            max_length=120,
+        )
+        self.bug_or_suggestion = discord.ui.InputText(
+            label="Bug/Suggestion",
             style=discord.InputTextStyle.long,
             required=True,
             max_length=1000,
-            placeholder="Enter decision reason",
         )
-        self.add_item(self.reason)
+
+        self.add_item(self.discord_user)
+        self.add_item(self.suggestion_or_bug)
+        self.add_item(self.bug_or_suggestion)
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        reason_text = self.reason.value.strip()
-        decision = "Approved" if self.action == "approve" else "Denied"
-
-        try:
-            user = await bot.fetch_user(self.applicant_id)
-        except discord.HTTPException:
-            await interaction.response.send_message("Could not find that applicant.", ephemeral=True)
+        if interaction.guild is None or not isinstance(interaction.user, discord.Member):
+            await interaction.response.send_message("This can only be used in a server.", ephemeral=True)
             return
 
-        if self.action == "approve":
-            dm_embed = discord.Embed(
-                title="Application Approved",
-                description=(
-                    "Your staff application has been approved.\n\n"
-                    f"Reason: {reason_text}\n\n"
-                    "Information about staff: check your staff channels, follow staff guidance, "
-                    "and contact leadership if you need onboarding support."
-                ),
-                color=discord.Color.green(),
-                timestamp=discord.utils.utcnow(),
-            )
-        else:
-            dm_embed = discord.Embed(
-                title="Application Denied",
-                description=(
-                    "Your staff application has been denied.\n\n"
-                    f"Reason: {reason_text}\n\n"
-                    "You can re-apply in 7 days."
-                ),
-                color=discord.Color.red(),
-                timestamp=discord.utils.utcnow(),
+        guild = interaction.guild
+        member = interaction.user
+        category = guild.get_channel(BOT_MANAGER_TICKET_CATEGORY_ID)
+        if not isinstance(category, discord.CategoryChannel):
+            await interaction.response.send_message("Ticket category not found.", ephemeral=True)
+            return
+
+        base_name = f"{sanitize_ticket_name(member.name)}-bm-ticket"
+        channel_name = base_name
+        existing_names = {c.name for c in category.channels}
+        index = 2
+        while channel_name in existing_names:
+            channel_name = f"{base_name}-{index}"
+            index += 1
+
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(view_channel=False),
+            member: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
+            guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True, read_message_history=True),
+        }
+
+        manager_user = guild.get_member(BOT_MANAGER_PING_USER_ID)
+        if manager_user is not None:
+            overwrites[manager_user] = discord.PermissionOverwrite(
+                view_channel=True,
+                send_messages=True,
+                read_message_history=True,
             )
 
-        dm_status = "DM sent"
         try:
-            await user.send(embed=dm_embed)
+            ticket_channel = await guild.create_text_channel(
+                name=channel_name,
+                category=category,
+                overwrites=overwrites,
+                reason=f"Bot Manager ticket opened by {member}",
+            )
         except discord.Forbidden:
-            dm_status = "Could not DM applicant"
+            await interaction.response.send_message("I do not have permission to create ticket channels.", ephemeral=True)
+            return
 
-        if interaction.message and interaction.message.embeds:
-            updated = interaction.message.embeds[0]
-        else:
-            updated = discord.Embed(title="Staff Application Submission")
+        opened_embed = discord.Embed(
+            title="Bot Manager Ticket Opened!",
+            description=(
+                f"Hello, {member.mention}\n\n"
+                "Your ticket has been opened, thank you for reaching out.\n"
+                "Someone from our team will be in touch with you shortly.\n\n"
+                "⚠️**Note: all messages will be recorded and saved to our ticket transcript, do not share any sensitive information.**"
+            ),
+            color=discord.Color.blue(),
+            timestamp=discord.utils.utcnow(),
+        )
+        opened_embed.add_field(name="Discord User", value=self.discord_user.value[:1024], inline=False)
+        opened_embed.add_field(name="Suggestion or Bug Fix", value=self.suggestion_or_bug.value[:1024], inline=False)
+        opened_embed.add_field(name="Bug/Suggestio", value=self.bug_or_suggestion.value[:1024], inline=False)
 
-        updated.color = discord.Color.green() if self.action == "approve" else discord.Color.red()
-        updated.add_field(name="Decision", value=decision, inline=True)
-        updated.add_field(name="Handled By", value=interaction.user.mention, inline=True)
-        updated.add_field(name="Decision Reason", value=reason_text[:1024], inline=False)
-        updated.add_field(name="Applicant DM", value=dm_status, inline=False)
-        updated.set_footer(text=f"Application status: {decision}")
-
-        view = ApplicationReviewView(self.applicant_id)
-        for item in view.children:
-            if isinstance(item, discord.ui.Button):
-                item.disabled = True
-
-        await interaction.response.edit_message(embed=updated, view=view)
+        await ticket_channel.send(
+            f"<@{BOT_MANAGER_PING_USER_ID}>",
+            embed=opened_embed,
+            allowed_mentions=discord.AllowedMentions(users=True),
+        )
+        await interaction.response.send_message(f"Ticket created: {ticket_channel.mention}", ephemeral=True)
 
 
-class ApplicationReviewView(discord.ui.View):
-    def __init__(self, applicant_id: int) -> None:
+class BotManagerTicketView(discord.ui.View):
+    def __init__(self) -> None:
         super().__init__(timeout=None)
-        self.applicant_id = applicant_id
 
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if not isinstance(interaction.user, discord.Member):
-            await interaction.response.send_message("Only staff can review applications.", ephemeral=True)
-            return False
-        if not interaction.user.guild_permissions.manage_guild:
-            await interaction.response.send_message("You need Manage Server permission.", ephemeral=True)
-            return False
-        return True
-
-    @discord.ui.button(label="Approve", style=discord.ButtonStyle.green)
-    async def approve(self, button: discord.ui.Button, interaction: discord.Interaction) -> None:
-        await interaction.response.send_modal(ApplicationDecisionModal(self.applicant_id, "approve"))
-
-    @discord.ui.button(label="Deny", style=discord.ButtonStyle.red)
-    async def deny(self, button: discord.ui.Button, interaction: discord.Interaction) -> None:
-        await interaction.response.send_modal(ApplicationDecisionModal(self.applicant_id, "deny"))
+    @discord.ui.button(label="Open a Ticket!", style=discord.ButtonStyle.green, custom_id="bot_manager_open_ticket")
+    async def open_ticket(self, button: discord.ui.Button, interaction: discord.Interaction) -> None:
+        await interaction.response.send_modal(BotManagerTicketModal())
 
 
 @bot.event
 async def on_ready() -> None:
+    bot.add_view(BotManagerTicketView())
     activity = discord.Activity(type=discord.ActivityType.watching, name=STATUS_TEXT)
     await bot.change_presence(activity=activity)
     print(f"YCF Bot is online as {bot.user} (ID: {bot.user.id})")
@@ -319,33 +220,8 @@ async def on_message(message: discord.Message) -> None:
         await bot.process_commands(message)
         return
 
-    message_text = (message.content or "").strip()
-    lowered_text = message_text.lower()
-    role_ids = set()
-    if isinstance(message.author, discord.Member):
-        role_ids = {role.id for role in message.author.roles}
-
-    if lowered_text in {"trigger words off", "trrigger words off"}:
-        trigger_words_enabled[message.author.id] = False
-        await message.channel.send("Trigger words are now off [OFF].")
-        await bot.process_commands(message)
-        return
-
-    if lowered_text in {"trigger words on", "trrigger words on"}:
-        trigger_words_enabled[message.author.id] = True
-        await message.channel.send("Trigger words are now on [ON].")
-        await bot.process_commands(message)
-        return
-
-    if (
-        trigger_words_enabled[message.author.id]
-        and not message_text.startswith(PREFIX)
-        and lowered_text in {"application", "apply"}
-    ):
-        await message.channel.send(embed=build_application_prompt_embed())
-
     banned_word = get_insta_ban_word(message.content)
-    if banned_word is not None and AUTOMOD_BYPASS_ROLE_ID not in role_ids:
+    if banned_word is not None:
         member = message.author
 
         try:
@@ -384,20 +260,13 @@ async def on_message(message: discord.Message) -> None:
 
     user_id = message.author.id
     now_ts = message.created_at.timestamp()
-    preview = (message.content or "").strip()
-    if not preview:
-        preview = "[Attachment message]" if message.attachments else "[No text content]"
-    preview = preview.replace("`", "'")
-    if len(preview) > 140:
-        preview = preview[:137] + "..."
-
     history = spam_message_times[user_id]
 
-    history.append((now_ts, preview))
-    while history and (now_ts - history[0][0]) > SPAM_WINDOW_SECONDS:
+    history.append(now_ts)
+    while history and (now_ts - history[0]) > SPAM_WINDOW_SECONDS:
         history.popleft()
 
-    if len(history) >= SPAM_MESSAGE_COUNT and SPAM_BYPASS_ROLE_ID not in role_ids:
+    if len(history) >= SPAM_MESSAGE_COUNT:
         spam_warning_counts[user_id] += 1
         warning_count = spam_warning_counts[user_id]
         member = message.author
@@ -438,52 +307,8 @@ async def on_message(message: discord.Message) -> None:
 
         try:
             await member.timeout_for(timeout_delta, reason="Auto anti-spam enforcement")
-            timeout_result = f"User timed out for {timeout_delta}"
         except discord.Forbidden:
             await message.channel.send("I do not have permission to timeout that user.")
-            timeout_result = "Failed to timeout user (missing permissions or role hierarchy)"
-
-        recent_lines = []
-        for received_ts, recent_preview in list(history):
-            recent_lines.append(
-                f"[{datetime.fromtimestamp(received_ts, tz=timezone.utc).strftime('%H:%M:%S')}] {recent_preview}"
-            )
-
-        recent_messages_value = "\n".join(recent_lines)
-        if len(recent_messages_value) > 1024:
-            recent_messages_value = recent_messages_value[:1021] + "..."
-
-        spam_log_embed = discord.Embed(
-            title="Spam Attempt Detected",
-            color=discord.Color.blue(),
-            timestamp=discord.utils.utcnow(),
-        )
-        spam_log_embed.add_field(name="User", value=member.mention, inline=False)
-        spam_log_embed.add_field(name="User ID", value=str(member.id), inline=False)
-        spam_log_embed.add_field(
-            name=f"Messages in {SPAM_WINDOW_SECONDS}s",
-            value=str(len(history)),
-            inline=False,
-        )
-        spam_log_embed.add_field(name="Recent Messages", value=recent_messages_value, inline=False)
-        spam_log_embed.add_field(name="Channel", value=message.channel.mention, inline=False)
-        spam_log_embed.add_field(
-            name="Date",
-            value=discord.utils.format_dt(discord.utils.utcnow(), style="F"),
-            inline=False,
-        )
-        spam_log_embed.add_field(
-            name="Action",
-            value=f"Warning {warning_count}/5 | {timeout_result}",
-            inline=False,
-        )
-        if message.guild.icon:
-            spam_log_embed.set_thumbnail(url=message.guild.icon.url)
-        spam_log_embed.set_footer(text="SLCRP | Salt Lake City RP Anti-spam")
-
-        spam_log_channel = message.guild.get_channel(SPAM_LOG_CHANNEL_ID)
-        if isinstance(spam_log_channel, discord.TextChannel):
-            await spam_log_channel.send(embed=spam_log_embed)
 
         if warning_count >= 5:
             notify_channel = message.guild.get_channel(SPAM_NOTIFICATION_CHANNEL_ID)
@@ -519,10 +344,7 @@ async def help_command(ctx: commands.Context) -> None:
         "**YCF Bot Commands**\n"
         f"`{PREFIX}ping` - Check bot latency\n"
         f"`{PREFIX}help` - Show this command list\n"
-        f"`{PREFIX}applications` - Show application info\n"
-        f"`{PREFIX}apply` or `{PREFIX}application` - Start mod application in DMs\n"
-        f"`{PREFIX}settigns` - Trigger-word settings\n"
-        f"`{PREFIX}myid` - Show your user ID\n"
+        f"`{PREFIX}botmanagertickets` - Post Bot Manager ticket panel\n"
         f"`{PREFIX}tick` - Send friendly tick announcement\n"
         f"`{PREFIX}ticklg <time> <date> <format> <against> <cup> <reward>` - Send league game tick announcement\n"
         f"`{PREFIX}ban @user <reason>` - Ban a member\n"
@@ -534,140 +356,23 @@ async def help_command(ctx: commands.Context) -> None:
     )
 
 
-@bot.command(name="applications")
-async def applications_info(ctx: commands.Context) -> None:
-    await ctx.send(embed=build_application_prompt_embed())
-
-
-@bot.command(name="settigns")
-async def settings_command(ctx: commands.Context) -> None:
-    await ctx.send(embed=build_settings_embed(ctx.author), view=TriggerWordsView())
-
-
-@bot.command(name="myid")
-async def myid_command(ctx: commands.Context) -> None:
-    await ctx.send(f"Your Discord ID is: `{ctx.author.id}`")
-
-
-@bot.command(name="apply", aliases=["application"])
-async def apply_command(ctx: commands.Context) -> None:
-    dm_channel = await ctx.author.create_dm()
-
-    await dm_channel.send(
-        "Welcome to the Santos C.F. Moderation Application. Please answer each question one by one. "
-        "You have 15 minutes per question. If you agree say \"I agree to the following\" "
-        "If you do not your application will end."
-    )
-
-    def dm_check(dm_message: discord.Message) -> bool:
-        return dm_message.author.id == ctx.author.id and dm_message.channel.id == dm_channel.id
-
-    try:
-        agreement = await bot.wait_for("message", timeout=900, check=dm_check)
-    except asyncio.TimeoutError:
-        await dm_channel.send("Application ended due to timeout.")
+@bot.command(name="botmanagertickets", aliases=["bmtickets"])
+async def botmanagertickets_command(ctx: commands.Context) -> None:
+    if ctx.guild is None:
+        await ctx.send("This command can only be used in a server.")
         return
 
-    if agreement.content.strip().lower() != "i agree to the following":
-        await dm_channel.send("Application ended because agreement was not confirmed.")
+    panel_channel = ctx.guild.get_channel(BOT_MANAGER_PANEL_CHANNEL_ID)
+    if not isinstance(panel_channel, discord.TextChannel):
+        await ctx.send("Bot Manager panel channel not found.")
         return
 
-    answers: list[str] = []
-    for question in APPLICATION_QUESTIONS:
-        await dm_channel.send(question)
-        try:
-            answer = await bot.wait_for("message", timeout=900, check=dm_check)
-        except asyncio.TimeoutError:
-            await dm_channel.send("Application ended due to timeout.")
-            return
-        answers.append(answer.content.strip() or "[No answer]")
-
-    await dm_channel.send("Thank you. Your staff application has been submitted to staff.")
-
-    log_channel = ctx.guild.get_channel(APPLICATION_LOG_CHANNEL_ID) if ctx.guild else None
-    if not isinstance(log_channel, discord.TextChannel):
-        await dm_channel.send("I could not find the staff application review channel.")
-        return
-
-    application_embed = discord.Embed(
-        title="Staff Application Submission",
-        color=discord.Color.blue(),
-        timestamp=discord.utils.utcnow(),
-    )
-    application_embed.add_field(name="Applicant", value=ctx.author.mention, inline=False)
-    application_embed.add_field(name="Applicant ID", value=str(ctx.author.id), inline=False)
-
-    for index, question in enumerate(APPLICATION_QUESTIONS):
-        short_question = question.split("\n", 1)[0]
-        answer_text = answers[index][:1024]
-        application_embed.add_field(name=short_question, value=answer_text, inline=False)
-
-    application_embed.add_field(
-        name="Staff Review",
-        value=(
-            "Use buttons below to approve or deny with a reason.\n"
-            f"Fallback: `{PREFIX}appapprove {ctx.author.id} <reason>` or `{PREFIX}appdeny {ctx.author.id} <reason>`"
-        ),
-        inline=False,
-    )
-    application_embed.set_footer(text="Application status: Pending")
-
-    await log_channel.send(embed=application_embed, view=ApplicationReviewView(ctx.author.id))
-
-
-@bot.command(name="appapprove")
-@commands.has_permissions(manage_guild=True)
-async def appapprove_command(ctx: commands.Context, user: discord.User, *, reason: str) -> None:
-    approve_embed = discord.Embed(
-        title="Application Approved",
-        description=(
-            "Congratulations, your Santos C.F. moderator application has been approved.\n\n"
-            f"Reason: {reason}\n\n"
-            "Staff Information: Please check all staff channels, follow staff rules, "
-            "and contact leadership if you need onboarding help."
-        ),
-        color=discord.Color.green(),
-        timestamp=discord.utils.utcnow(),
-    )
-
-    try:
-        await user.send(embed=approve_embed)
-    except discord.Forbidden:
-        await ctx.send("Approved, but I could not DM that user.")
-        return
-
-    await ctx.send(f"Approved application for {user.mention}. Reason sent in DM.")
-
-
-@bot.command(name="appdeny")
-@commands.has_permissions(manage_guild=True)
-async def appdeny_command(ctx: commands.Context, user: discord.User, *, reason: str) -> None:
-    deny_embed = discord.Embed(
-        title="Application Denied",
-        description=(
-            "Your Santos C.F. moderator application has been denied.\n\n"
-            f"Reason: {reason}\n\n"
-            "You can improve based on this feedback and re-apply in 7 days."
-        ),
-        color=discord.Color.red(),
-        timestamp=discord.utils.utcnow(),
-    )
-
-    try:
-        await user.send(embed=deny_embed)
-    except discord.Forbidden:
-        await ctx.send("Denied, but I could not DM that user.")
-        return
-
-    await ctx.send(f"Denied application for {user.mention}. Reason sent in DM.")
+    await panel_channel.send(embed=build_bot_manager_panel_embed(), view=BotManagerTicketView())
+    await ctx.send(f"Bot Manager panel posted in {panel_channel.mention}.")
 
 
 @bot.command(name="tick")
 async def tick_announcement(ctx: commands.Context) -> None:
-    if not isinstance(ctx.author, discord.Member) or not member_has_role(ctx.author, TICK_COMMAND_ROLE_ID):
-        await ctx.send("You do not have permission to use this command.")
-        return
-
     message = (
         "|| @everyone ||\n\n"
         "|| @here ||  || <@&1494905919740579987>     ||  ||  @here ||\n\n"
@@ -697,10 +402,6 @@ async def tick_league_game(
     *,
     reward: str,
 ) -> None:
-    if not isinstance(ctx.author, discord.Member) or not member_has_role(ctx.author, TICK_COMMAND_ROLE_ID):
-        await ctx.send("You do not have permission to use this command.")
-        return
-
     message = (
         "@everyone @here\n"
         "**LEAGUE GAME**\n"
@@ -730,11 +431,8 @@ async def tick_league_game(
 
 
 @bot.command(name="ban")
+@commands.has_permissions(ban_members=True)
 async def ban_member(ctx: commands.Context, member: discord.Member, *, reason: str) -> None:
-    if not isinstance(ctx.author, discord.Member) or not member_has_role(ctx.author, BAN_ROLE_ID):
-        await ctx.send("You do not have permission to use this command.")
-        return
-
     if member == ctx.author:
         await ctx.send("You cannot ban yourself.")
         return
@@ -748,11 +446,8 @@ async def ban_member(ctx: commands.Context, member: discord.Member, *, reason: s
 
 
 @bot.command(name="unban")
+@commands.has_permissions(ban_members=True)
 async def unban_member(ctx: commands.Context, user: str, *, reason: str) -> None:
-    if not isinstance(ctx.author, discord.Member) or not member_has_role(ctx.author, UNBAN_ROLE_ID):
-        await ctx.send("You do not have permission to use this command.")
-        return
-
     user = user.strip()
     if user.startswith("<@") and user.endswith(">"):
         user = user.replace("<@", "").replace("!", "").replace(">", "")
@@ -825,11 +520,8 @@ async def timeout_member(
 
 
 @bot.command(name="vcmove")
+@commands.has_permissions(move_members=True)
 async def move_voice_member(ctx: commands.Context, member: discord.Member, channel_link: str) -> None:
-    if not isinstance(ctx.author, discord.Member) or not member_has_role(ctx.author, TICK_COMMAND_ROLE_ID):
-        await ctx.send("You do not have permission to use this command.")
-        return
-
     channel_id = parse_channel_id(channel_link)
     if channel_id is None:
         await ctx.send("Invalid channel link. Use a voice channel mention or Discord channel URL.")
@@ -848,89 +540,12 @@ async def move_voice_member(ctx: commands.Context, member: discord.Member, chann
     await ctx.send(f"Moved {member.mention} to {channel.mention}.")
 
 
-async def unlock_channel_later(
-    guild: discord.Guild,
-    channels: list[discord.TextChannel],
-    seconds: int,
-) -> None:
-    await asyncio.sleep(seconds)
-    default_role = guild.default_role
-
-    for channel in channels:
-        overwrite = channel.overwrites_for(default_role)
-        original_send = channel_lock_original_send.get(channel.id)
-        overwrite.send_messages = original_send
-        try:
-            await channel.set_permissions(default_role, overwrite=overwrite, reason="Lockdown expired")
-        except discord.Forbidden:
-            continue
-
-
-@bot.command(name="lockdown")
-async def lockdown_command(ctx: commands.Context, channel_target: str, duration: str) -> None:
-    if ctx.guild is None or not isinstance(ctx.author, discord.Member):
-        await ctx.send("This command can only be used in a server.")
-        return
-
-    if not member_has_role(ctx.author, LOCKDOWN_ROLE_ID):
-        await ctx.send("You do not have permission to use this command.")
-        return
-
-    try:
-        duration_seconds = parse_lockdown_duration(duration)
-    except ValueError:
-        await ctx.send("Invalid duration. Use 1m, 1h, 1d, 1w, or Forever.")
-        return
-
-    channels_to_lock: list[discord.TextChannel] = []
-    if channel_target.lower() == "all":
-        channels_to_lock = list(ctx.guild.text_channels)
-    else:
-        channel_id = parse_channel_id(channel_target)
-        if channel_id is None:
-            await ctx.send("Invalid channel ID. Use a valid channel ID, mention, or `all`.")
-            return
-
-        target_channel = ctx.guild.get_channel(channel_id)
-        if not isinstance(target_channel, discord.TextChannel):
-            await ctx.send("Channel not found or not a text channel.")
-            return
-        channels_to_lock = [target_channel]
-
-    default_role = ctx.guild.default_role
-    locked_count = 0
-    for channel in channels_to_lock:
-        overwrite = channel.overwrites_for(default_role)
-        if channel.id not in channel_lock_original_send:
-            channel_lock_original_send[channel.id] = overwrite.send_messages
-
-        overwrite.send_messages = False
-        try:
-            await channel.set_permissions(default_role, overwrite=overwrite, reason=f"Lockdown by {ctx.author}")
-            locked_count += 1
-        except discord.Forbidden:
-            continue
-
-    if locked_count == 0:
-        await ctx.send("I could not lock any channels due to missing permissions.")
-        return
-
-    if duration_seconds is None:
-        await ctx.send(f"Locked {locked_count} channel(s) indefinitely.")
-        return
-
-    asyncio.create_task(unlock_channel_later(ctx.guild, channels_to_lock, duration_seconds))
-    await ctx.send(f"Locked {locked_count} channel(s) for {duration}.")
-
-
 @ban_member.error
 @unban_member.error
 @kick_member.error
 @warn_member.error
 @timeout_member.error
 @move_voice_member.error
-@appapprove_command.error
-@appdeny_command.error
 async def moderation_command_error(ctx: commands.Context, error: commands.CommandError) -> None:
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("You do not have permission to use this command.")
