@@ -1,0 +1,15 @@
+services:
+  - type: worker
+    name: ycf-bot
+    runtime: python
+    buildCommand: python -m pip install -r requirements.txt
+    startCommand: python ycf_bot.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.4
+      - key: YCF_BOT_TOKEN
+        sync: false
+      - key: YCF_BOT_PREFIX
+        value: '!'
+      - key: YCF_BOT_STATUS
+        value: Running YCF Bot
