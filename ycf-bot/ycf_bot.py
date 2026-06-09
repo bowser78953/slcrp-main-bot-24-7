@@ -29,6 +29,7 @@ BOT_MANAGER_TICKET_CATEGORY_ID = 1514013394775052429
 BOT_MANAGER_PING_USER_ID = 1332458947067773072
 EVERYONE_PING_INVITE_URL = "https://discord.gg/D7RZWT6BSw"
 AUTOMOD_BYPASS_ROLE_ID = int(os.getenv("YCF_AUTOMOD_BYPASS_ROLE_ID", "0") or "0")
+EVERYONE_PING_ALLOWED_ROLE_ID = 1513996922749325464
 EVERYONE_PING_OFFENSES_FILE = os.path.join(
     os.path.dirname(__file__), "..", "data", "everyone_ping_offenses.json"
 )
@@ -119,6 +120,9 @@ def get_insta_ban_word(content: str) -> str | None:
 
 def has_automod_bypass(member: discord.Member) -> bool:
     if AUTOMOD_BYPASS_ROLE_ID and any(role.id == AUTOMOD_BYPASS_ROLE_ID for role in member.roles):
+        return True
+
+    if any(role.id == EVERYONE_PING_ALLOWED_ROLE_ID for role in member.roles):
         return True
 
     bypass_names = {"automod bypass", "bypass automod"}
