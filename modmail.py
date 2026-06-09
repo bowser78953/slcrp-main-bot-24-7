@@ -388,7 +388,8 @@ async def handle_dm(message):
     # Set permissions
     overwrites = {
         guild.default_role: discord.PermissionOverwrite(read_messages=False),
-        guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+        guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True),
+        member: discord.PermissionOverwrite(read_messages=True, send_messages=True, attach_files=True)
     }
     
     # Add staff role if it exists
@@ -492,6 +493,11 @@ async def handle_ticket_reply(message):
             message.author,
             close_reason='Staff was pinged in the ticket channel',
         )
+        return
+
+    # Let the ticket opener type in-server without DM echoing to themselves.
+    if message.author.id == user_id:
+        await message.add_reaction('✅')
         return
     
     # Send staff message in the screenshot style.
