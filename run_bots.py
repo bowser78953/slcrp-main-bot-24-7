@@ -45,6 +45,7 @@ def main() -> int:
     print("Starting bot processes...")
     maybe_start("bot_fresh_standalone.py", "NEW_BOT_TOKEN")
     maybe_start("modmail.py", "MODMAIL_TOKEN")
+    maybe_start("ycf_bot.py", "YCF_BOT_TOKEN")
     maybe_start("bot_third.py", "THIRD_BOT_TOKEN")
 
     if not processes:
