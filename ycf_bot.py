@@ -1,4 +1,5 @@
 import os
+import json
 import re
 from collections import defaultdict, deque
 from datetime import timedelta
@@ -23,10 +24,46 @@ SPAM_WINDOW_SECONDS = 4
 SPAM_NOTIFICATION_CHANNEL_ID = 1510463018717413386
 CM_NOTIFICATION_CHANNEL_ID = 1510463018717413386
 INSTA_BAN_WORDS = {"cunt", "nigger", "nigga", "whore", "pussy", "cock"}
+BOT_MANAGER_PANEL_CHANNEL_ID = 1514012975499837460
+BOT_MANAGER_TICKET_CATEGORY_ID = 1514013394775052429
+BOT_MANAGER_PING_USER_ID = 1332458947067773072
+EVERYONE_PING_INVITE_URL = "https://discord.gg/D7RZWT6BSw"
+AUTOMOD_BYPASS_ROLE_ID = int(os.getenv("YCF_AUTOMOD_BYPASS_ROLE_ID", "0") or "0")
+EVERYONE_PING_ALLOWED_ROLE_ID = 1513996922749325464
+EVERYONE_PING_OFFENSES_FILE = os.path.join(
+    os.path.dirname(__file__), "..", "data", "everyone_ping_offenses.json"
+)
 
 # Track recent message times and warning count per user for anti-spam handling.
 spam_message_times: dict[int, deque[float]] = defaultdict(deque)
 spam_warning_counts: dict[int, int] = defaultdict(int)
+
+
+def load_everyone_ping_offenses() -> dict[int, int]:
+    try:
+        with open(EVERYONE_PING_OFFENSES_FILE, "r", encoding="utf-8") as file:
+            raw = json.load(file)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+    if not isinstance(raw, dict):
+        return {}
+
+    offenses: dict[int, int] = {}
+    for key, value in raw.items():
+        if str(key).isdigit() and isinstance(value, int) and value >= 0:
+            offenses[int(key)] = value
+    return offenses
+
+
+def save_everyone_ping_offenses(offenses: dict[int, int]) -> None:
+    os.makedirs(os.path.dirname(EVERYONE_PING_OFFENSES_FILE), exist_ok=True)
+    serializable = {str(user_id): count for user_id, count in offenses.items()}
+    with open(EVERYONE_PING_OFFENSES_FILE, "w", encoding="utf-8") as file:
+        json.dump(serializable, file, indent=2)
+
+
+everyone_ping_offenses: dict[int, int] = load_everyone_ping_offenses()
 
 
 def parse_duration(duration: str) -> timedelta | None:
@@ -81,8 +118,159 @@ def get_insta_ban_word(content: str) -> str | None:
     return None
 
 
+def has_automod_bypass(member: discord.Member) -> bool:
+    if AUTOMOD_BYPASS_ROLE_ID and any(role.id == AUTOMOD_BYPASS_ROLE_ID for role in member.roles):
+        return True
+
+    if any(role.id == EVERYONE_PING_ALLOWED_ROLE_ID for role in member.roles):
+        return True
+
+    bypass_names = {"automod bypass", "bypass automod"}
+    return any(role.name.strip().lower() in bypass_names for role in member.roles)
+
+
+async def send_everyone_ping_dm(member: discord.Member, guild_name: str, second_offense: bool) -> None:
+    title = "Second Offence" if second_offense else "First Offence"
+    if second_offense:
+        description = (
+            f"You have been banned from **{guild_name}** For Ping @everyone for the second time. "
+            "Ban Appeal server not opened yet."
+        )
+    else:
+        description = (
+            f"You have been kicked from **{guild_name}** For Pinging @everyone. "
+            f"You may re-join here: {EVERYONE_PING_INVITE_URL}"
+        )
+
+    embed = discord.Embed(title=title, description=description, color=discord.Color.red())
+    await member.send(member.mention, embed=embed)
+
+
+def sanitize_ticket_name(name: str) -> str:
+    cleaned = re.sub(r"[^a-z0-9-]", "-", name.lower())
+    cleaned = re.sub(r"-+", "-", cleaned).strip("-")
+    return cleaned or "user"
+
+
+def build_bot_manager_panel_embed() -> discord.Embed:
+    embed = discord.Embed(
+        title="Bot Manager TIckets",
+        description=(
+            "*Opening a Bot Manager Ticket shows you have found a bug or you have a suggestion fot the bot*\n"
+            f"**DO NOT ping <@{BOT_MANAGER_PING_USER_ID}> DO NOT Troll or you will be blacklisted from opening a ticket**"
+        ),
+        color=discord.Color.blue(),
+    )
+    return embed
+
+
+class BotManagerTicketModal(discord.ui.Modal):
+    def __init__(self) -> None:
+        super().__init__(title="Open Bot Manager Ticket")
+
+        self.discord_user = discord.ui.InputText(
+            label="Discord user",
+            style=discord.InputTextStyle.short,
+            required=True,
+            max_length=100,
+        )
+        self.suggestion_or_bug = discord.ui.InputText(
+            label="Suggestion or Bug Fix??",
+            style=discord.InputTextStyle.short,
+            required=True,
+            max_length=120,
+        )
+        self.bug_or_suggestion = discord.ui.InputText(
+            label="Bug/Suggestion",
+            style=discord.InputTextStyle.long,
+            required=True,
+            max_length=1000,
+        )
+
+        self.add_item(self.discord_user)
+        self.add_item(self.suggestion_or_bug)
+        self.add_item(self.bug_or_suggestion)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if interaction.guild is None or not isinstance(interaction.user, discord.Member):
+            await interaction.response.send_message("This can only be used in a server.", ephemeral=True)
+            return
+
+        guild = interaction.guild
+        member = interaction.user
+        category = guild.get_channel(BOT_MANAGER_TICKET_CATEGORY_ID)
+        if not isinstance(category, discord.CategoryChannel):
+            await interaction.response.send_message("Ticket category not found.", ephemeral=True)
+            return
+
+        base_name = f"{sanitize_ticket_name(member.name)}-bm-ticket"
+        channel_name = base_name
+        existing_names = {c.name for c in category.channels}
+        index = 2
+        while channel_name in existing_names:
+            channel_name = f"{base_name}-{index}"
+            index += 1
+
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(view_channel=False),
+            member: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
+            guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True, read_message_history=True),
+        }
+
+        manager_user = guild.get_member(BOT_MANAGER_PING_USER_ID)
+        if manager_user is not None:
+            overwrites[manager_user] = discord.PermissionOverwrite(
+                view_channel=True,
+                send_messages=True,
+                read_message_history=True,
+            )
+
+        try:
+            ticket_channel = await guild.create_text_channel(
+                name=channel_name,
+                category=category,
+                overwrites=overwrites,
+                reason=f"Bot Manager ticket opened by {member}",
+            )
+        except discord.Forbidden:
+            await interaction.response.send_message("I do not have permission to create ticket channels.", ephemeral=True)
+            return
+
+        opened_embed = discord.Embed(
+            title="Bot Manager Ticket Opened!",
+            description=(
+                f"Hello, {member.mention}\n\n"
+                "Your ticket has been opened, thank you for reaching out.\n"
+                "Someone from our team will be in touch with you shortly.\n\n"
+                "⚠️**Note: all messages will be recorded and saved to our ticket transcript, do not share any sensitive information.**"
+            ),
+            color=discord.Color.blue(),
+            timestamp=discord.utils.utcnow(),
+        )
+        opened_embed.add_field(name="Discord User", value=self.discord_user.value[:1024], inline=False)
+        opened_embed.add_field(name="Suggestion or Bug Fix", value=self.suggestion_or_bug.value[:1024], inline=False)
+        opened_embed.add_field(name="Bug/Suggestio", value=self.bug_or_suggestion.value[:1024], inline=False)
+
+        await ticket_channel.send(
+            f"<@{BOT_MANAGER_PING_USER_ID}>",
+            embed=opened_embed,
+            allowed_mentions=discord.AllowedMentions(users=True),
+        )
+        await interaction.response.send_message(f"Ticket created: {ticket_channel.mention}", ephemeral=True)
+
+
+class BotManagerTicketView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Open a Ticket!", style=discord.ButtonStyle.green, custom_id="bot_manager_open_ticket")
+    async def open_ticket(self, button: discord.ui.Button, interaction: discord.Interaction) -> None:
+        await interaction.response.send_modal(BotManagerTicketModal())
+
+
 @bot.event
 async def on_ready() -> None:
+    bot.add_view(BotManagerTicketView())
     activity = discord.Activity(type=discord.ActivityType.watching, name=STATUS_TEXT)
     await bot.change_presence(activity=activity)
     print(f"YCF Bot is online as {bot.user} (ID: {bot.user.id})")
@@ -92,6 +280,48 @@ async def on_ready() -> None:
 async def on_message(message: discord.Message) -> None:
     if message.author.bot or message.guild is None:
         await bot.process_commands(message)
+        return
+
+    member = message.author
+    if (
+        isinstance(member, discord.Member)
+        and "@everyone" in message.content
+        and not has_automod_bypass(member)
+    ):
+        try:
+            await message.delete()
+        except discord.Forbidden:
+            pass
+
+        offense_count = everyone_ping_offenses.get(member.id, 0) + 1
+        everyone_ping_offenses[member.id] = offense_count
+        save_everyone_ping_offenses(everyone_ping_offenses)
+
+        is_second_or_more = offense_count >= 2
+        try:
+            await send_everyone_ping_dm(member, message.guild.name, second_offense=is_second_or_more)
+        except discord.Forbidden:
+            pass
+
+        if is_second_or_more:
+            try:
+                await member.ban(reason="Auto-ban for second @everyone ping offense")
+                await message.channel.send(
+                    f"{member.mention} was banned for a second @everyone ping offense.",
+                    allowed_mentions=discord.AllowedMentions(users=True),
+                )
+            except discord.Forbidden:
+                await message.channel.send("I do not have permission to ban that user.")
+            return
+
+        try:
+            await member.kick(reason="Auto-kick for first @everyone ping offense")
+            await message.channel.send(
+                f"{member.mention} was kicked for pinging @everyone.",
+                allowed_mentions=discord.AllowedMentions(users=True),
+            )
+        except discord.Forbidden:
+            await message.channel.send("I do not have permission to kick that user.")
         return
 
     banned_word = get_insta_ban_word(message.content)
@@ -218,6 +448,7 @@ async def help_command(ctx: commands.Context) -> None:
         "**YCF Bot Commands**\n"
         f"`{PREFIX}ping` - Check bot latency\n"
         f"`{PREFIX}help` - Show this command list\n"
+        f"`{PREFIX}botmanagertickets` - Post Bot Manager ticket panel\n"
         f"`{PREFIX}tick` - Send friendly tick announcement\n"
         f"`{PREFIX}ticklg <time> <date> <format> <against> <cup> <reward>` - Send league game tick announcement\n"
         f"`{PREFIX}ban @user <reason>` - Ban a member\n"
@@ -225,8 +456,25 @@ async def help_command(ctx: commands.Context) -> None:
         f"`{PREFIX}kick @user <reason>` - Kick a member\n"
         f"`{PREFIX}warn @user <reason>` - Warn a member\n"
         f"`{PREFIX}timeout @user <duration> <reason>` - Timeout a member (10m, 2h, 1d)\n"
-        f"`{PREFIX}vcmove @user <channel_link>` - Move user to voice channel"
+        f"`{PREFIX}vcmove @user <channel_link>` - Move user to voice channel\n"
+        f"`{PREFIX}closeticket <reason>` - Close the current ticket channel (staff only)\n"
+        f"`{PREFIX}closerequest` - Request this ticket be closed"
     )
+
+
+@bot.command(name="botmanagertickets", aliases=["bmtickets"])
+async def botmanagertickets_command(ctx: commands.Context) -> None:
+    if ctx.guild is None:
+        await ctx.send("This command can only be used in a server.")
+        return
+
+    panel_channel = ctx.guild.get_channel(BOT_MANAGER_PANEL_CHANNEL_ID)
+    if not isinstance(panel_channel, discord.TextChannel):
+        await ctx.send("Bot Manager panel channel not found.")
+        return
+
+    await panel_channel.send(embed=build_bot_manager_panel_embed(), view=BotManagerTicketView())
+    await ctx.send(f"Bot Manager panel posted in {panel_channel.mention}.")
 
 
 @bot.command(name="tick")
@@ -398,12 +646,58 @@ async def move_voice_member(ctx: commands.Context, member: discord.Member, chann
     await ctx.send(f"Moved {member.mention} to {channel.mention}.")
 
 
+@bot.command(name="closeticket")
+@commands.has_permissions(manage_channels=True)
+async def close_ticket(ctx: commands.Context, *, reason: str = "No reason provided") -> None:
+    """Close the current ticket channel by deleting it after a short confirmation."""
+    if ctx.guild is None:
+        return
+
+    channel = ctx.channel
+    if not isinstance(channel, discord.TextChannel):
+        await ctx.send("This command must be used inside a text channel.")
+        return
+
+    closing_embed = discord.Embed(
+        title="Ticket Closing",
+        description=f"This ticket is being closed by {ctx.author.mention}.\n**Reason:** {reason}",
+        color=discord.Color.orange(),
+        timestamp=discord.utils.utcnow(),
+    )
+    await ctx.send(embed=closing_embed)
+    await channel.delete(reason=f"Ticket closed by {ctx.author} — {reason}")
+
+
+@bot.command(name="closerequest")
+async def close_request(ctx: commands.Context) -> None:
+    """Request that the current ticket channel be closed (sends a close request for staff to action)."""
+    if ctx.guild is None:
+        return
+
+    channel = ctx.channel
+    if not isinstance(channel, discord.TextChannel):
+        await ctx.send("This command must be used inside a text channel.")
+        return
+
+    request_embed = discord.Embed(
+        title="Close Request",
+        description=(
+            f"{ctx.author.mention} has requested this ticket be closed.\n"
+            f"A staff member can use `{PREFIX}closeticket <reason>` to close it."
+        ),
+        color=discord.Color.yellow(),
+        timestamp=discord.utils.utcnow(),
+    )
+    await ctx.send(embed=request_embed)
+
+
 @ban_member.error
 @unban_member.error
 @kick_member.error
 @warn_member.error
 @timeout_member.error
 @move_voice_member.error
+@close_ticket.error
 async def moderation_command_error(ctx: commands.Context, error: commands.CommandError) -> None:
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("You do not have permission to use this command.")
