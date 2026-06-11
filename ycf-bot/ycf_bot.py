@@ -152,8 +152,18 @@ async def send_everyone_ping_log(message: discord.Message) -> None:
     if guild is None:
         return
 
-    log_channel = guild.get_channel(EVERYONE_PING_LOG_CHANNEL_ID)
-    if not isinstance(log_channel, discord.TextChannel):
+    log_channel = bot.get_channel(EVERYONE_PING_LOG_CHANNEL_ID) or guild.get_channel(
+        EVERYONE_PING_LOG_CHANNEL_ID
+    )
+    if log_channel is None:
+        try:
+            fetched_channel = await bot.fetch_channel(EVERYONE_PING_LOG_CHANNEL_ID)
+            if isinstance(fetched_channel, discord.abc.Messageable):
+                log_channel = fetched_channel
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            return
+
+    if not isinstance(log_channel, discord.abc.Messageable):
         return
 
     content_value = message.content if message.content.strip() else "(no text content)"
@@ -169,7 +179,10 @@ async def send_everyone_ping_log(message: discord.Message) -> None:
     embed.add_field(name="🪪User ID", value=str(message.author.id), inline=False)
     embed.add_field(name="💬Message", value=content_value, inline=False)
     embed.set_footer(text="SCL Anti @everyone Ping Log.")
-    await log_channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+    try:
+        await log_channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+    except (discord.Forbidden, discord.HTTPException):
+        return
 
 
 def sanitize_ticket_name(name: str) -> str:
