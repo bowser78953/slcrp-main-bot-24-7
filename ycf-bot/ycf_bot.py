@@ -30,6 +30,7 @@ BOT_MANAGER_PING_USER_ID = 1332458947067773072
 EVERYONE_PING_INVITE_URL = "https://discord.gg/D7RZWT6BSw"
 AUTOMOD_BYPASS_ROLE_ID = int(os.getenv("YCF_AUTOMOD_BYPASS_ROLE_ID", "0") or "0")
 EVERYONE_PING_ALLOWED_ROLE_ID = 1513996922749325464
+EVERYONE_PING_LOG_CHANNEL_ID = 1514462029786779759
 EVERYONE_PING_OFFENSES_FILE = os.path.join(
     os.path.dirname(__file__), "..", "data", "everyone_ping_offenses.json"
 )
@@ -144,6 +145,31 @@ async def send_everyone_ping_dm(member: discord.Member, guild_name: str, second_
 
     embed = discord.Embed(title=title, description=description, color=discord.Color.red())
     await member.send(member.mention, embed=embed)
+
+
+async def send_everyone_ping_log(message: discord.Message) -> None:
+    guild = message.guild
+    if guild is None:
+        return
+
+    log_channel = guild.get_channel(EVERYONE_PING_LOG_CHANNEL_ID)
+    if not isinstance(log_channel, discord.TextChannel):
+        return
+
+    content_value = message.content if message.content.strip() else "(no text content)"
+    if len(content_value) > 1024:
+        content_value = f"{content_value[:1021]}..."
+
+    embed = discord.Embed(
+        title="Anti @everyone Ping Log",
+        color=discord.Color.dark_red(),
+        timestamp=discord.utils.utcnow(),
+    )
+    embed.add_field(name="🙍User", value=message.author.mention, inline=False)
+    embed.add_field(name="🪪User ID", value=str(message.author.id), inline=False)
+    embed.add_field(name="💬Message", value=content_value, inline=False)
+    embed.set_footer(text="SCL Anti @everyone Ping Log.")
+    await log_channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
 
 
 def sanitize_ticket_name(name: str) -> str:
@@ -307,21 +333,23 @@ async def on_message(message: discord.Message) -> None:
             try:
                 await member.ban(reason="Auto-ban for second @everyone ping offense")
                 await message.channel.send(
-                    f"{member.mention} was banned for a second @everyone ping offense.",
-                    allowed_mentions=discord.AllowedMentions(users=True),
+                    f"{member.display_name} was banned for a second @everyone ping offense.",
+                    allowed_mentions=discord.AllowedMentions.none(),
                 )
             except discord.Forbidden:
                 await message.channel.send("I do not have permission to ban that user.")
+            await send_everyone_ping_log(message)
             return
 
         try:
             await member.kick(reason="Auto-kick for first @everyone ping offense")
             await message.channel.send(
-                f"{member.mention} was kicked for pinging @everyone.",
-                allowed_mentions=discord.AllowedMentions(users=True),
+                f"{member.display_name} was kicked for pinging @everyone.",
+                allowed_mentions=discord.AllowedMentions.none(),
             )
         except discord.Forbidden:
             await message.channel.send("I do not have permission to kick that user.")
+        await send_everyone_ping_log(message)
         return
 
     banned_word = get_insta_ban_word(message.content)
