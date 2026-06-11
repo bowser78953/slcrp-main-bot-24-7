@@ -146,12 +146,9 @@ async def send_everyone_ping_dm(member: discord.Member, guild_name: str, second_
     embed = discord.Embed(title=title, description=description, color=discord.Color.red())
     await member.send(member.mention, embed=embed)
 
-
-async def send_everyone_ping_log(message: discord.Message) -> None:
-    guild = message.guild
-    if guild is None:
-        return
-
+async def resolve_everyone_log_channel(
+    guild: discord.Guild,
+) -> tuple[discord.abc.Messageable | None, str | None]:
     log_channel = bot.get_channel(EVERYONE_PING_LOG_CHANNEL_ID) or guild.get_channel(
         EVERYONE_PING_LOG_CHANNEL_ID
     )
@@ -160,11 +157,29 @@ async def send_everyone_ping_log(message: discord.Message) -> None:
             fetched_channel = await bot.fetch_channel(EVERYONE_PING_LOG_CHANNEL_ID)
             if isinstance(fetched_channel, discord.abc.Messageable):
                 log_channel = fetched_channel
-        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-            return
+            else:
+                return None, "Fetched channel is not messageable"
+        except discord.NotFound:
+            return None, "Log channel not found"
+        except discord.Forbidden:
+            return None, "Missing access to log channel"
+        except discord.HTTPException:
+            return None, "Discord API error while fetching log channel"
 
     if not isinstance(log_channel, discord.abc.Messageable):
-        return
+        return None, "Configured log channel is not messageable"
+
+    return log_channel, None
+
+
+async def send_everyone_ping_log(message: discord.Message) -> tuple[bool, str | None]:
+    guild = message.guild
+    if guild is None:
+        return False, "Message has no guild"
+
+    log_channel, resolve_error = await resolve_everyone_log_channel(guild)
+    if log_channel is None:
+        return False, resolve_error
 
     content_value = message.content if message.content.strip() else "(no text content)"
     if len(content_value) > 1024:
@@ -181,8 +196,11 @@ async def send_everyone_ping_log(message: discord.Message) -> None:
     embed.set_footer(text="SCL Anti @everyone Ping Log.")
     try:
         await log_channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
-    except (discord.Forbidden, discord.HTTPException):
-        return
+        return True, None
+    except discord.Forbidden:
+        return False, "No permission to send embeds/messages in log channel"
+    except discord.HTTPException:
+        return False, "Discord API error while sending log embed"
 
 
 def sanitize_ticket_name(name: str) -> str:
@@ -351,7 +369,12 @@ async def on_message(message: discord.Message) -> None:
                 )
             except discord.Forbidden:
                 await message.channel.send("I do not have permission to ban that user.")
-            await send_everyone_ping_log(message)
+            logged, log_error = await send_everyone_ping_log(message)
+            if not logged:
+                await message.channel.send(
+                    f"Anti-@everyone log failed: {log_error}. Check channel {EVERYONE_PING_LOG_CHANNEL_ID} permissions.",
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
             return
 
         try:
@@ -362,7 +385,12 @@ async def on_message(message: discord.Message) -> None:
             )
         except discord.Forbidden:
             await message.channel.send("I do not have permission to kick that user.")
-        await send_everyone_ping_log(message)
+        logged, log_error = await send_everyone_ping_log(message)
+        if not logged:
+            await message.channel.send(
+                f"Anti-@everyone log failed: {log_error}. Check channel {EVERYONE_PING_LOG_CHANNEL_ID} permissions.",
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
         return
 
     banned_word = get_insta_ban_word(message.content)
@@ -499,7 +527,29 @@ async def help_command(ctx: commands.Context) -> None:
         f"`{PREFIX}timeout @user <duration> <reason>` - Timeout a member (10m, 2h, 1d)\n"
         f"`{PREFIX}vcmove @user <channel_link>` - Move user to voice channel\n"
         f"`{PREFIX}closeticket <reason>` - Close the current ticket channel (staff only)\n"
-        f"`{PREFIX}closerequest` - Request this ticket be closed"
+        f"`{PREFIX}closerequest` - Request this ticket be closed\n"
+        f"`{PREFIX}testeveryonelog` - Send a test anti-everyone log embed"
+    )
+
+
+@bot.command(name="testeveryonelog")
+@commands.has_permissions(manage_guild=True)
+async def test_everyone_log(ctx: commands.Context) -> None:
+    if ctx.guild is None:
+        await ctx.send("This command can only be used in a server.")
+        return
+
+    logged, log_error = await send_everyone_ping_log(ctx.message)
+    if logged:
+        await ctx.send(
+            f"Test anti-@everyone log sent to channel {EVERYONE_PING_LOG_CHANNEL_ID}.",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        return
+
+    await ctx.send(
+        f"Test log failed: {log_error}. Check channel {EVERYONE_PING_LOG_CHANNEL_ID} permissions.",
+        allowed_mentions=discord.AllowedMentions.none(),
     )
 
 
