@@ -31,6 +31,7 @@ EVERYONE_PING_INVITE_URL = "https://discord.gg/D7RZWT6BSw"
 AUTOMOD_BYPASS_ROLE_ID = int(os.getenv("YCF_AUTOMOD_BYPASS_ROLE_ID", "0") or "0")
 EVERYONE_PING_ALLOWED_ROLE_ID = 1513996922749325464
 EVERYONE_PING_LOG_CHANNEL_ID = 1514462029786779759
+WARNING_LOG_CHANNEL_ID = 1516284093803921419
 EVERYONE_PING_OFFENSES_FILE = os.path.join(
     os.path.dirname(__file__), "..", "data", "everyone_ping_offenses.json"
 )
@@ -201,6 +202,28 @@ async def send_everyone_ping_log(message: discord.Message) -> tuple[bool, str | 
         return False, "No permission to send embeds/messages in log channel"
     except discord.HTTPException:
         return False, "Discord API error while sending log embed"
+
+
+async def send_warning_log(
+    guild: discord.Guild,
+    moderator: discord.Member,
+    member: discord.Member,
+    reason: str,
+) -> None:
+    log_channel = guild.get_channel(WARNING_LOG_CHANNEL_ID)
+    if not isinstance(log_channel, discord.abc.Messageable):
+        return
+
+    embed = discord.Embed(
+        title="Warn Log",
+        color=discord.Color.orange(),
+        timestamp=discord.utils.utcnow(),
+    )
+    embed.add_field(name="User", value=member.mention, inline=False)
+    embed.add_field(name="User ID", value=str(member.id), inline=False)
+    embed.add_field(name="Warned By", value=moderator.mention, inline=False)
+    embed.add_field(name="Reason", value=reason[:1024], inline=False)
+    await log_channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
 
 
 def sanitize_ticket_name(name: str) -> str:
@@ -380,8 +403,8 @@ async def on_message(message: discord.Message) -> None:
         try:
             await member.kick(reason="Auto-kick for first @everyone ping offense")
             await message.channel.send(
-                f"{member.display_name} was kicked for pinging @everyone.",
-                allowed_mentions=discord.AllowedMentions.none(),
+                f"{member.mention} has been kicked for pinging evreryone.",
+                allowed_mentions=discord.AllowedMentions(users=True),
             )
         except discord.Forbidden:
             await message.channel.send("I do not have permission to kick that user.")
@@ -523,13 +546,35 @@ async def help_command(ctx: commands.Context) -> None:
         f"`{PREFIX}ban @user <reason>` - Ban a member\n"
         f"`{PREFIX}unban <user_id|username#discriminator> <reason>` - Unban a user\n"
         f"`{PREFIX}kick @user <reason>` - Kick a member\n"
+        f"`{PREFIX}clear <number>` - Delete recent messages\n"
         f"`{PREFIX}warn @user <reason>` - Warn a member\n"
         f"`{PREFIX}timeout @user <duration> <reason>` - Timeout a member (10m, 2h, 1d)\n"
         f"`{PREFIX}vcmove @user <channel_link>` - Move user to voice channel\n"
+        f"`{PREFIX}apply` or `{PREFIX}application` - Open application info\n"
         f"`{PREFIX}closeticket <reason>` - Close the current ticket channel (staff only)\n"
         f"`{PREFIX}closerequest` - Request this ticket be closed\n"
         f"`{PREFIX}testeveryonelog` - Send a test anti-everyone log embed"
     )
+
+
+@bot.command(name="apply", aliases=["application"])
+async def apply_command(ctx: commands.Context) -> None:
+    await ctx.send(
+        "Applications are open. Please provide your application details in this channel and staff will review.",
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
+
+
+@bot.command(name="clear")
+@commands.has_permissions(manage_messages=True)
+async def clear_messages(ctx: commands.Context, number: int) -> None:
+    if number <= 0:
+        await ctx.send("Please provide a number greater than 0.")
+        return
+
+    deleted = await ctx.channel.purge(limit=min(number, 100) + 1)
+    notice = await ctx.send(f"Deleted {max(len(deleted) - 1, 0)} messages.")
+    await notice.delete(delay=3)
 
 
 @bot.command(name="testeveryonelog")
@@ -696,6 +741,10 @@ async def warn_member(ctx: commands.Context, member: discord.Member, *, reason: 
         pass
 
     await ctx.send(f"Warned {member.mention}. Reason: {reason}")
+    try:
+        await send_warning_log(ctx.guild, ctx.author, member, reason)
+    except discord.Forbidden:
+        pass
 
 
 @bot.command(name="timeout")
@@ -785,6 +834,7 @@ async def close_request(ctx: commands.Context) -> None:
 @ban_member.error
 @unban_member.error
 @kick_member.error
+@clear_messages.error
 @warn_member.error
 @timeout_member.error
 @move_voice_member.error
