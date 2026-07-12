@@ -890,7 +890,7 @@ async def on_ready():
 
 if app_commands is not None:
     @bot.tree.error
-    async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    async def on_app_command_error(interaction: discord.Interaction, error):
         if isinstance(error, app_commands.CommandNotFound):
             message = "That slash command is stale. Please close and reopen Discord (or Ctrl+R) and try again."
         else:
@@ -913,7 +913,7 @@ async def ping(ctx: commands.Context):
 if app_commands is not None:
     @bot.tree.command(name="giveaway", description="Create a giveaway")
     @app_commands.describe(prize="Giveaway prize", description="Giveaway description", time="Duration like 1d_1h_1m_1s", amount_of_winners="How many winners")
-    async def giveaway_slash(interaction: discord.Interaction, prize: str, description: str, time: str, amount_of_winners: app_commands.Range[int, 1, 100]):
+    async def giveaway_slash(interaction: discord.Interaction, prize: str, description: str, time: str, amount_of_winners: int):
         try:
             duration_seconds = _parse_duration_to_seconds(time)
         except ValueError:
