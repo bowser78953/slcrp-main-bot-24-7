@@ -1145,16 +1145,18 @@ async def vouchlist(ctx: commands.Context, user: discord.Member):
     vouch_lines = []
     for index, item in enumerate(vouches, start=1):
         by_user_id = int(item.get("by", 0))
+        by_user_mention = _mention_for_user(ctx.guild, by_user_id) if by_user_id else "Unknown User"
         reason = str(item.get("reason", "No reason provided"))
         item_id = item.get("id", "?")
-        vouch_lines.append(f"{index}. {by_user_id} {reason} <ID: {item_id}>")
+        vouch_lines.append(f"{index}. {by_user_mention} {reason} <ID: {item_id}>")
 
     scam_lines = []
     for index, item in enumerate(scams, start=1):
         by_user_id = int(item.get("reported_by", 0))
+        by_user_mention = _mention_for_user(ctx.guild, by_user_id) if by_user_id else "Unknown User"
         reason = str(item.get("reason", "No reason provided"))
         item_id = item.get("id", "?")
-        scam_lines.append(f"{index}. {by_user_id} {reason} <ID: {item_id}>")
+        scam_lines.append(f"{index}. {by_user_mention} {reason} <ID: {item_id}>")
 
     vouch_text = "\n".join(vouch_lines) if vouch_lines else "None"
     scam_text = "\n".join(scam_lines) if scam_lines else "None"
