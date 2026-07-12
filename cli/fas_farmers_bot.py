@@ -8,13 +8,9 @@ import aiohttp
 from datetime import datetime, timezone
 from threading import Lock
 import discord
+from discord import app_commands
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
-
-try:
-    from discord import app_commands
-except ImportError:
-    app_commands = None
 
 # Load only the dedicated env file for this bot.
 BASE_DIR = os.path.dirname(__file__)
@@ -45,6 +41,7 @@ TARGET_GUILD_ID = 1521774456274686044
 
 STOCK_API_URL = "https://api.gag2.gg/api/live/stock"
 SELL_PRICE_API_URL = "https://api.gag2.gg/api/live/sell"
+PREDICTIONS_API_URL = "https://api.gag2.gg/api/live/predictions/items"
 POLL_SECONDS = 10
 SHOP_REFRESH_SECONDS = 300
 
@@ -195,6 +192,26 @@ SELL_PRICE_CONFIG = [
 ]
 
 SELL_PRICE_LOOKUP = {entry["name"].lower(): entry for entry in SELL_PRICE_CONFIG}
+
+SEED_PREDICT_CHANCES = {
+    "carrot": "~95%",
+    "strawberry": "~90%",
+    "blueberry": "~85%",
+    "tulip": "~70%",
+    "tomato": "~65%",
+    "apple": "~55%",
+    "bamboo": "~30%",
+    "corn": "~25%",
+    "cactus": "~20%",
+    "mushroom": "~8%",
+    "dragon fruit": "~3%",
+    "ghost pepper": "~1%",
+    "venus fly trap": "~1%",
+    "pomegranate": "~1%",
+    "poison apple": "~1%",
+    "dragons breath": "~0.3%",
+    "moon bloom": "~0.3%",
+}
 
 http_session: aiohttp.ClientSession | None = None
 last_live_post_ts: int | None = None
@@ -410,6 +427,51 @@ async def _fetch_sell_price_rows() -> list[dict]:
 
     rows.sort(key=lambda item: item["multiplier"], reverse=True)
     return rows
+
+
+async def _fetch_seed_prediction_rows() -> list[dict]:
+    session = await _get_http_session()
+    headers = {
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
+        "Referer": "https://growagarden2stock.com/stock/predictions/",
+        "Origin": "https://growagarden2stock.com",
+    }
+    params = {"_": str(int(datetime.now(timezone.utc).timestamp()))}
+
+    async with session.get(PREDICTIONS_API_URL, headers=headers, params=params) as response:
+        response.raise_for_status()
+        payload = await response.json()
+
+    items = payload.get("items", {}) if isinstance(payload, dict) else {}
+    raw_rows = items.get("seed", []) if isinstance(items, dict) else []
+
+    rows: list[dict] = []
+    for item in raw_rows:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name", "")).strip()
+        key = str(item.get("key", "")).strip()
+        next_boundary = int(item.get("nextBoundary", 0) or 0)
+        if not name or next_boundary <= 0:
+            continue
+        rows.append({"name": name, "key": key, "next_boundary": next_boundary})
+
+    rows.sort(key=lambda item: item["next_boundary"])
+    return rows
+
+
+def _get_seed_prediction_chance(name: str, key: str | None = None) -> str:
+    normalized_name = _normalize_seed_name(name)
+    if normalized_name in SEED_PREDICT_CHANCES:
+        return SEED_PREDICT_CHANCES[normalized_name]
+
+    normalized_key = _normalize_seed_name((key or "").replace("_", " "))
+    if normalized_key in SEED_PREDICT_CHANCES:
+        return SEED_PREDICT_CHANCES[normalized_key]
+
+    return "Unknown"
 
 
 def _format_sell_multiplier(multiplier: float) -> str:
@@ -798,7 +860,7 @@ async def on_ready():
     global TREE_SYNCED
     if bot.user:
         print(f"{bot.user} is online.")
-    if app_commands is not None and not TREE_SYNCED:
+    if not TREE_SYNCED:
         guild_obj = discord.Object(id=TARGET_GUILD_ID)
         bot.tree.clear_commands(guild=guild_obj)
         bot.tree.copy_global_to(guild=guild_obj)
@@ -822,21 +884,20 @@ async def on_ready():
         seed_shop_live_loop.start()
 
 
-if app_commands is not None:
-    @bot.tree.error
-    async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
-        if isinstance(error, app_commands.CommandNotFound):
-            message = "That slash command is stale. Please close and reopen Discord (or Ctrl+R) and try again."
-        else:
-            message = "Something went wrong while running that slash command."
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    if isinstance(error, app_commands.CommandNotFound):
+        message = "That slash command is stale. Please close and reopen Discord (or Ctrl+R) and try again."
+    else:
+        message = "Something went wrong while running that slash command."
 
-        try:
-            if interaction.response.is_done():
-                await interaction.followup.send(message, ephemeral=True)
-            else:
-                await interaction.response.send_message(message, ephemeral=True)
-        except Exception:
-            pass
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(message, ephemeral=True)
+        else:
+            await interaction.response.send_message(message, ephemeral=True)
+    except Exception:
+        pass
 
 
 @bot.command(name="ping")
@@ -844,31 +905,30 @@ async def ping(ctx: commands.Context):
     await ctx.send("Pong!")
 
 
-if app_commands is not None:
-    @bot.tree.command(name="giveaway", description="Create a giveaway")
-    @app_commands.describe(prize="Giveaway prize", description="Giveaway description", time="Duration like 1d_1h_1m_1s", amount_of_winners="How many winners")
-    async def giveaway_slash(interaction: discord.Interaction, prize: str, description: str, time: str, amount_of_winners: app_commands.Range[int, 1, 100]):
-        try:
-            duration_seconds = _parse_duration_to_seconds(time)
-        except ValueError:
-            await interaction.response.send_message("Invalid time format. Use like 1d_1h_1m_1s.", ephemeral=True)
-            return
+@bot.tree.command(name="giveaway", description="Create a giveaway")
+@app_commands.describe(prize="Giveaway prize", description="Giveaway description", time="Duration like 1d_1h_1m_1s", amount_of_winners="How many winners")
+async def giveaway_slash(interaction: discord.Interaction, prize: str, description: str, time: str, amount_of_winners: app_commands.Range[int, 1, 100]):
+    try:
+        duration_seconds = _parse_duration_to_seconds(time)
+    except ValueError:
+        await interaction.response.send_message("Invalid time format. Use like 1d_1h_1m_1s.", ephemeral=True)
+        return
 
-        await interaction.response.defer(ephemeral=True)
-        if interaction.channel is None:
-            await interaction.followup.send("Could not create giveaway in this channel.", ephemeral=True)
-            return
+    await interaction.response.defer(ephemeral=True)
+    if interaction.channel is None:
+        await interaction.followup.send("Could not create giveaway in this channel.", ephemeral=True)
+        return
 
-        await _create_giveaway_message(
-            giveaway_key=interaction.id,
-            channel=interaction.channel,
-            channel_id=interaction.channel_id,
-            prize=prize,
-            description=description,
-            duration_seconds=duration_seconds,
-            winner_count=int(amount_of_winners),
-        )
-        await interaction.followup.send("Giveaway created.", ephemeral=True)
+    await _create_giveaway_message(
+        giveaway_key=interaction.id,
+        channel=interaction.channel,
+        channel_id=interaction.channel_id,
+        prize=prize,
+        description=description,
+        duration_seconds=duration_seconds,
+        winner_count=int(amount_of_winners),
+    )
+    await interaction.followup.send("Giveaway created.", ephemeral=True)
 
 
 @bot.command(name="seedshop")
@@ -939,6 +999,51 @@ async def sellprice(ctx: commands.Context, *, fruit_name: str):
     selected_row = matches[0]
     embed = _build_sellprice_embed([selected_row], title=f"{selected_row['name']} Sell Price")
     embed.description = f"{selected_row['name']} - {_format_sell_multiplier(float(selected_row['multiplier']))}"
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="predict")
+async def predict(ctx: commands.Context, *, fruit_name: str):
+    query = fruit_name.strip()
+    if not query:
+        await ctx.send("Usage: -predict <Fruit_Name/Fruit_abbreviation>")
+        return
+
+    try:
+        rows = await _fetch_seed_prediction_rows()
+    except Exception as exc:
+        await ctx.send(f"Could not fetch prediction data right now: {exc}")
+        return
+
+    matches = _resolve_sell_query(query, rows)
+    if not matches:
+        await ctx.send(f"I could not find a fruit matching `{query}`.")
+        return
+
+    if len(matches) > 1:
+        match_names = ", ".join(entry["name"] for entry in matches[:8])
+        suffix = "" if len(matches) <= 8 else f" and {len(matches) - 8} more"
+        await ctx.send(f"That abbreviation is ambiguous. Try one of: {match_names}{suffix}.")
+        return
+
+    selected_row = matches[0]
+    next_boundary = int(selected_row.get("next_boundary", 0) or 0)
+    chance = _get_seed_prediction_chance(str(selected_row.get("name", "")), str(selected_row.get("key", "")))
+
+    if next_boundary <= 0:
+        await ctx.send(f"I could not find a valid next stock time for {selected_row.get('name', 'that fruit')}.")
+        return
+
+    embed = discord.Embed(
+        title=f"{selected_row['name']} Next Stock.",
+        description=(
+            f"{selected_row['name']} Will be in stock in <t:{next_boundary}:R>. "
+            f"There is a {chance} chance to get it this stock."
+        ),
+        color=discord.Color.orange(),
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.set_footer(text="This prediction is generated by a random API which could be 100% in-correct.")
     await ctx.send(embed=embed)
 
 
