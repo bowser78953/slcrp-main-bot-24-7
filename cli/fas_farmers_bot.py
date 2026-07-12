@@ -963,6 +963,17 @@ async def on_ready():
                 print(f"Slash sync attempt {attempt}/5 failed: {exc}")
                 if attempt < 5:
                     await asyncio.sleep(attempt * 2)
+    if app_commands is None and hasattr(bot, "sync_commands") and not TREE_SYNCED:
+        for attempt in range(1, 6):
+            try:
+                await bot.sync_commands(guild_ids=[TARGET_GUILD_ID])
+                TREE_SYNCED = True
+                print(f"Pycord slash commands synced for guild {TARGET_GUILD_ID}.")
+                break
+            except Exception as exc:
+                print(f"Pycord slash sync attempt {attempt}/5 failed: {exc}")
+                if attempt < 5:
+                    await asyncio.sleep(attempt * 2)
     try:
         await _ensure_seed_shop_live_message_exists()
     except Exception as exc:
@@ -1016,7 +1027,7 @@ if app_commands is not None:
 
 
 if app_commands is None and hasattr(bot, "slash_command"):
-    @bot.slash_command(name="giveaway", description="Create a giveaway")
+    @bot.slash_command(name="giveaway", description="Create a giveaway", guild_ids=[TARGET_GUILD_ID])
     async def giveaway_slash_fallback(ctx, prize: str, description: str, time: str, amount_of_winners: int):
         error_message = await _create_giveaway_from_args(
             giveaway_key=ctx.interaction.id,
