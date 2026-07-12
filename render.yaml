@@ -9,6 +9,8 @@ services:
         value: 3.13.4
       - key: NEW_BOT_TOKEN
         sync: false
+      - key: FAS_FARMERS_BOT_TOKEN
+        sync: false
       - key: MODMAIL_TOKEN
         sync: false
       - key: YCF_BOT_TOKEN

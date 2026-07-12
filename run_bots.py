@@ -15,6 +15,7 @@ def start_process(script_name: str) -> subprocess.Popen:
 def main() -> int:
     bot_specs: list[tuple[str, str, str | None]] = [
         ("main", "bot_fresh_standalone.py", "NEW_BOT_TOKEN"),
+        ("farmers", "cli/fas_farmers_bot.py", "FAS_FARMERS_BOT_TOKEN"),
         ("modmail", "modmail.py", "MODMAIL_TOKEN"),
         ("ycf", "ycf_bot.py", "YCF_BOT_TOKEN"),
         ("third", "bot_third.py", "THIRD_BOT_TOKEN"),
