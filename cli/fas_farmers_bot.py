@@ -566,7 +566,6 @@ def _build_giveaway_embed(giveaway: dict) -> discord.Embed:
     embed = discord.Embed(
         description=f"## {giveaway['prize']}\n{giveaway['description']}",
         color=discord.Color.blurple(),
-        timestamp=datetime.now(timezone.utc),
     )
     embed.add_field(name="<:Winners:1525734637383450634> Winners", value=str(giveaway["winner_count"]), inline=True)
     embed.add_field(name="<:Entrees:1525734579099533413> Entrees", value=str(entries_count), inline=True)
@@ -581,7 +580,7 @@ def _build_giveaway_embed(giveaway: dict) -> discord.Embed:
 
     giveaway_id = giveaway.get("giveaway_id")
     if giveaway_id is not None:
-        embed.set_footer(text=f"Giveaway ID: {giveaway_id} | Use -greroll <ID>")
+        embed.set_footer(text=f"ID: {giveaway_id}")
     return embed
 
 
@@ -625,12 +624,16 @@ async def _finish_giveaway(giveaway_key: int):
     giveaway = GIVEAWAYS.get(giveaway_key)
     if not giveaway:
         return
+    if giveaway.get("ended"):
+        return
 
     wait_for = max(0, giveaway["end_ts"] - int(datetime.now(timezone.utc).timestamp()))
     await asyncio.sleep(wait_for)
 
     giveaway = GIVEAWAYS.get(giveaway_key)
     if not giveaway:
+        return
+    if giveaway.get("ended"):
         return
 
     giveaway["ended"] = True
@@ -663,7 +666,7 @@ async def _finish_giveaway(giveaway_key: int):
     winner_count = min(giveaway["winner_count"], len(entries))
     winners = random.sample(entries, k=winner_count)
     winner_mentions = ", ".join(f"<@{winner_id}>" for winner_id in winners)
-    await channel.send(f"<:tada:1525997447485063180> Congratulations {winner_mentions}, you won {giveaway['prize']}!")
+    await channel.send(f"<:tada:1525999768369631273> Congratulations {winner_mentions}, you won {giveaway['prize']}!")
 
 
 async def _create_giveaway_message(*, giveaway_key: int, channel: discord.abc.Messageable, channel_id: int, prize: str, description: str, duration_seconds: int, winner_count: int, host_user_id: int, guild_icon_url: str | None = None) -> discord.Message:
@@ -1076,7 +1079,23 @@ async def greroll(ctx: commands.Context, giveaway_id: int):
     winner_count = min(int(giveaway.get("winner_count", 1) or 1), len(entries))
     winners = random.sample(entries, k=winner_count)
     winner_mentions = ", ".join(f"<@{winner_id}>" for winner_id in winners)
-    await ctx.send(f"<:tada:1525997447485063180> Congratulations {winner_mentions}, you won {giveaway.get('prize', 'Unknown Prize')}!")
+    await ctx.send(f"<:tada:1525999768369631273> Congratulations {winner_mentions}, you won {giveaway.get('prize', 'Unknown Prize')}!")
+
+
+@bot.command(name="forceend")
+async def forceend(ctx: commands.Context, giveaway_id: int):
+    giveaway = GIVEAWAYS.get(giveaway_id)
+    if giveaway is None:
+        await ctx.send(f"I could not find a giveaway with ID {giveaway_id}.")
+        return
+
+    if giveaway.get("ended"):
+        await ctx.send(f"Giveaway ID {giveaway_id} is already ended.")
+        return
+
+    giveaway["end_ts"] = int(datetime.now(timezone.utc).timestamp())
+    await _finish_giveaway(giveaway_id)
+    await ctx.send(f"Force ended giveaway ID {giveaway_id}.")
 
 
 @bot.command(name="seedshop")
