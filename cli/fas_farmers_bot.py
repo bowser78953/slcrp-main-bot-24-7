@@ -571,6 +571,17 @@ def _build_giveaway_embed(giveaway: dict) -> discord.Embed:
     embed.add_field(name="<:Winners:1525734637383450634> Winners", value=str(giveaway["winner_count"]), inline=True)
     embed.add_field(name="<:Entrees:1525734579099533413> Entrees", value=str(entries_count), inline=True)
     embed.add_field(name="<:Time:1525734537940701266> Time", value=time_display, inline=True)
+    host_user_id = int(giveaway.get("host_user_id", 0) or 0)
+    if host_user_id > 0:
+        embed.add_field(name="<:GWhost:1525990871777017906> Host", value=f"<@{host_user_id}>", inline=False)
+
+    guild_icon_url = giveaway.get("guild_icon_url")
+    if isinstance(guild_icon_url, str) and guild_icon_url:
+        embed.set_thumbnail(url=guild_icon_url)
+
+    giveaway_id = giveaway.get("giveaway_id")
+    if giveaway_id is not None:
+        embed.set_footer(text=f"Giveaway ID: {giveaway_id} | Use -greroll <ID>")
     return embed
 
 
@@ -644,10 +655,11 @@ async def _finish_giveaway(giveaway_key: int):
     await channel.send(f"🎉 Giveaway ended for **{giveaway['prize']}**!\nWinner(s): {winner_mentions}")
 
 
-async def _create_giveaway_message(*, giveaway_key: int, channel: discord.abc.Messageable, channel_id: int, prize: str, description: str, duration_seconds: int, winner_count: int) -> discord.Message:
+async def _create_giveaway_message(*, giveaway_key: int, channel: discord.abc.Messageable, channel_id: int, prize: str, description: str, duration_seconds: int, winner_count: int, host_user_id: int, guild_icon_url: str | None = None) -> discord.Message:
     now_ts = int(datetime.now(timezone.utc).timestamp())
     end_ts = now_ts + duration_seconds
     giveaway = {
+        "giveaway_id": giveaway_key,
         "prize": prize,
         "description": description,
         "end_ts": end_ts,
@@ -656,6 +668,8 @@ async def _create_giveaway_message(*, giveaway_key: int, channel: discord.abc.Me
         "ended": False,
         "channel_id": channel_id,
         "message_id": None,
+        "host_user_id": host_user_id,
+        "guild_icon_url": guild_icon_url,
     }
     GIVEAWAYS[giveaway_key] = giveaway
 
@@ -976,8 +990,35 @@ if app_commands is not None:
             description=description,
             duration_seconds=duration_seconds,
             winner_count=int(amount_of_winners),
+            host_user_id=interaction.user.id,
+            guild_icon_url=(interaction.guild.icon.url if interaction.guild and interaction.guild.icon else None),
         )
         await interaction.followup.send("Giveaway created.", ephemeral=True)
+
+
+@bot.command(name="greroll")
+async def greroll(ctx: commands.Context, giveaway_id: int):
+    giveaway = GIVEAWAYS.get(giveaway_id)
+    if giveaway is None:
+        await ctx.send(f"I could not find a giveaway with ID {giveaway_id}.")
+        return
+
+    if not giveaway.get("ended"):
+        await ctx.send("That giveaway has not ended yet. You can reroll after it ends.")
+        return
+
+    entries = list(giveaway.get("entries", set()))
+    if not entries:
+        await ctx.send("This giveaway has no valid entries to reroll.")
+        return
+
+    winner_count = min(int(giveaway.get("winner_count", 1) or 1), len(entries))
+    winners = random.sample(entries, k=winner_count)
+    winner_mentions = " ".join(f"<@{winner_id}>" for winner_id in winners)
+    await ctx.send(
+        f"🎉 Reroll for giveaway **{giveaway.get('prize', 'Unknown Prize')}** (ID: {giveaway_id})\n"
+        f"New winner(s): {winner_mentions}"
+    )
 
 
 @bot.command(name="seedshop")
