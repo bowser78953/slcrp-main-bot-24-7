@@ -591,7 +591,18 @@ class GiveawayView(discord.ui.View):
         self.giveaway_key = giveaway_key
 
     @discord.ui.button(label="🎉 Join the giveaway!", style=discord.ButtonStyle.success, custom_id="fas_giveaway_join")
-    async def join_giveaway(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def join_giveaway(self, first, second):
+        # Support both callback orders across discord.py/py-cord variants.
+        if isinstance(first, discord.ui.Button):
+            button = first
+            interaction = second
+        else:
+            interaction = first
+            button = second
+
+        if not isinstance(interaction, discord.Interaction):
+            return
+
         giveaway = GIVEAWAYS.get(self.giveaway_key)
         if giveaway is None or giveaway.get("ended"):
             await interaction.response.send_message("This giveaway has ended.", ephemeral=True)
@@ -651,8 +662,8 @@ async def _finish_giveaway(giveaway_key: int):
 
     winner_count = min(giveaway["winner_count"], len(entries))
     winners = random.sample(entries, k=winner_count)
-    winner_mentions = " ".join(f"<@{winner_id}>" for winner_id in winners)
-    await channel.send(f"🎉 Giveaway ended for **{giveaway['prize']}**!\nWinner(s): {winner_mentions}")
+    winner_mentions = ", ".join(f"<@{winner_id}>" for winner_id in winners)
+    await channel.send(f"<:tada:1525997447485063180> Congratulations {winner_mentions}, you won {giveaway['prize']}!")
 
 
 async def _create_giveaway_message(*, giveaway_key: int, channel: discord.abc.Messageable, channel_id: int, prize: str, description: str, duration_seconds: int, winner_count: int, host_user_id: int, guild_icon_url: str | None = None) -> discord.Message:
@@ -1064,11 +1075,8 @@ async def greroll(ctx: commands.Context, giveaway_id: int):
 
     winner_count = min(int(giveaway.get("winner_count", 1) or 1), len(entries))
     winners = random.sample(entries, k=winner_count)
-    winner_mentions = " ".join(f"<@{winner_id}>" for winner_id in winners)
-    await ctx.send(
-        f"🎉 Reroll for giveaway **{giveaway.get('prize', 'Unknown Prize')}** (ID: {giveaway_id})\n"
-        f"New winner(s): {winner_mentions}"
-    )
+    winner_mentions = ", ".join(f"<@{winner_id}>" for winner_id in winners)
+    await ctx.send(f"<:tada:1525997447485063180> Congratulations {winner_mentions}, you won {giveaway.get('prize', 'Unknown Prize')}!")
 
 
 @bot.command(name="seedshop")
