@@ -35,6 +35,7 @@ bot = commands.Bot(command_prefix="-", intents=intents, help_command=None)
 
 DATA_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "data"))
 VOUCH_DATA_FILE = os.path.join(DATA_DIR, "fas_farmers_reports.json")
+VOUCH_DATA_BACKUP_FILE = os.path.join(DATA_DIR, "fas_farmers_reports.backup.json")
 SEED_SHOP_LIVE_FILE = os.path.join(DATA_DIR, "fas_seed_shop_live.json")
 DATA_LOCK = Lock()
 
@@ -256,6 +257,9 @@ def _ensure_data_file() -> None:
     if not os.path.exists(VOUCH_DATA_FILE):
         with open(VOUCH_DATA_FILE, "w", encoding="utf-8") as f:
             json.dump({"next_vouch_id": 1, "next_scam_id": 1, "users": {}}, f, indent=2)
+    if not os.path.exists(VOUCH_DATA_BACKUP_FILE):
+        with open(VOUCH_DATA_BACKUP_FILE, "w", encoding="utf-8") as f:
+            json.dump({"next_vouch_id": 1, "next_scam_id": 1, "users": {}}, f, indent=2)
 
 
 def _ensure_live_file() -> None:
@@ -268,8 +272,13 @@ def _ensure_live_file() -> None:
 def _load_data() -> dict:
     _ensure_data_file()
     with DATA_LOCK:
-        with open(VOUCH_DATA_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        try:
+            with open(VOUCH_DATA_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            # Fall back to backup if the primary file is unreadable/corrupt.
+            with open(VOUCH_DATA_BACKUP_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
     data.setdefault("next_vouch_id", 1)
     data.setdefault("next_scam_id", 1)
     data.setdefault("users", {})
@@ -283,6 +292,11 @@ def _save_data(data: dict) -> None:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
         os.replace(tmp, VOUCH_DATA_FILE)
+
+        backup_tmp = VOUCH_DATA_BACKUP_FILE + ".tmp"
+        with open(backup_tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        os.replace(backup_tmp, VOUCH_DATA_BACKUP_FILE)
 
 
 def _load_live_config() -> dict:
