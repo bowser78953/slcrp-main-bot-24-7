@@ -681,6 +681,32 @@ async def _create_giveaway_message(*, giveaway_key: int, channel: discord.abc.Me
     return message
 
 
+async def _create_giveaway_from_args(*, giveaway_key: int, channel: discord.abc.Messageable | None, channel_id: int | None, host_user_id: int, guild_icon_url: str | None, prize: str, description: str, time_text: str, amount_of_winners: int) -> str | None:
+    if channel is None or channel_id is None:
+        return "Could not create giveaway in this channel."
+
+    try:
+        duration_seconds = _parse_duration_to_seconds(time_text)
+    except ValueError:
+        return "Invalid time format. Use like 1d_1h_1m_1s."
+
+    if amount_of_winners <= 0:
+        return "Amount of winners must be at least 1."
+
+    await _create_giveaway_message(
+        giveaway_key=giveaway_key,
+        channel=channel,
+        channel_id=channel_id,
+        prize=prize,
+        description=description,
+        duration_seconds=duration_seconds,
+        winner_count=int(amount_of_winners),
+        host_user_id=host_user_id,
+        guild_icon_url=guild_icon_url,
+    )
+    return None
+
+
 async def _fetch_stock_lines_and_next_restock() -> tuple[list[str], list[str], str | None, int | None, str | None, list[str]]:
     session = await _get_http_session()
     now_unix = int(datetime.now(timezone.utc).timestamp())
@@ -971,29 +997,42 @@ if app_commands is not None:
     @bot.tree.command(name="giveaway", description="Create a giveaway")
     @app_commands.describe(prize="Giveaway prize", description="Giveaway description", time="Duration like 1d_1h_1m_1s", amount_of_winners="How many winners")
     async def giveaway_slash(interaction: discord.Interaction, prize: str, description: str, time: str, amount_of_winners: int):
-        try:
-            duration_seconds = _parse_duration_to_seconds(time)
-        except ValueError:
-            await interaction.response.send_message("Invalid time format. Use like 1d_1h_1m_1s.", ephemeral=True)
-            return
-
         await interaction.response.defer(ephemeral=True)
-        if interaction.channel is None:
-            await interaction.followup.send("Could not create giveaway in this channel.", ephemeral=True)
-            return
-
-        await _create_giveaway_message(
+        error_message = await _create_giveaway_from_args(
             giveaway_key=interaction.id,
             channel=interaction.channel,
             channel_id=interaction.channel_id,
-            prize=prize,
-            description=description,
-            duration_seconds=duration_seconds,
-            winner_count=int(amount_of_winners),
             host_user_id=interaction.user.id,
             guild_icon_url=(interaction.guild.icon.url if interaction.guild and interaction.guild.icon else None),
+            prize=prize,
+            description=description,
+            time_text=time,
+            amount_of_winners=int(amount_of_winners),
         )
+        if error_message:
+            await interaction.followup.send(error_message, ephemeral=True)
+            return
         await interaction.followup.send("Giveaway created.", ephemeral=True)
+
+
+if app_commands is None and hasattr(bot, "slash_command"):
+    @bot.slash_command(name="giveaway", description="Create a giveaway")
+    async def giveaway_slash_fallback(ctx, prize: str, description: str, time: str, amount_of_winners: int):
+        error_message = await _create_giveaway_from_args(
+            giveaway_key=ctx.interaction.id,
+            channel=ctx.channel,
+            channel_id=(ctx.channel.id if ctx.channel else None),
+            host_user_id=ctx.author.id,
+            guild_icon_url=(ctx.guild.icon.url if getattr(ctx, "guild", None) and ctx.guild.icon else None),
+            prize=prize,
+            description=description,
+            time_text=time,
+            amount_of_winners=int(amount_of_winners),
+        )
+        if error_message:
+            await ctx.respond(error_message, ephemeral=True)
+            return
+        await ctx.respond("Giveaway created.", ephemeral=True)
 
 
 @bot.command(name="greroll")
