@@ -558,14 +558,13 @@ def _parse_duration_to_seconds(duration_text: str) -> int:
 
 def _build_giveaway_embed(giveaway: dict) -> discord.Embed:
     entries_count = len(giveaway["entries"])
-    if giveaway.get("ended"):
-        time_display = "Ended"
-    else:
-        time_display = f"<t:{giveaway['end_ts']}:R>"
+    ended = bool(giveaway.get("ended"))
+    time_display = f"<t:{giveaway['end_ts']}:R>"
+    prize_display = f"{giveaway['prize']} - Ended" if ended else giveaway["prize"]
 
     embed = discord.Embed(
-        description=f"## {giveaway['prize']}\n{giveaway['description']}",
-        color=discord.Color.blurple(),
+        description=f"## {prize_display}\n{giveaway['description']}",
+        color=discord.Color.red() if ended else discord.Color.green(),
     )
     embed.add_field(name="<:Winners:1525734637383450634> Winners", value=str(giveaway["winner_count"]), inline=True)
     embed.add_field(name="<:Entrees:1525734579099533413> Entrees", value=str(entries_count), inline=True)
