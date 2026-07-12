@@ -696,7 +696,7 @@ async def _fetch_stock_lines_and_next_restock() -> tuple[list[str], list[str], s
     lines: list[str] = []
     gear_lines: list[str] = []
     best_rarity: str | None = None
-    role_mentions: list[str] = []
+    role_ping_keys: list[str] = []
     for entry in SEED_CONFIG:
         key = entry["key"]
         if key not in in_stock:
@@ -712,9 +712,8 @@ async def _fetch_stock_lines_and_next_restock() -> tuple[list[str], list[str], s
         if rarity and (best_rarity is None or RARITY_RANK.get(str(rarity), 0) > RARITY_RANK.get(str(best_rarity), 0)):
             best_rarity = str(rarity)
 
-        role_mention = STOCK_ROLE_PINGS.get(key)
-        if role_mention:
-            role_mentions.append(role_mention)
+        if key in STOCK_ROLE_PINGS:
+            role_ping_keys.append(key)
 
     for entry in GEAR_CONFIG:
         key = entry["key"]
@@ -731,9 +730,8 @@ async def _fetch_stock_lines_and_next_restock() -> tuple[list[str], list[str], s
         if rarity and (best_rarity is None or RARITY_RANK.get(str(rarity), 0) > RARITY_RANK.get(str(best_rarity), 0)):
             best_rarity = str(rarity)
 
-        role_mention = STOCK_ROLE_PINGS.get(key)
-        if role_mention:
-            role_mentions.append(role_mention)
+        if key in STOCK_ROLE_PINGS:
+            role_ping_keys.append(key)
 
     next_restock_text: str | None = None
     next_restock_unix: int | None = None
@@ -756,7 +754,7 @@ async def _fetch_stock_lines_and_next_restock() -> tuple[list[str], list[str], s
         next_restock_text = None
         next_restock_unix = None
 
-    return lines, gear_lines, next_restock_text, next_restock_unix, best_rarity, role_mentions
+    return lines, gear_lines, next_restock_text, next_restock_unix, best_rarity, role_ping_keys
 
 
 def _compose_seed_shop_embed(lines: list[str], gear_lines: list[str], next_restock_text: str | None, best_rarity: str | None) -> discord.Embed:
@@ -783,11 +781,35 @@ async def _build_seed_shop_embed() -> discord.Embed:
     return _compose_seed_shop_embed(lines, gear_lines, next_restock_text, best_rarity)
 
 
-def _build_stock_ping_content(role_mentions: list[str]) -> str | None:
-    if not role_mentions:
+def _build_stock_ping_content(role_ping_keys: list[str]) -> str | None:
+    if not role_ping_keys:
         return None
-    unique_mentions = list(dict.fromkeys(role_mentions))
-    return " ".join(unique_mentions)
+
+    rare_rank = RARITY_RANK.get("rare", 3)
+    seed_order = {entry["key"]: idx for idx, entry in enumerate(SEED_CONFIG)}
+    gear_order = {entry["key"]: idx for idx, entry in enumerate(GEAR_CONFIG)}
+
+    def _sort_key(key: str) -> tuple[int, int, int, str]:
+        seed_entry = SEED_LOOKUP.get(key)
+        if seed_entry is not None:
+            rarity = str(seed_entry.get("rarity", ""))
+            rank = RARITY_RANK.get(rarity, 0)
+            bucket = rank if rank >= rare_rank else 999
+            return (bucket, 0, seed_order.get(key, 999), key)
+
+        gear_entry = GEAR_LOOKUP.get(key)
+        if gear_entry is not None:
+            rarity = str(gear_entry.get("rarity", ""))
+            rank = RARITY_RANK.get(rarity, 0)
+            bucket = rank if rank >= rare_rank else 999
+            return (bucket, 1, gear_order.get(key, 999), key)
+
+        return (999, 2, 999, key)
+
+    unique_keys = list(dict.fromkeys(role_ping_keys))
+    ordered_keys = sorted(unique_keys, key=_sort_key)
+    ordered_mentions = [STOCK_ROLE_PINGS.get(key) for key in ordered_keys if STOCK_ROLE_PINGS.get(key)]
+    return " ".join(ordered_mentions) if ordered_mentions else None
 
 
 async def _resolve_seed_shop_channel() -> discord.TextChannel | None:
