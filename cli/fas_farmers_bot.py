@@ -8,9 +8,13 @@ import aiohttp
 from datetime import datetime, timezone
 from threading import Lock
 import discord
-from discord import app_commands
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
+
+try:
+    from discord import app_commands
+except ImportError:
+    app_commands = None
 
 # Load only the dedicated env file for this bot.
 BASE_DIR = os.path.dirname(__file__)
@@ -860,7 +864,7 @@ async def on_ready():
     global TREE_SYNCED
     if bot.user:
         print(f"{bot.user} is online.")
-    if not TREE_SYNCED:
+    if app_commands is not None and not TREE_SYNCED:
         guild_obj = discord.Object(id=TARGET_GUILD_ID)
         bot.tree.clear_commands(guild=guild_obj)
         bot.tree.copy_global_to(guild=guild_obj)
@@ -884,20 +888,21 @@ async def on_ready():
         seed_shop_live_loop.start()
 
 
-@bot.tree.error
-async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
-    if isinstance(error, app_commands.CommandNotFound):
-        message = "That slash command is stale. Please close and reopen Discord (or Ctrl+R) and try again."
-    else:
-        message = "Something went wrong while running that slash command."
-
-    try:
-        if interaction.response.is_done():
-            await interaction.followup.send(message, ephemeral=True)
+if app_commands is not None:
+    @bot.tree.error
+    async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+        if isinstance(error, app_commands.CommandNotFound):
+            message = "That slash command is stale. Please close and reopen Discord (or Ctrl+R) and try again."
         else:
-            await interaction.response.send_message(message, ephemeral=True)
-    except Exception:
-        pass
+            message = "Something went wrong while running that slash command."
+
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(message, ephemeral=True)
+            else:
+                await interaction.response.send_message(message, ephemeral=True)
+        except Exception:
+            pass
 
 
 @bot.command(name="ping")
@@ -905,30 +910,31 @@ async def ping(ctx: commands.Context):
     await ctx.send("Pong!")
 
 
-@bot.tree.command(name="giveaway", description="Create a giveaway")
-@app_commands.describe(prize="Giveaway prize", description="Giveaway description", time="Duration like 1d_1h_1m_1s", amount_of_winners="How many winners")
-async def giveaway_slash(interaction: discord.Interaction, prize: str, description: str, time: str, amount_of_winners: app_commands.Range[int, 1, 100]):
-    try:
-        duration_seconds = _parse_duration_to_seconds(time)
-    except ValueError:
-        await interaction.response.send_message("Invalid time format. Use like 1d_1h_1m_1s.", ephemeral=True)
-        return
+if app_commands is not None:
+    @bot.tree.command(name="giveaway", description="Create a giveaway")
+    @app_commands.describe(prize="Giveaway prize", description="Giveaway description", time="Duration like 1d_1h_1m_1s", amount_of_winners="How many winners")
+    async def giveaway_slash(interaction: discord.Interaction, prize: str, description: str, time: str, amount_of_winners: app_commands.Range[int, 1, 100]):
+        try:
+            duration_seconds = _parse_duration_to_seconds(time)
+        except ValueError:
+            await interaction.response.send_message("Invalid time format. Use like 1d_1h_1m_1s.", ephemeral=True)
+            return
 
-    await interaction.response.defer(ephemeral=True)
-    if interaction.channel is None:
-        await interaction.followup.send("Could not create giveaway in this channel.", ephemeral=True)
-        return
+        await interaction.response.defer(ephemeral=True)
+        if interaction.channel is None:
+            await interaction.followup.send("Could not create giveaway in this channel.", ephemeral=True)
+            return
 
-    await _create_giveaway_message(
-        giveaway_key=interaction.id,
-        channel=interaction.channel,
-        channel_id=interaction.channel_id,
-        prize=prize,
-        description=description,
-        duration_seconds=duration_seconds,
-        winner_count=int(amount_of_winners),
-    )
-    await interaction.followup.send("Giveaway created.", ephemeral=True)
+        await _create_giveaway_message(
+            giveaway_key=interaction.id,
+            channel=interaction.channel,
+            channel_id=interaction.channel_id,
+            prize=prize,
+            description=description,
+            duration_seconds=duration_seconds,
+            winner_count=int(amount_of_winners),
+        )
+        await interaction.followup.send("Giveaway created.", ephemeral=True)
 
 
 @bot.command(name="seedshop")
