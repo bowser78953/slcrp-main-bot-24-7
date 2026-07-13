@@ -558,7 +558,7 @@ def _build_seed_shop_page_embed(page_items: list[dict], page_index: int, total_p
         item_name = str(item.get("name", "Unknown Item"))
         price = int(item.get("price", 0) or 0)
         host_id = int(item.get("host_id", 0) or 0)
-        lines.append(f"{item_name} {price} - <@{host_id}>")
+        lines.append(f"{item_name} For {price} Seeds - <@{host_id}>")
         lines.append("-# Wondering How to buy this? Do -buy <The Item You want> <the Host> <Your roblox user>")
 
     if not lines:
@@ -593,7 +593,13 @@ class SeedShopPagesView(discord.ui.View):
             next_button.disabled = self.page_index >= len(self.pages) - 1
 
     @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary, custom_id="seedshop_prev")
-    async def previous_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def previous_page(self, first, second):
+        if isinstance(first, discord.ui.Button):
+            interaction = second
+        else:
+            interaction = first
+        if not isinstance(interaction, discord.Interaction):
+            return
         if self.page_index <= 0:
             await interaction.response.defer()
             return
@@ -603,7 +609,13 @@ class SeedShopPagesView(discord.ui.View):
         await interaction.response.edit_message(embed=embed, view=self)
 
     @discord.ui.button(label="Next", style=discord.ButtonStyle.secondary, custom_id="seedshop_next")
-    async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def next_page(self, first, second):
+        if isinstance(first, discord.ui.Button):
+            interaction = second
+        else:
+            interaction = first
+        if not isinstance(interaction, discord.Interaction):
+            return
         if self.page_index >= len(self.pages) - 1:
             await interaction.response.defer()
             return
@@ -620,7 +632,15 @@ class CompleteSellView(discord.ui.View):
         self.completed = False
 
     @discord.ui.button(label="Complete Sell", style=discord.ButtonStyle.success, custom_id="fas_complete_sell")
-    async def complete_sell(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def complete_sell(self, first, second):
+        if isinstance(first, discord.ui.Button):
+            button = first
+            interaction = second
+        else:
+            interaction = first
+            button = second
+        if not isinstance(interaction, discord.Interaction) or not isinstance(button, discord.ui.Button):
+            return
         if interaction.user.id != self.host_id:
             await interaction.response.send_message("Only the host can complete this sale.", ephemeral=True)
             return
@@ -1595,7 +1615,7 @@ async def addtoshop(ctx: commands.Context, *, raw_args: str):
         }
     )
     _save_seed_store(store_data)
-    await ctx.send(f"Added `{name}` to Seed Shop for `{price}` seeds.")
+    await ctx.send(f"Added {name} For {price} Seeds.")
 
 
 @bot.command(name="addtosshop")
@@ -1627,7 +1647,7 @@ async def addtosshop(ctx: commands.Context, *, raw_args: str):
         }
     )
     _save_seed_store(store_data)
-    await ctx.send(f"Added `{name}` to Super Shop for `{price}` seeds.")
+    await ctx.send(f"Added {name} For {price} Seeds.")
 
 
 @bot.command(name="seedshop")
