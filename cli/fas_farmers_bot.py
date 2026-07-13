@@ -93,6 +93,14 @@ TOP2_CLAIM_MULTIPLIER = 1.5
 TOP3_CLAIM_MULTIPLIER = 1.25
 SEED_SHOP_PAGE_SIZE = 8
 SEED_LEADERBOARD_PAGE_SIZE = 10
+MESSAGE_SEED_REWARD = 2
+MESSAGE_MIN_WORDS = 2
+MESSAGE_BONUS_TRIGGER_MESSAGES = 20
+MESSAGE_BONUS_MESSAGES = 5
+MESSAGE_BONUS_MULTIPLIER = 2
+MESSAGE_SEED_ROLE_SYNC_INTERVAL = 30
+
+last_message_seed_role_sync = 0
 
 RARITY_EMOJIS = {
     "common": "<:common:1525708045450084473>",
@@ -433,10 +441,20 @@ def _load_seed_bank() -> dict:
                 with open(SEED_BANK_FILE, "r", encoding="utf-8") as f:
                     file_data = json.load(f)
             except Exception:
-                file_data = {"balances": {}, "claim_cooldowns": {}}
+                file_data = {
+                    "balances": {},
+                    "claim_cooldowns": {},
+                    "message_counts": {},
+                    "message_bonus_remaining": {},
+                }
 
         if not isinstance(redis_data, dict):
-            data = file_data if isinstance(file_data, dict) else {"balances": {}, "claim_cooldowns": {}}
+            data = file_data if isinstance(file_data, dict) else {
+                "balances": {},
+                "claim_cooldowns": {},
+                "message_counts": {},
+                "message_bonus_remaining": {},
+            }
             try:
                 client.set(REDIS_SEED_BANK_KEY, json.dumps(data))
             except Exception:
@@ -468,6 +486,8 @@ def _load_seed_bank() -> dict:
                 data = json.load(f)
     data.setdefault("balances", {})
     data.setdefault("claim_cooldowns", {})
+    data.setdefault("message_counts", {})
+    data.setdefault("message_bonus_remaining", {})
     return data
 
 
@@ -1687,6 +1707,55 @@ async def seed_shop_live_loop():
 @seed_shop_live_loop.before_loop
 async def before_seed_shop_live_loop():
     await bot.wait_until_ready()
+
+
+@bot.event
+async def on_message(message: discord.Message):
+    global last_message_seed_role_sync
+
+    if message.author.bot:
+        return
+
+    if message.guild is not None:
+        content = (message.content or "").strip()
+        if content and not content.startswith("-"):
+            words = content.split()
+            if len(words) >= MESSAGE_MIN_WORDS:
+                bank_data = _load_seed_bank()
+                user_key = str(message.author.id)
+
+                message_counts = bank_data.setdefault("message_counts", {})
+                message_bonus_remaining = bank_data.setdefault("message_bonus_remaining", {})
+
+                streak_count = int(message_counts.get(user_key, 0) or 0) + 1
+                bonus_remaining = int(message_bonus_remaining.get(user_key, 0) or 0)
+
+                earned = MESSAGE_SEED_REWARD
+                if bonus_remaining > 0:
+                    earned = MESSAGE_SEED_REWARD * MESSAGE_BONUS_MULTIPLIER
+                    bonus_remaining -= 1
+
+                current_balance = _get_seed_balance(bank_data, message.author.id)
+                _set_seed_balance(bank_data, message.author.id, current_balance + earned)
+
+                if streak_count >= MESSAGE_BONUS_TRIGGER_MESSAGES:
+                    streak_count = 0
+                    bonus_remaining += MESSAGE_BONUS_MESSAGES
+
+                message_counts[user_key] = streak_count
+                if bonus_remaining > 0:
+                    message_bonus_remaining[user_key] = bonus_remaining
+                else:
+                    message_bonus_remaining.pop(user_key, None)
+
+                _save_seed_bank(bank_data)
+
+                now_unix = int(datetime.now(timezone.utc).timestamp())
+                if (now_unix - last_message_seed_role_sync) >= MESSAGE_SEED_ROLE_SYNC_INTERVAL:
+                    last_message_seed_role_sync = now_unix
+                    await _sync_seed_leader_roles(message.guild, bank_data)
+
+    await bot.process_commands(message)
 
 
 @bot.event
