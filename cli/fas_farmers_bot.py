@@ -2408,6 +2408,27 @@ async def vouch(ctx: commands.Context, user: discord.Member, *, reason: str):
     await ctx.send(f"Added vouch for {user.mention}. Vouch ID: {entry_id}")
 
 
+@bot.command(name="addvouch")
+async def addvouch(ctx: commands.Context, user: discord.Member, voucher: discord.Member, *, reason: str):
+    if not _in_allowed_channel(ctx, VOUCH_CHANNEL_ID):
+        await ctx.send(f"This command can only be used in <#{VOUCH_CHANNEL_ID}>.")
+        return
+
+    data = _load_data()
+    bucket = _get_user_bucket(data, user.id)
+    entry_id = int(data.get("next_vouch_id", 1))
+    data["next_vouch_id"] = entry_id + 1
+    bucket["vouches"].append({
+        "id": entry_id,
+        "by": voucher.id,
+        "reason": reason.strip(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    _save_data(data)
+    await _sync_vouch_scam_roles(ctx.guild, user.id, bucket)
+    await ctx.send(f"Added vouch for {user.mention} from {voucher.mention}. Vouch ID: {entry_id}")
+
+
 @bot.command(name="sreport")
 async def sreport(ctx: commands.Context, user: discord.Member, *, reason: str):
     if not _in_allowed_channel(ctx, SCAM_REPORT_CHANNEL_ID):
