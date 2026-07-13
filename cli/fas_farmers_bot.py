@@ -296,22 +296,25 @@ GIVEAWAYS: dict[int, dict] = {}
 TREE_SYNCED = False
 MODE_COMMANDS_CONFIGURED = False
 
-SEED_COMMAND_NAMES = {
+XP_COMMAND_NAMES = {
     "seedclaim",
     "seedbalance",
-    "seeddebug",
-    "addtoshop",
-    "addtosshop",
-    "seedshop",
-    "supershop",
     "seedleaderboard",
     "seedlb",
-    "register",
-    "buy",
+    "seeddebug",
     "seedclaimwipe",
     "addseeds",
     "removeseeds",
     "remove_seeds",
+}
+
+SEED_SHOP_COMMAND_NAMES = {
+    "addtoshop",
+    "addtosshop",
+    "seedshop",
+    "supershop",
+    "register",
+    "buy",
     "seedstock",
     "seedshoplive",
     "seedshopstop",
@@ -338,7 +341,12 @@ def _configure_commands_for_mode() -> None:
     if MODE_COMMANDS_CONFIGURED:
         return
 
-    to_remove = SEED_COMMAND_NAMES if BOT_MODE == "farmers" else NON_SEED_COMMAND_NAMES
+    if BOT_MODE == "farmers":
+        # First bot: keep seed shop commands and non-seed commands; remove XP commands.
+        to_remove = XP_COMMAND_NAMES
+    else:
+        # Second bot: XP-only command surface.
+        to_remove = NON_SEED_COMMAND_NAMES | SEED_SHOP_COMMAND_NAMES
     for name in to_remove:
         try:
             bot.remove_command(name)
@@ -1841,7 +1849,7 @@ async def on_ready():
                 print(f"Pycord slash sync attempt {attempt}/5 failed: {exc}")
                 if attempt < 5:
                     await asyncio.sleep(attempt * 2)
-    if BOT_MODE == "seed":
+    if BOT_MODE == "farmers":
         try:
             await _ensure_seed_shop_live_message_exists()
         except Exception as exc:
