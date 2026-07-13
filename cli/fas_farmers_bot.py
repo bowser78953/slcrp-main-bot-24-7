@@ -448,7 +448,6 @@ def _save_seed_bank(data: dict) -> None:
         with DATA_LOCK:
             try:
                 client.set(REDIS_SEED_BANK_KEY, json.dumps(data))
-                return
             except Exception:
                 pass
 
@@ -650,7 +649,6 @@ def _save_seed_store(data: dict) -> None:
         with DATA_LOCK:
             try:
                 client.set(REDIS_SEED_STORE_KEY, json.dumps(data))
-                return
             except Exception:
                 pass
 
