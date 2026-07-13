@@ -44,6 +44,13 @@ SCAM_REPORT_CHANNEL_ID = 1525702427263631411
 SEED_SHOP_CHANNEL_ID = 1525702441608282113
 TARGET_GUILD_ID = 1521774456274686044
 
+NO_VOUCH_ROLE_ID = 1526215394283487302
+VOUCH_ROLE_1_ID = 1526215545299533875
+VOUCH_ROLE_5_ID = 1526214920574734426
+VOUCH_ROLE_15_ID = 1526214766706561074
+SCAM_ROLE_1_ID = 1526214986819698818
+SCAM_ROLE_3_ID = 1526215243334942803
+
 STOCK_API_URL = "https://api.gag2.gg/api/live/stock"
 SELL_PRICE_API_URL = "https://api.gag2.gg/api/live/sell"
 PREDICTIONS_API_URL = "https://api.gag2.gg/api/live/predictions/items"
@@ -334,6 +341,62 @@ def _mention_for_user(guild: discord.Guild | None, user_id: int) -> str:
         if member:
             return member.mention
     return f"<@{user_id}>"
+
+
+def _desired_vouch_role_ids(vouch_count: int) -> set[int]:
+    if vouch_count >= 15:
+        return {VOUCH_ROLE_15_ID}
+    if vouch_count >= 5:
+        return {VOUCH_ROLE_5_ID}
+    if vouch_count >= 1:
+        return {VOUCH_ROLE_1_ID}
+    return {NO_VOUCH_ROLE_ID}
+
+
+def _desired_scam_role_ids(scam_count: int) -> set[int]:
+    if scam_count >= 3:
+        return {SCAM_ROLE_3_ID}
+    if scam_count >= 1:
+        return {SCAM_ROLE_1_ID}
+    return set()
+
+
+async def _sync_vouch_scam_roles(guild: discord.Guild | None, user_id: int, bucket: dict) -> None:
+    if guild is None:
+        return
+
+    member = guild.get_member(user_id)
+    if member is None:
+        try:
+            member = await guild.fetch_member(user_id)
+        except Exception:
+            return
+
+    tracked_role_ids = {
+        NO_VOUCH_ROLE_ID,
+        VOUCH_ROLE_1_ID,
+        VOUCH_ROLE_5_ID,
+        VOUCH_ROLE_15_ID,
+        SCAM_ROLE_1_ID,
+        SCAM_ROLE_3_ID,
+    }
+    desired_role_ids = _desired_vouch_role_ids(len(bucket.get("vouches", []))) | _desired_scam_role_ids(len(bucket.get("scams", [])))
+
+    current_tracked_roles = [role for role in member.roles if role.id in tracked_role_ids]
+    roles_to_remove = [role for role in current_tracked_roles if role.id not in desired_role_ids]
+    roles_to_add = [role for role_id in desired_role_ids for role in [guild.get_role(role_id)] if role is not None and role not in member.roles]
+
+    if roles_to_remove:
+        try:
+            await member.remove_roles(*roles_to_remove, reason="Updated vouch/scam tier roles")
+        except Exception:
+            pass
+
+    if roles_to_add:
+        try:
+            await member.add_roles(*roles_to_add, reason="Updated vouch/scam tier roles")
+        except Exception:
+            pass
 
 
 def _in_allowed_channel(ctx: commands.Context, channel_id: int) -> bool:
@@ -1265,6 +1328,7 @@ async def vouch(ctx: commands.Context, user: discord.Member, *, reason: str):
     data["next_vouch_id"] = entry_id + 1
     bucket["vouches"].append({"id": entry_id, "by": ctx.author.id, "reason": reason.strip(), "created_at": datetime.now(timezone.utc).isoformat()})
     _save_data(data)
+    await _sync_vouch_scam_roles(ctx.guild, user.id, bucket)
     await ctx.send(f"Added vouch for {user.mention}. Vouch ID: {entry_id}")
 
 
@@ -1280,6 +1344,7 @@ async def sreport(ctx: commands.Context, user: discord.Member, *, reason: str):
     data["next_scam_id"] = entry_id + 1
     bucket["scams"].append({"id": entry_id, "reported_by": ctx.author.id, "reason": reason.strip(), "created_at": datetime.now(timezone.utc).isoformat()})
     _save_data(data)
+    await _sync_vouch_scam_roles(ctx.guild, user.id, bucket)
 
     report_message = f"{ctx.author.mention} has reported {user.mention} for {reason.strip()}"
     scam_channel = bot.get_channel(SCAM_REPORT_CHANNEL_ID)
@@ -1359,6 +1424,8 @@ async def vouchremove(ctx: commands.Context, vouch_id: int):
         return
 
     _save_data(data)
+    updated_bucket = _get_user_bucket(data, removed_for_user)
+    await _sync_vouch_scam_roles(ctx.guild, removed_for_user, updated_bucket)
     await ctx.send(f"Removed vouch ID {vouch_id} for {_mention_for_user(ctx.guild, removed_for_user)}.")
 
 
@@ -1383,6 +1450,8 @@ async def sreportremove(ctx: commands.Context, scam_id: int):
         return
 
     _save_data(data)
+    updated_bucket = _get_user_bucket(data, removed_for_user)
+    await _sync_vouch_scam_roles(ctx.guild, removed_for_user, updated_bucket)
     await ctx.send(f"Removed scam report ID {scam_id} for {_mention_for_user(ctx.guild, removed_for_user)}.")
 
 
