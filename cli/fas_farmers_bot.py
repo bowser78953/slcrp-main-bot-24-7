@@ -552,20 +552,26 @@ def _seed_shop_item_pages(items: list[dict], page_size: int = SEED_SHOP_PAGE_SIZ
     return pages
 
 
-def _build_seed_shop_page_embed(page_items: list[dict], page_index: int, total_pages: int) -> discord.Embed:
+def _build_seed_shop_page_embed(page_items: list[dict], page_index: int, total_pages: int, total_items: int) -> discord.Embed:
     lines: list[str] = []
     for item in page_items:
         item_name = str(item.get("name", "Unknown Item"))
         price = int(item.get("price", 0) or 0)
         host_id = int(item.get("host_id", 0) or 0)
         lines.append(f"{item_name} For {price} Seeds - <@{host_id}>")
-        lines.append("-# Wondering How to buy this? Do -buy <The Item You want> <the Host> <Your roblox user>")
+        lines.append("Wondering How to buy this? Do -buy <The Item You want> <the Host> <Your roblox user>")
 
     if not lines:
         lines = ["No items are in stock right now."]
 
+    quoted_block = "\n".join(f"> {line}" for line in lines)
     embed = discord.Embed(
-        description="## [FAS] Farmers Seed Shop has in-stock\n" + "\n".join(lines),
+        description=(
+            "## [FAS] Farmers Seed Shop has in-stock\n"
+            f"Total Items - {total_items}\n"
+            "────────────────\n"
+            f"{quoted_block}"
+        ),
         color=discord.Color.green(),
     )
     embed.set_footer(text=f"Page {page_index + 1}/{total_pages}")
@@ -573,9 +579,10 @@ def _build_seed_shop_page_embed(page_items: list[dict], page_index: int, total_p
 
 
 class SeedShopPagesView(discord.ui.View):
-    def __init__(self, pages: list[list[dict]]):
+    def __init__(self, pages: list[list[dict]], total_items: int):
         super().__init__(timeout=180)
         self.pages = pages
+        self.total_items = total_items
         self.page_index = 0
         self._sync_buttons()
 
@@ -605,7 +612,7 @@ class SeedShopPagesView(discord.ui.View):
             return
         self.page_index -= 1
         self._sync_buttons()
-        embed = _build_seed_shop_page_embed(self.pages[self.page_index], self.page_index, len(self.pages))
+        embed = _build_seed_shop_page_embed(self.pages[self.page_index], self.page_index, len(self.pages), self.total_items)
         await interaction.response.edit_message(embed=embed, view=self)
 
     @discord.ui.button(label="Next", style=discord.ButtonStyle.secondary, custom_id="seedshop_next")
@@ -621,7 +628,7 @@ class SeedShopPagesView(discord.ui.View):
             return
         self.page_index += 1
         self._sync_buttons()
-        embed = _build_seed_shop_page_embed(self.pages[self.page_index], self.page_index, len(self.pages))
+        embed = _build_seed_shop_page_embed(self.pages[self.page_index], self.page_index, len(self.pages), self.total_items)
         await interaction.response.edit_message(embed=embed, view=self)
 
 
@@ -1655,8 +1662,8 @@ async def seedshop(ctx: commands.Context):
     store_data = _load_seed_store()
     normal_items = [item for item in _active_seed_shop_items(store_data) if str(item.get("shop_type", "normal")) == "normal"]
     pages = _seed_shop_item_pages(normal_items)
-    view = SeedShopPagesView(pages)
-    embed = _build_seed_shop_page_embed(pages[0], 0, len(pages))
+    view = SeedShopPagesView(pages, total_items=len(normal_items))
+    embed = _build_seed_shop_page_embed(pages[0], 0, len(pages), len(normal_items))
     await ctx.send(embed=embed, view=view)
 
 
@@ -1669,8 +1676,8 @@ async def supershop(ctx: commands.Context):
     store_data = _load_seed_store()
     super_items = [item for item in _active_seed_shop_items(store_data) if str(item.get("shop_type", "normal")) == "super"]
     pages = _seed_shop_item_pages(super_items)
-    view = SeedShopPagesView(pages)
-    embed = _build_seed_shop_page_embed(pages[0], 0, len(pages))
+    view = SeedShopPagesView(pages, total_items=len(super_items))
+    embed = _build_seed_shop_page_embed(pages[0], 0, len(pages), len(super_items))
     await ctx.send(embed=embed, view=view)
 
 
