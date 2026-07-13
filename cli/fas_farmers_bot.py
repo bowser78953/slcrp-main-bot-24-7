@@ -1779,6 +1779,42 @@ async def seedclaimwipe(ctx: commands.Context, target: str):
     await ctx.send(f"Wiped claim cooldown for <@{target_id}>.")
 
 
+@bot.command(name="addseeds")
+async def addseeds(ctx: commands.Context, user: discord.Member, amount: int):
+    if ctx.author.id not in SEED_CLAIM_WIPE_ADMINS:
+        await ctx.send("You are not allowed to use this command.")
+        return
+    if amount <= 0:
+        await ctx.send("Amount must be greater than 0.")
+        return
+
+    bank_data = _load_seed_bank()
+    current = _get_seed_balance(bank_data, user.id)
+    updated = current + int(amount)
+    _set_seed_balance(bank_data, user.id, updated)
+    _save_seed_bank(bank_data)
+    await _sync_seed_leader_roles(ctx.guild, bank_data)
+    await ctx.send(f"Added `{amount}` seeds to {user.mention}. New balance: `{updated}`.")
+
+
+@bot.command(name="remove_seeds")
+async def remove_seeds(ctx: commands.Context, user: discord.Member, amount: int):
+    if ctx.author.id not in SEED_CLAIM_WIPE_ADMINS:
+        await ctx.send("You are not allowed to use this command.")
+        return
+    if amount <= 0:
+        await ctx.send("Amount must be greater than 0.")
+        return
+
+    bank_data = _load_seed_bank()
+    current = _get_seed_balance(bank_data, user.id)
+    updated = max(0, current - int(amount))
+    _set_seed_balance(bank_data, user.id, updated)
+    _save_seed_bank(bank_data)
+    await _sync_seed_leader_roles(ctx.guild, bank_data)
+    await ctx.send(f"Removed `{amount}` seeds from {user.mention}. New balance: `{updated}`.")
+
+
 @bot.command(name="seedstock")
 async def seedstock(ctx: commands.Context):
     try:
