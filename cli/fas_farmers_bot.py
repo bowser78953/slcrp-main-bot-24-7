@@ -559,19 +559,13 @@ def _build_seed_shop_page_embed(page_items: list[dict], page_index: int, total_p
         price = int(item.get("price", 0) or 0)
         host_id = int(item.get("host_id", 0) or 0)
         lines.append(f"{item_name} For {price} Seeds - <@{host_id}>")
-        lines.append("Wondering How to buy this? Do -buy <The Item You want> <the Host> <Your roblox user>")
+        lines.append("-# Wondering How to buy this? Do -buy <The Item You want> <the Host> <Your roblox user>")
 
     if not lines:
         lines = ["No items are in stock right now."]
 
-    quoted_block = "\n".join(f"> {line}" for line in lines)
     embed = discord.Embed(
-        description=(
-            "## [FAS] Farmers Seed Shop has in-stock\n"
-            f"Total Items - {total_items}\n"
-            "────────────────\n"
-            f"{quoted_block}"
-        ),
+        description="## [FAS] Farmers Seed Shop has in-stock\n" + "\n".join(lines),
         color=discord.Color.green(),
     )
     embed.set_footer(text=f"Page {page_index + 1}/{total_pages}")
