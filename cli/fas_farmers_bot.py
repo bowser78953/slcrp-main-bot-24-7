@@ -37,12 +37,20 @@ DATA_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "data"))
 VOUCH_DATA_FILE = os.path.join(DATA_DIR, "fas_farmers_reports.json")
 VOUCH_DATA_BACKUP_FILE = os.path.join(DATA_DIR, "fas_farmers_reports.backup.json")
 SEED_SHOP_LIVE_FILE = os.path.join(DATA_DIR, "fas_seed_shop_live.json")
+SEED_BANK_FILE = os.path.join(DATA_DIR, "fas_seed_bank.json")
+SEED_STORE_FILE = os.path.join(DATA_DIR, "fas_seed_store.json")
 DATA_LOCK = Lock()
 
 VOUCH_CHANNEL_ID = 1524283822512799824
 SCAM_REPORT_CHANNEL_ID = 1525702427263631411
 SEED_SHOP_CHANNEL_ID = 1525702441608282113
 TARGET_GUILD_ID = 1521774456274686044
+SEED_SHOP_MANAGER_ROLE_ID = 1526225610022719589
+SEED_PURCHASE_CHANNEL_ID = 1526224472858693696
+SEED_TOP_1_ROLE_ID = 1525980861097574581
+SEED_TOP_2_ROLE_ID = 1525980968958296154
+SEED_TOP_3_ROLE_ID = 1525981030975275119
+SEED_CLAIM_WIPE_ADMINS = {1273130266629640243, 1332458947067773072, 866957916933455912}
 
 NO_VOUCH_ROLE_ID = 1526215394283487302
 VOUCH_ANY_ROLE_ID = 1526214841264767139
@@ -57,6 +65,13 @@ SELL_PRICE_API_URL = "https://api.gag2.gg/api/live/sell"
 PREDICTIONS_API_URL = "https://api.gag2.gg/api/live/predictions/items"
 POLL_SECONDS = 10
 SHOP_REFRESH_SECONDS = 300
+SEED_CLAIM_MIN = 100
+SEED_CLAIM_MAX = 1000
+BOOSTER_SEED_CLAIM_MIN = 1000
+BOOSTER_SEED_CLAIM_MAX = 3000
+SEED_CLAIM_COOLDOWN_SECONDS = 86400
+BOOSTER_CLAIM_MULTIPLIER = 2.5
+SEED_SHOP_PAGE_SIZE = 8
 
 RARITY_EMOJIS = {
     "common": "<:common:1525708045450084473>",
@@ -277,6 +292,20 @@ def _ensure_live_file() -> None:
             json.dump({"channel_id": None, "message_id": None}, f, indent=2)
 
 
+def _ensure_seed_bank_file() -> None:
+    os.makedirs(DATA_DIR, exist_ok=True)
+    if not os.path.exists(SEED_BANK_FILE):
+        with open(SEED_BANK_FILE, "w", encoding="utf-8") as f:
+            json.dump({"balances": {}}, f, indent=2)
+
+
+def _ensure_seed_store_file() -> None:
+    os.makedirs(DATA_DIR, exist_ok=True)
+    if not os.path.exists(SEED_STORE_FILE):
+        with open(SEED_STORE_FILE, "w", encoding="utf-8") as f:
+            json.dump({"next_item_id": 1, "items": []}, f, indent=2)
+
+
 def _load_data() -> dict:
     _ensure_data_file()
     with DATA_LOCK:
@@ -324,6 +353,295 @@ def _save_live_config(data: dict) -> None:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
         os.replace(tmp, SEED_SHOP_LIVE_FILE)
+
+
+def _load_seed_bank() -> dict:
+    _ensure_seed_bank_file()
+    with DATA_LOCK:
+        with open(SEED_BANK_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    data.setdefault("balances", {})
+    data.setdefault("claim_cooldowns", {})
+    return data
+
+
+def _save_seed_bank(data: dict) -> None:
+    _ensure_seed_bank_file()
+    with DATA_LOCK:
+        tmp = SEED_BANK_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp, SEED_BANK_FILE)
+
+
+def _get_seed_balance(bank_data: dict, user_id: int) -> int:
+    balances = bank_data.setdefault("balances", {})
+    key = str(user_id)
+    return int(balances.get(key, 0) or 0)
+
+
+def _set_seed_balance(bank_data: dict, user_id: int, amount: int) -> None:
+    balances = bank_data.setdefault("balances", {})
+    balances[str(user_id)] = max(0, int(amount))
+
+
+def _get_claim_cooldown_unix(bank_data: dict, user_id: int) -> int:
+    cooldowns = bank_data.setdefault("claim_cooldowns", {})
+    return int(cooldowns.get(str(user_id), 0) or 0)
+
+
+def _set_claim_cooldown_unix(bank_data: dict, user_id: int, unix_ts: int) -> None:
+    cooldowns = bank_data.setdefault("claim_cooldowns", {})
+    cooldowns[str(user_id)] = int(unix_ts)
+
+
+def _clear_claim_cooldown(bank_data: dict, user_id: int) -> None:
+    cooldowns = bank_data.setdefault("claim_cooldowns", {})
+    cooldowns.pop(str(user_id), None)
+
+
+def _is_server_booster(member: discord.Member | None) -> bool:
+    return bool(member and member.premium_since is not None)
+
+
+def _has_seed_shop_seller_role(member: discord.Member | None) -> bool:
+    if member is None:
+        return False
+    return any(role.id == SEED_SHOP_MANAGER_ROLE_ID for role in member.roles)
+
+
+def _highest_seed_balances(bank_data: dict, top_n: int = 3) -> list[int]:
+    balances = bank_data.get("balances", {})
+    pairs: list[tuple[int, int]] = []
+    if isinstance(balances, dict):
+        for key, value in balances.items():
+            try:
+                pairs.append((int(key), int(value or 0)))
+            except Exception:
+                continue
+    pairs.sort(key=lambda item: item[1], reverse=True)
+    return [user_id for user_id, _amount in pairs[:top_n]]
+
+
+async def _sync_seed_leader_roles(guild: discord.Guild | None, bank_data: dict) -> None:
+    if guild is None:
+        return
+
+    role_map = {
+        SEED_TOP_1_ROLE_ID: 0,
+        SEED_TOP_2_ROLE_ID: 1,
+        SEED_TOP_3_ROLE_ID: 2,
+    }
+    top_users = _highest_seed_balances(bank_data, top_n=3)
+    desired_user_by_role = {
+        role_id: (top_users[idx] if idx < len(top_users) else None)
+        for role_id, idx in role_map.items()
+    }
+
+    for role_id, idx in role_map.items():
+        role = guild.get_role(role_id)
+        if role is None:
+            continue
+        desired_user = desired_user_by_role[role_id]
+
+        for member in list(role.members):
+            if desired_user is None or member.id != desired_user:
+                try:
+                    await member.remove_roles(role, reason="Seed leaderboard updated")
+                except Exception:
+                    pass
+
+        if desired_user is not None:
+            member = guild.get_member(desired_user)
+            if member is None:
+                try:
+                    member = await guild.fetch_member(desired_user)
+                except Exception:
+                    member = None
+            if member is not None and role not in member.roles:
+                try:
+                    await member.add_roles(role, reason="Seed leaderboard updated")
+                except Exception:
+                    pass
+
+
+def _find_seed_shop_item(items: list[dict], item_name: str, host_id: int, shop_type: str) -> dict | None:
+    normalized_name = item_name.strip().lower()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if not bool(item.get("active", True)):
+            continue
+        if str(item.get("shop_type", "normal")) != shop_type:
+            continue
+        if int(item.get("host_id", 0) or 0) != host_id:
+            continue
+        if str(item.get("name", "")).strip().lower() == normalized_name:
+            return item
+    return None
+
+
+def _parse_buy_arguments(raw: str) -> tuple[str, int, str] | None:
+    # Expected: -buy <Item Name> <@host_or_id> <roblox_user>
+    tokens = raw.strip().split()
+    if len(tokens) < 3:
+        return None
+
+    host_token = tokens[-2]
+    roblox_user = tokens[-1]
+    item_name = " ".join(tokens[:-2]).strip()
+    if not item_name:
+        return None
+
+    host_match = re.fullmatch(r"<@!?(\d+)>", host_token)
+    if host_match:
+        host_id = int(host_match.group(1))
+    else:
+        if not host_token.isdigit():
+            return None
+        host_id = int(host_token)
+
+    return item_name, host_id, roblox_user
+
+
+def _parse_item_price_arguments(raw: str) -> tuple[str, int] | None:
+    tokens = raw.strip().split()
+    if len(tokens) < 2:
+        return None
+    price_token = tokens[-1]
+    if not price_token.isdigit():
+        return None
+    item_name = " ".join(tokens[:-1]).strip()
+    if not item_name:
+        return None
+    return item_name, int(price_token)
+
+
+def _load_seed_store() -> dict:
+    _ensure_seed_store_file()
+    with DATA_LOCK:
+        with open(SEED_STORE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    data.setdefault("next_item_id", 1)
+    data.setdefault("items", [])
+    return data
+
+
+def _save_seed_store(data: dict) -> None:
+    _ensure_seed_store_file()
+    with DATA_LOCK:
+        tmp = SEED_STORE_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp, SEED_STORE_FILE)
+
+
+def _active_seed_shop_items(store_data: dict) -> list[dict]:
+    items = store_data.get("items", [])
+    if not isinstance(items, list):
+        return []
+    return [item for item in items if isinstance(item, dict) and bool(item.get("active", True))]
+
+
+def _seed_shop_item_pages(items: list[dict], page_size: int = SEED_SHOP_PAGE_SIZE) -> list[list[dict]]:
+    if not items:
+        return [[]]
+    pages: list[list[dict]] = []
+    for idx in range(0, len(items), page_size):
+        pages.append(items[idx: idx + page_size])
+    return pages
+
+
+def _build_seed_shop_page_embed(page_items: list[dict], page_index: int, total_pages: int) -> discord.Embed:
+    lines: list[str] = []
+    for item in page_items:
+        item_name = str(item.get("name", "Unknown Item"))
+        price = int(item.get("price", 0) or 0)
+        host_id = int(item.get("host_id", 0) or 0)
+        lines.append(f"{item_name} {price} - <@{host_id}>")
+        lines.append("-# Wondering How to buy this? Do -buy <The Item You want> <the Host> <Your roblox user>")
+
+    if not lines:
+        lines = ["No items are in stock right now."]
+
+    embed = discord.Embed(
+        description="## [FAS] Farmers Seed Shop has in-stock\n" + "\n".join(lines),
+        color=discord.Color.green(),
+    )
+    embed.set_footer(text=f"Page {page_index + 1}/{total_pages}")
+    return embed
+
+
+class SeedShopPagesView(discord.ui.View):
+    def __init__(self, pages: list[list[dict]]):
+        super().__init__(timeout=180)
+        self.pages = pages
+        self.page_index = 0
+        self._sync_buttons()
+
+    def _sync_buttons(self) -> None:
+        prev_button = None
+        next_button = None
+        for child in self.children:
+            if isinstance(child, discord.ui.Button) and child.custom_id == "seedshop_prev":
+                prev_button = child
+            if isinstance(child, discord.ui.Button) and child.custom_id == "seedshop_next":
+                next_button = child
+        if prev_button is not None:
+            prev_button.disabled = self.page_index <= 0
+        if next_button is not None:
+            next_button.disabled = self.page_index >= len(self.pages) - 1
+
+    @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary, custom_id="seedshop_prev")
+    async def previous_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.page_index <= 0:
+            await interaction.response.defer()
+            return
+        self.page_index -= 1
+        self._sync_buttons()
+        embed = _build_seed_shop_page_embed(self.pages[self.page_index], self.page_index, len(self.pages))
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    @discord.ui.button(label="Next", style=discord.ButtonStyle.secondary, custom_id="seedshop_next")
+    async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.page_index >= len(self.pages) - 1:
+            await interaction.response.defer()
+            return
+        self.page_index += 1
+        self._sync_buttons()
+        embed = _build_seed_shop_page_embed(self.pages[self.page_index], self.page_index, len(self.pages))
+        await interaction.response.edit_message(embed=embed, view=self)
+
+
+class CompleteSellView(discord.ui.View):
+    def __init__(self, host_id: int):
+        super().__init__(timeout=None)
+        self.host_id = host_id
+        self.completed = False
+
+    @discord.ui.button(label="Complete Sell", style=discord.ButtonStyle.success, custom_id="fas_complete_sell")
+    async def complete_sell(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.host_id:
+            await interaction.response.send_message("Only the host can complete this sale.", ephemeral=True)
+            return
+
+        if self.completed:
+            await interaction.response.send_message("This sale is already completed.", ephemeral=True)
+            return
+
+        message = interaction.message
+        if message is None or not message.embeds:
+            await interaction.response.send_message("Could not update this sale message.", ephemeral=True)
+            return
+
+        embed = message.embeds[0].copy()
+        if embed.description:
+            embed.description = embed.description.replace("In-complete", "Complete")
+        embed.color = discord.Color.red()
+
+        self.completed = True
+        button.disabled = True
+        await interaction.response.edit_message(embed=embed, view=self)
 
 
 def _get_user_bucket(data: dict, user_id: int) -> dict:
@@ -1220,8 +1538,222 @@ async def forceend(ctx: commands.Context, giveaway_id: int):
     await ctx.send(f"Force ended giveaway ID {giveaway_id}.")
 
 
+@bot.command(name="seedclaim")
+async def seedclaim(ctx: commands.Context):
+    bank_data = _load_seed_bank()
+    now_unix = int(datetime.now(timezone.utc).timestamp())
+    next_claim_unix = _get_claim_cooldown_unix(bank_data, ctx.author.id)
+
+    if next_claim_unix > now_unix:
+        await ctx.send(f"You already claimed. Next claim is <t:{next_claim_unix}:R>.")
+        return
+
+    is_booster = _is_server_booster(ctx.author)
+    if is_booster:
+        base_amount = random.randint(BOOSTER_SEED_CLAIM_MIN, BOOSTER_SEED_CLAIM_MAX)
+        amount = int(base_amount * BOOSTER_CLAIM_MULTIPLIER)
+    else:
+        amount = random.randint(SEED_CLAIM_MIN, SEED_CLAIM_MAX)
+
+    current_balance = _get_seed_balance(bank_data, ctx.author.id)
+    new_balance = current_balance + amount
+    _set_seed_balance(bank_data, ctx.author.id, new_balance)
+    _set_claim_cooldown_unix(bank_data, ctx.author.id, now_unix + SEED_CLAIM_COOLDOWN_SECONDS)
+    _save_seed_bank(bank_data)
+    await _sync_seed_leader_roles(ctx.guild, bank_data)
+
+    booster_text = " (Booster bonus applied)" if is_booster else ""
+    await ctx.send(f"{ctx.author.mention} claimed `{amount}` seeds{booster_text}. You now have `{new_balance}` seeds.")
+
+
+@bot.command(name="addtoshop")
+async def addtoshop(ctx: commands.Context, *, raw_args: str):
+    if not _has_seed_shop_seller_role(ctx.author):
+        await ctx.send(f"This command can only be used by <@&{SEED_SHOP_MANAGER_ROLE_ID}>.")
+        return
+    parsed = _parse_item_price_arguments(raw_args)
+    if parsed is None:
+        await ctx.send("Usage: -addtoshop <Name> <Price>")
+        return
+    name, price = parsed
+    if price <= 0:
+        await ctx.send("Price must be greater than 0.")
+        return
+
+    store_data = _load_seed_store()
+    item_id = int(store_data.get("next_item_id", 1))
+    store_data["next_item_id"] = item_id + 1
+    store_data.setdefault("items", []).append(
+        {
+            "id": item_id,
+            "name": name.strip(),
+            "price": int(price),
+            "host_id": ctx.author.id,
+            "shop_type": "normal",
+            "active": True,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    _save_seed_store(store_data)
+    await ctx.send(f"Added `{name}` to Seed Shop for `{price}` seeds.")
+
+
+@bot.command(name="addtosshop")
+async def addtosshop(ctx: commands.Context, *, raw_args: str):
+    if not _has_seed_shop_seller_role(ctx.author):
+        await ctx.send(f"This command can only be used by <@&{SEED_SHOP_MANAGER_ROLE_ID}>.")
+        return
+    parsed = _parse_item_price_arguments(raw_args)
+    if parsed is None:
+        await ctx.send("Usage: -addtosshop <Item> <Price>")
+        return
+    name, price = parsed
+    if price <= 0:
+        await ctx.send("Price must be greater than 0.")
+        return
+
+    store_data = _load_seed_store()
+    item_id = int(store_data.get("next_item_id", 1))
+    store_data["next_item_id"] = item_id + 1
+    store_data.setdefault("items", []).append(
+        {
+            "id": item_id,
+            "name": name.strip(),
+            "price": int(price),
+            "host_id": ctx.author.id,
+            "shop_type": "super",
+            "active": True,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    _save_seed_store(store_data)
+    await ctx.send(f"Added `{name}` to Super Shop for `{price}` seeds.")
+
+
 @bot.command(name="seedshop")
 async def seedshop(ctx: commands.Context):
+    store_data = _load_seed_store()
+    normal_items = [item for item in _active_seed_shop_items(store_data) if str(item.get("shop_type", "normal")) == "normal"]
+    pages = _seed_shop_item_pages(normal_items)
+    view = SeedShopPagesView(pages)
+    embed = _build_seed_shop_page_embed(pages[0], 0, len(pages))
+    await ctx.send(embed=embed, view=view)
+
+
+@bot.command(name="supershop")
+async def supershop(ctx: commands.Context):
+    if not _is_server_booster(ctx.author):
+        await ctx.send("Only server boosters can use -supershop.")
+        return
+
+    store_data = _load_seed_store()
+    super_items = [item for item in _active_seed_shop_items(store_data) if str(item.get("shop_type", "normal")) == "super"]
+    pages = _seed_shop_item_pages(super_items)
+    view = SeedShopPagesView(pages)
+    embed = _build_seed_shop_page_embed(pages[0], 0, len(pages))
+    await ctx.send(embed=embed, view=view)
+
+
+@bot.command(name="buy")
+async def buy(ctx: commands.Context, *, raw_args: str):
+    parsed = _parse_buy_arguments(raw_args)
+    if parsed is None:
+        await ctx.send("Usage: -buy <The Item You want> <the Host> <Your roblox user>")
+        return
+
+    item_name, host_id, roblox_user = parsed
+
+    store_data = _load_seed_store()
+    items = _active_seed_shop_items(store_data)
+    item = _find_seed_shop_item(items, item_name, host_id, "normal")
+    if item is None:
+        super_candidate = _find_seed_shop_item(items, item_name, host_id, "super")
+        if super_candidate is not None and not _is_server_booster(ctx.author):
+            await ctx.send("That item is in Super Shop and only boosters can buy it.")
+            return
+        item = super_candidate
+
+    if item is None:
+        await ctx.send("I could not find that item/host combination in stock.")
+        return
+
+    purchase_channel = bot.get_channel(SEED_PURCHASE_CHANNEL_ID)
+    if purchase_channel is None:
+        try:
+            purchase_channel = await bot.fetch_channel(SEED_PURCHASE_CHANNEL_ID)
+        except Exception:
+            purchase_channel = None
+
+    if not isinstance(purchase_channel, discord.TextChannel):
+        await ctx.send(f"I could not access <#{SEED_PURCHASE_CHANNEL_ID}>.")
+        return
+
+    price = int(item.get("price", 0) or 0)
+    bank_data = _load_seed_bank()
+    buyer_balance = _get_seed_balance(bank_data, ctx.author.id)
+    if buyer_balance < price:
+        await ctx.send(f"You need `{price}` seeds, but you only have `{buyer_balance}`.")
+        return
+
+    _set_seed_balance(bank_data, ctx.author.id, buyer_balance - price)
+    host_balance = _get_seed_balance(bank_data, host_id)
+    _set_seed_balance(bank_data, host_id, host_balance + price)
+    _save_seed_bank(bank_data)
+    await _sync_seed_leader_roles(ctx.guild, bank_data)
+
+    item["active"] = False
+    _save_seed_store(store_data)
+
+    sale_embed = discord.Embed(
+        description=(
+            "# Your Item has been bought!\n"
+            f"{ctx.author.mention} has bought your {item.get('name', 'item')} please send them the item!\n\n"
+            f"Buyer Roblox: `{roblox_user}`\n\n"
+            "Action - In-complete."
+        ),
+        color=discord.Color.green(),
+    )
+    sale_view = CompleteSellView(host_id=host_id)
+    await purchase_channel.send(content=f"<@{host_id}>", embed=sale_embed, view=sale_view)
+
+    await ctx.send(
+        f"Purchase submitted for `{item.get('name', 'item')}` from <@{host_id}>. "
+        f"`{price}` seeds deducted. Your new balance is `{buyer_balance - price}`."
+    )
+
+
+@bot.command(name="seedclaimwipe")
+async def seedclaimwipe(ctx: commands.Context, target: str):
+    if ctx.author.id not in SEED_CLAIM_WIPE_ADMINS:
+        await ctx.send("You are not allowed to use this command.")
+        return
+
+    bank_data = _load_seed_bank()
+    target_clean = target.strip().lower()
+    if target_clean == "all":
+        bank_data["claim_cooldowns"] = {}
+        _save_seed_bank(bank_data)
+        await ctx.send("Wiped claim cooldowns for all users.")
+        return
+
+    target_id = None
+    mention_match = re.fullmatch(r"<@!?(\d+)>", target.strip())
+    if mention_match:
+        target_id = int(mention_match.group(1))
+    elif target.strip().isdigit():
+        target_id = int(target.strip())
+
+    if target_id is None:
+        await ctx.send("Usage: -seedclaimwipe all OR -seedclaimwipe @user")
+        return
+
+    _clear_claim_cooldown(bank_data, target_id)
+    _save_seed_bank(bank_data)
+    await ctx.send(f"Wiped claim cooldown for <@{target_id}>.")
+
+
+@bot.command(name="seedstock")
+async def seedstock(ctx: commands.Context):
     try:
         embed = await _build_seed_shop_embed()
         await ctx.send(embed=embed)
