@@ -1066,6 +1066,14 @@ async def greroll(ctx: commands.Context, giveaway_id: int):
         await ctx.send(f"I could not find a giveaway with ID {giveaway_id}.")
         return
 
+    host_user_id = int(giveaway.get("host_user_id", 0) or 0)
+    if host_user_id <= 0:
+        await ctx.send("This giveaway is missing host data and cannot be rerolled.")
+        return
+    if ctx.author.id != host_user_id:
+        await ctx.send(f"Only the giveaway host <@{host_user_id}> can reroll this giveaway.")
+        return
+
     if not giveaway.get("ended"):
         await ctx.send("That giveaway has not ended yet. You can reroll after it ends.")
         return
@@ -1079,6 +1087,38 @@ async def greroll(ctx: commands.Context, giveaway_id: int):
     winners = random.sample(entries, k=winner_count)
     winner_mentions = ", ".join(f"<@{winner_id}>" for winner_id in winners)
     await ctx.send(f"<:tada:1525999768369631273> Congratulations {winner_mentions}, you won {giveaway.get('prize', 'Unknown Prize')}!")
+
+
+@bot.command(name="genterlist")
+async def genterlist(ctx: commands.Context, giveaway_id: int):
+    giveaway = GIVEAWAYS.get(giveaway_id)
+    if giveaway is None:
+        await ctx.send(f"I could not find a giveaway with ID {giveaway_id}.")
+        return
+
+    entries = sorted(int(user_id) for user_id in giveaway.get("entries", set()))
+    if not entries:
+        await ctx.send(f"Giveaway ID {giveaway_id} has no entries yet.")
+        return
+
+    lines = [f"{index}. <@{user_id}>" for index, user_id in enumerate(entries, start=1)]
+    header = f"Giveaway ID {giveaway_id} entrants ({len(entries)}):\n"
+    message = header + "\n".join(lines)
+
+    if len(message) <= 1900:
+        await ctx.send(message)
+        return
+
+    current = header
+    for line in lines:
+        candidate = current + line + "\n"
+        if len(candidate) > 1900:
+            await ctx.send(current.rstrip())
+            current = line + "\n"
+        else:
+            current = candidate
+    if current.strip():
+        await ctx.send(current.rstrip())
 
 
 @bot.command(name="forceend")
