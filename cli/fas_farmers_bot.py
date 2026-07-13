@@ -68,6 +68,8 @@ SEED_TOP_2_ROLE_ID = 1525980968958296154
 SEED_TOP_3_ROLE_ID = 1525981030975275119
 SEED_CLAIM_WIPE_ADMINS = {1273130266629640243, 1332458947067773072, 866957916933455912}
 SEED_BALANCE_ADMIN_ROLE_ID = 1526236532980318462
+GIVEAWAY_PING_ROLE_ID = 1526304210910449765
+SEED_CLAIMWIPE_PING_ROLE_ID = 1526309075372085459
 
 NO_VOUCH_ROLE_ID = 1526215394283487302
 VOUCH_ANY_ROLE_ID = 1526214841264767139
@@ -859,17 +861,27 @@ class SeedShopPagesView(discord.ui.View):
             next_button.disabled = self.page_index >= len(self.pages) - 1
 
     @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary, custom_id="seedshop_prev")
-    async def previous_page(self, first, second):
-        if isinstance(first, discord.ui.Button):
-            interaction = second
-        else:
-            interaction = first
+    async def previous_page(self, *args):
+        interaction = next((arg for arg in args if isinstance(arg, discord.Interaction)), None)
         if not isinstance(interaction, discord.Interaction):
             return
         if self.page_index <= 0:
             await interaction.response.defer()
             return
         self.page_index -= 1
+        self._sync_buttons()
+        embed = _build_seed_shop_page_embed(self.pages[self.page_index], self.page_index, len(self.pages), self.total_items)
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    @discord.ui.button(label="Next", style=discord.ButtonStyle.secondary, custom_id="seedshop_next")
+    async def next_page(self, *args):
+        interaction = next((arg for arg in args if isinstance(arg, discord.Interaction)), None)
+        if not isinstance(interaction, discord.Interaction):
+            return
+        if self.page_index >= len(self.pages) - 1:
+            await interaction.response.defer()
+            return
+        self.page_index += 1
         self._sync_buttons()
         embed = _build_seed_shop_page_embed(self.pages[self.page_index], self.page_index, len(self.pages), self.total_items)
         await interaction.response.edit_message(embed=embed, view=self)
@@ -898,11 +910,8 @@ class SeedLeaderboardPagesView(discord.ui.View):
             next_button.disabled = self.page_index >= len(self.pages) - 1
 
     @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary, custom_id="seedlb_prev")
-    async def previous_page(self, first, second):
-        if isinstance(first, discord.ui.Button):
-            interaction = second
-        else:
-            interaction = first
+    async def previous_page(self, *args):
+        interaction = next((arg for arg in args if isinstance(arg, discord.Interaction)), None)
         if not isinstance(interaction, discord.Interaction):
             return
         if self.page_index <= 0:
@@ -920,11 +929,8 @@ class SeedLeaderboardPagesView(discord.ui.View):
         await interaction.response.edit_message(embed=embed, view=self)
 
     @discord.ui.button(label="Next", style=discord.ButtonStyle.secondary, custom_id="seedlb_next")
-    async def next_page(self, first, second):
-        if isinstance(first, discord.ui.Button):
-            interaction = second
-        else:
-            interaction = first
+    async def next_page(self, *args):
+        interaction = next((arg for arg in args if isinstance(arg, discord.Interaction)), None)
         if not isinstance(interaction, discord.Interaction):
             return
         if self.page_index >= len(self.pages) - 1:
@@ -939,22 +945,6 @@ class SeedLeaderboardPagesView(discord.ui.View):
             len(self.pages),
             self.total_rows,
         )
-        await interaction.response.edit_message(embed=embed, view=self)
-
-    @discord.ui.button(label="Next", style=discord.ButtonStyle.secondary, custom_id="seedshop_next")
-    async def next_page(self, first, second):
-        if isinstance(first, discord.ui.Button):
-            interaction = second
-        else:
-            interaction = first
-        if not isinstance(interaction, discord.Interaction):
-            return
-        if self.page_index >= len(self.pages) - 1:
-            await interaction.response.defer()
-            return
-        self.page_index += 1
-        self._sync_buttons()
-        embed = _build_seed_shop_page_embed(self.pages[self.page_index], self.page_index, len(self.pages), self.total_items)
         await interaction.response.edit_message(embed=embed, view=self)
 
 
@@ -1442,7 +1432,12 @@ async def _create_giveaway_message(*, giveaway_key: int, channel: discord.abc.Me
 
     view = GiveawayView(giveaway_key)
     embed = _build_giveaway_embed(giveaway)
-    message = await channel.send(content="@everyone", embed=embed, view=view, allowed_mentions=discord.AllowedMentions(everyone=True))
+    message = await channel.send(
+        content=f"<@&{GIVEAWAY_PING_ROLE_ID}>",
+        embed=embed,
+        view=view,
+        allowed_mentions=discord.AllowedMentions(roles=True),
+    )
     giveaway["message_id"] = message.id
     asyncio.create_task(_finish_giveaway(giveaway_key))
     return message
@@ -2221,7 +2216,7 @@ async def seedclaimwipe(ctx: commands.Context, target: str):
     if target_clean == "all":
         bank_data["claim_cooldowns"] = {}
         _save_seed_bank(bank_data)
-        await ctx.send("Wiped claim cooldowns for all users.")
+        await ctx.send(f"<@&{SEED_CLAIMWIPE_PING_ROLE_ID}> Wiped claim cooldowns for all users.")
         return
 
     target_id = None
@@ -2237,7 +2232,7 @@ async def seedclaimwipe(ctx: commands.Context, target: str):
 
     _clear_claim_cooldown(bank_data, target_id)
     _save_seed_bank(bank_data)
-    await ctx.send(f"Wiped claim cooldown for <@{target_id}>.")
+    await ctx.send(f"<@&{SEED_CLAIMWIPE_PING_ROLE_ID}> Wiped claim cooldown for <@{target_id}>.")
 
 
 @bot.command(name="addseeds")
