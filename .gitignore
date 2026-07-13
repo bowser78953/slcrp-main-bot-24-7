@@ -6,3 +6,5 @@ __pycache__/
 data/*
 !data/automod_blacklist_fresh.txt
 !data/automod_nsfw_blacklist_fresh.txt
+!data/fas_seed_bank.json
+!data/fas_seed_store.json
