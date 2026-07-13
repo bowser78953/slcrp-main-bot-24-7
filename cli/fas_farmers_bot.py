@@ -92,6 +92,7 @@ TOP1_CLAIM_MULTIPLIER = 1.75
 TOP2_CLAIM_MULTIPLIER = 1.5
 TOP3_CLAIM_MULTIPLIER = 1.25
 SEED_SHOP_PAGE_SIZE = 8
+SEED_LEADERBOARD_PAGE_SIZE = 10
 
 RARITY_EMOJIS = {
     "common": "<:common:1525708045450084473>",
@@ -546,6 +547,68 @@ def _highest_seed_balances(bank_data: dict, top_n: int = 3) -> list[int]:
     return [user_id for user_id, _amount in pairs[:top_n]]
 
 
+def _seed_leaderboard_rows(bank_data: dict) -> list[tuple[int, int]]:
+    balances = bank_data.get("balances", {})
+    rows: list[tuple[int, int]] = []
+    if isinstance(balances, dict):
+        for key, value in balances.items():
+            try:
+                user_id = int(key)
+                amount = max(0, int(value or 0))
+            except Exception:
+                continue
+            rows.append((user_id, amount))
+    rows.sort(key=lambda item: (-item[1], item[0]))
+    return rows
+
+
+def _seed_leaderboard_pages(rows: list[tuple[int, int]], page_size: int = SEED_LEADERBOARD_PAGE_SIZE) -> list[list[tuple[int, int]]]:
+    if not rows:
+        return [[]]
+    pages: list[list[tuple[int, int]]] = []
+    for idx in range(0, len(rows), page_size):
+        pages.append(rows[idx: idx + page_size])
+    return pages
+
+
+def _build_seed_leaderboard_embed(
+    guild: discord.Guild | None,
+    page_rows: list[tuple[int, int]],
+    page_index: int,
+    total_pages: int,
+    total_rows: int,
+) -> discord.Embed:
+    start_rank = page_index * SEED_LEADERBOARD_PAGE_SIZE
+    lines: list[str] = []
+
+    for offset, (user_id, amount) in enumerate(page_rows):
+        rank = start_rank + offset + 1
+        rank_prefix = ""
+        if rank == 1:
+            rank_prefix = "🥇 "
+        elif rank == 2:
+            rank_prefix = "🥈 "
+        elif rank == 3:
+            rank_prefix = "🥉 "
+
+        lines.append(f"{rank_prefix}`#{rank}` <@{user_id}> - `{amount}` seeds")
+
+    if not lines:
+        lines = ["No seed balances are recorded yet."]
+
+    title = "[FAS] Seed Leaderboard"
+    if guild is not None:
+        title = f"{guild.name} Seed Leaderboard"
+
+    embed = discord.Embed(
+        title=title,
+        description="\n".join(lines),
+        color=discord.Color.gold(),
+    )
+    embed.set_footer(text=f"Page {page_index + 1}/{total_pages} | {total_rows} players")
+    return embed
+
+
 async def _sync_seed_leader_roles(guild: discord.Guild | None, bank_data: dict) -> None:
     if guild is None:
         return
@@ -789,6 +852,73 @@ class SeedShopPagesView(discord.ui.View):
         self.page_index -= 1
         self._sync_buttons()
         embed = _build_seed_shop_page_embed(self.pages[self.page_index], self.page_index, len(self.pages), self.total_items)
+        await interaction.response.edit_message(embed=embed, view=self)
+
+
+class SeedLeaderboardPagesView(discord.ui.View):
+    def __init__(self, guild: discord.Guild | None, pages: list[list[tuple[int, int]]], total_rows: int):
+        super().__init__(timeout=180)
+        self.guild = guild
+        self.pages = pages
+        self.total_rows = total_rows
+        self.page_index = 0
+        self._sync_buttons()
+
+    def _sync_buttons(self) -> None:
+        prev_button = None
+        next_button = None
+        for child in self.children:
+            if isinstance(child, discord.ui.Button) and child.custom_id == "seedlb_prev":
+                prev_button = child
+            if isinstance(child, discord.ui.Button) and child.custom_id == "seedlb_next":
+                next_button = child
+        if prev_button is not None:
+            prev_button.disabled = self.page_index <= 0
+        if next_button is not None:
+            next_button.disabled = self.page_index >= len(self.pages) - 1
+
+    @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary, custom_id="seedlb_prev")
+    async def previous_page(self, first, second):
+        if isinstance(first, discord.ui.Button):
+            interaction = second
+        else:
+            interaction = first
+        if not isinstance(interaction, discord.Interaction):
+            return
+        if self.page_index <= 0:
+            await interaction.response.defer()
+            return
+        self.page_index -= 1
+        self._sync_buttons()
+        embed = _build_seed_leaderboard_embed(
+            self.guild,
+            self.pages[self.page_index],
+            self.page_index,
+            len(self.pages),
+            self.total_rows,
+        )
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    @discord.ui.button(label="Next", style=discord.ButtonStyle.secondary, custom_id="seedlb_next")
+    async def next_page(self, first, second):
+        if isinstance(first, discord.ui.Button):
+            interaction = second
+        else:
+            interaction = first
+        if not isinstance(interaction, discord.Interaction):
+            return
+        if self.page_index >= len(self.pages) - 1:
+            await interaction.response.defer()
+            return
+        self.page_index += 1
+        self._sync_buttons()
+        embed = _build_seed_leaderboard_embed(
+            self.guild,
+            self.pages[self.page_index],
+            self.page_index,
+            len(self.pages),
+            self.total_rows,
+        )
         await interaction.response.edit_message(embed=embed, view=self)
 
     @discord.ui.button(label="Next", style=discord.ButtonStyle.secondary, custom_id="seedshop_next")
@@ -1929,6 +2059,16 @@ async def supershop(ctx: commands.Context):
     pages = _seed_shop_item_pages(super_items)
     view = SeedShopPagesView(pages, total_items=len(super_items))
     embed = _build_seed_shop_page_embed(pages[0], 0, len(pages), len(super_items))
+    await ctx.send(embed=embed, view=view)
+
+
+@bot.command(name="seedleaderboard", aliases=["seedlb"])
+async def seedleaderboard(ctx: commands.Context):
+    bank_data = _load_seed_bank()
+    rows = _seed_leaderboard_rows(bank_data)
+    pages = _seed_leaderboard_pages(rows)
+    view = SeedLeaderboardPagesView(ctx.guild, pages, total_rows=len(rows))
+    embed = _build_seed_leaderboard_embed(ctx.guild, pages[0], 0, len(pages), len(rows))
     await ctx.send(embed=embed, view=view)
 
 
