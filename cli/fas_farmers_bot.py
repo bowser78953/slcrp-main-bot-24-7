@@ -1587,6 +1587,13 @@ async def seedclaim(ctx: commands.Context):
     await ctx.send(f"{ctx.author.mention} claimed `{amount}` seeds{booster_text}. You now have `{new_balance}` seeds.")
 
 
+@bot.command(name="seedbalance")
+async def seedbalance(ctx: commands.Context):
+    bank_data = _load_seed_bank()
+    balance = _get_seed_balance(bank_data, ctx.author.id)
+    await ctx.send(f"{ctx.author.mention} you currently have `{balance}` seeds.")
+
+
 @bot.command(name="addtoshop")
 async def addtoshop(ctx: commands.Context, *, raw_args: str):
     if not _has_seed_shop_seller_role(ctx.author):
@@ -1730,7 +1737,8 @@ async def buy(ctx: commands.Context, *, raw_args: str):
             "# Your Item has been bought!\n"
             f"{ctx.author.mention} has bought your {item.get('name', 'item')} please send them the item!\n\n"
             f"Buyer Roblox: `{roblox_user}`\n\n"
-            "Action - In-complete."
+            "Action - In-complete.\n\n"
+            f"💰When comlpete you will get: `{price}`"
         ),
         color=discord.Color.green(),
     )
