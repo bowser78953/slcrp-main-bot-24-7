@@ -13,6 +13,11 @@ from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
 try:
+    import redis as redis_lib
+except ImportError:
+    redis_lib = None
+
+try:
     from discord import app_commands
 except ImportError:
     app_commands = None
@@ -39,11 +44,16 @@ VOUCH_DATA_FILE = os.path.join(DATA_DIR, "fas_farmers_reports.json")
 VOUCH_DATA_BACKUP_FILE = os.path.join(DATA_DIR, "fas_farmers_reports.backup.json")
 SEED_SHOP_LIVE_FILE = os.path.join(DATA_DIR, "fas_seed_shop_live.json")
 SEED_DATA_DIR = os.path.abspath(os.getenv("SEED_DATA_DIR") or os.getenv("RENDER_DISK_PATH") or DATA_DIR)
+REDIS_URL = (os.getenv("REDIS_URL") or "").strip()
+REDIS_SEED_BANK_KEY = "fas:seed_bank"
+REDIS_SEED_STORE_KEY = "fas:seed_store"
 SEED_BANK_FILE = os.path.join(SEED_DATA_DIR, "fas_seed_bank.json")
 SEED_STORE_FILE = os.path.join(SEED_DATA_DIR, "fas_seed_store.json")
 LEGACY_SEED_BANK_FILE = os.path.join(DATA_DIR, "fas_seed_bank.json")
 LEGACY_SEED_STORE_FILE = os.path.join(DATA_DIR, "fas_seed_store.json")
 DATA_LOCK = Lock()
+SEED_REDIS_CLIENT = None
+SEED_REDIS_DISABLED = False
 
 VOUCH_CHANNEL_ID = 1524283822512799824
 SCAM_REPORT_CHANNEL_ID = 1525702427263631411
@@ -321,6 +331,33 @@ def _ensure_seed_store_file() -> None:
             json.dump({"next_item_id": 1, "items": []}, f, indent=2)
 
 
+def _get_seed_redis_client():
+    global SEED_REDIS_CLIENT, SEED_REDIS_DISABLED
+    if SEED_REDIS_DISABLED:
+        return None
+    if SEED_REDIS_CLIENT is not None:
+        return SEED_REDIS_CLIENT
+    if not REDIS_URL or redis_lib is None:
+        return None
+
+    try:
+        client = redis_lib.Redis.from_url(
+            REDIS_URL,
+            decode_responses=True,
+            socket_timeout=5,
+            socket_connect_timeout=5,
+            health_check_interval=30,
+        )
+        client.ping()
+        SEED_REDIS_CLIENT = client
+        print("Seed data persistence: using Redis")
+        return SEED_REDIS_CLIENT
+    except Exception as exc:
+        SEED_REDIS_DISABLED = True
+        print(f"Seed data persistence: Redis unavailable ({exc}), falling back to file storage")
+        return None
+
+
 def _load_data() -> dict:
     _ensure_data_file()
     with DATA_LOCK:
@@ -371,16 +408,50 @@ def _save_live_config(data: dict) -> None:
 
 
 def _load_seed_bank() -> dict:
-    _ensure_seed_bank_file()
-    with DATA_LOCK:
-        with open(SEED_BANK_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
+    client = _get_seed_redis_client()
+    if client is not None:
+        data = None
+        with DATA_LOCK:
+            try:
+                raw = client.get(REDIS_SEED_BANK_KEY)
+                if raw:
+                    data = json.loads(raw)
+            except Exception:
+                data = None
+
+        if not isinstance(data, dict):
+            _ensure_seed_bank_file()
+            with DATA_LOCK:
+                try:
+                    with open(SEED_BANK_FILE, "r", encoding="utf-8") as f:
+                        file_data = json.load(f)
+                except Exception:
+                    file_data = {"balances": {}, "claim_cooldowns": {}}
+                data = file_data if isinstance(file_data, dict) else {"balances": {}, "claim_cooldowns": {}}
+                try:
+                    client.set(REDIS_SEED_BANK_KEY, json.dumps(data))
+                except Exception:
+                    pass
+    else:
+        _ensure_seed_bank_file()
+        with DATA_LOCK:
+            with open(SEED_BANK_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
     data.setdefault("balances", {})
     data.setdefault("claim_cooldowns", {})
     return data
 
 
 def _save_seed_bank(data: dict) -> None:
+    client = _get_seed_redis_client()
+    if client is not None:
+        with DATA_LOCK:
+            try:
+                client.set(REDIS_SEED_BANK_KEY, json.dumps(data))
+                return
+            except Exception:
+                pass
+
     _ensure_seed_bank_file()
     with DATA_LOCK:
         tmp = SEED_BANK_FILE + ".tmp"
@@ -539,16 +610,50 @@ def _parse_item_price_arguments(raw: str) -> tuple[str, int] | None:
 
 
 def _load_seed_store() -> dict:
-    _ensure_seed_store_file()
-    with DATA_LOCK:
-        with open(SEED_STORE_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
+    client = _get_seed_redis_client()
+    if client is not None:
+        data = None
+        with DATA_LOCK:
+            try:
+                raw = client.get(REDIS_SEED_STORE_KEY)
+                if raw:
+                    data = json.loads(raw)
+            except Exception:
+                data = None
+
+        if not isinstance(data, dict):
+            _ensure_seed_store_file()
+            with DATA_LOCK:
+                try:
+                    with open(SEED_STORE_FILE, "r", encoding="utf-8") as f:
+                        file_data = json.load(f)
+                except Exception:
+                    file_data = {"next_item_id": 1, "items": []}
+                data = file_data if isinstance(file_data, dict) else {"next_item_id": 1, "items": []}
+                try:
+                    client.set(REDIS_SEED_STORE_KEY, json.dumps(data))
+                except Exception:
+                    pass
+    else:
+        _ensure_seed_store_file()
+        with DATA_LOCK:
+            with open(SEED_STORE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
     data.setdefault("next_item_id", 1)
     data.setdefault("items", [])
     return data
 
 
 def _save_seed_store(data: dict) -> None:
+    client = _get_seed_redis_client()
+    if client is not None:
+        with DATA_LOCK:
+            try:
+                client.set(REDIS_SEED_STORE_KEY, json.dumps(data))
+                return
+            except Exception:
+                pass
+
     _ensure_seed_store_file()
     with DATA_LOCK:
         tmp = SEED_STORE_FILE + ".tmp"
