@@ -315,6 +315,9 @@ SEED_SHOP_COMMAND_NAMES = {
     "supershop",
     "register",
     "buy",
+}
+
+STOCK_COMMAND_NAMES = {
     "seedstock",
     "seedshoplive",
     "seedshopstop",
@@ -342,11 +345,11 @@ def _configure_commands_for_mode() -> None:
         return
 
     if BOT_MODE == "farmers":
-        # First bot: keep seed shop commands and non-seed commands; remove XP commands.
-        to_remove = XP_COMMAND_NAMES
+        # First bot: keep seed shop + non-seed commands; remove XP and stock commands.
+        to_remove = XP_COMMAND_NAMES | STOCK_COMMAND_NAMES
     else:
         # Second bot: XP-only command surface.
-        to_remove = NON_SEED_COMMAND_NAMES | SEED_SHOP_COMMAND_NAMES
+        to_remove = NON_SEED_COMMAND_NAMES | SEED_SHOP_COMMAND_NAMES | STOCK_COMMAND_NAMES
     for name in to_remove:
         try:
             bot.remove_command(name)
