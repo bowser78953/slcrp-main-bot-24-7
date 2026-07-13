@@ -19,7 +19,7 @@ def main() -> int:
     bot_specs: list[tuple[str, str, str | None, dict[str, str] | None]] = [
         ("main", "bot_fresh_standalone.py", "NEW_BOT_TOKEN", None),
         ("farmers", "cli/fas_farmers_bot.py", "FAS_FARMERS_BOT_TOKEN", {"FAS_BOT_MODE": "farmers"}),
-        ("seed", "cli/fas_farmers_bot.py", "FAS_SEED_BOT_TOKEN", {"FAS_BOT_MODE": "seed"}),
+        ("seed", "cli/fas_seed_bot.py", "FAS_SEED_BOT_TOKEN", None),
         ("modmail", "modmail.py", "MODMAIL_TOKEN", None),
         ("ycf", "ycf_bot.py", "YCF_BOT_TOKEN", None),
         ("third", "bot_third.py", "THIRD_BOT_TOKEN", None),
