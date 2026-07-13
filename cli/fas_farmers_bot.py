@@ -5,6 +5,7 @@ import asyncio
 import colorsys
 import random
 import shutil
+import uuid
 import aiohttp
 from datetime import datetime, timezone
 from threading import Lock
@@ -54,6 +55,7 @@ LEGACY_SEED_STORE_FILE = os.path.join(DATA_DIR, "fas_seed_store.json")
 DATA_LOCK = Lock()
 SEED_REDIS_CLIENT = None
 SEED_REDIS_DISABLED = False
+BOT_INSTANCE_ID = uuid.uuid4().hex[:8]
 
 VOUCH_CHANNEL_ID = 1524283822512799824
 SCAM_REPORT_CHANNEL_ID = 1525702427263631411
@@ -1789,6 +1791,57 @@ async def seedbalance(ctx: commands.Context):
     bank_data = _load_seed_bank()
     balance = _get_seed_balance(bank_data, ctx.author.id)
     await ctx.send(f"{ctx.author.mention} you currently have `{balance}` seeds.")
+
+
+@bot.command(name="seeddebug")
+async def seeddebug(ctx: commands.Context):
+    if ctx.author.id not in SEED_CLAIM_WIPE_ADMINS:
+        await ctx.send("You are not allowed to use this command.")
+        return
+
+    user_id = ctx.author.id
+    effective_data = _load_seed_bank()
+    effective_balance = _get_seed_balance(effective_data, user_id)
+    effective_updated = int(effective_data.get("updated_at", 0) or 0)
+
+    file_balance = None
+    file_updated = None
+    try:
+        _ensure_seed_bank_file()
+        with open(SEED_BANK_FILE, "r", encoding="utf-8") as f:
+            file_data = json.load(f)
+        if isinstance(file_data, dict):
+            file_balance = int((file_data.get("balances", {}) or {}).get(str(user_id), 0) or 0)
+            file_updated = int(file_data.get("updated_at", 0) or 0)
+    except Exception:
+        pass
+
+    redis_balance = None
+    redis_updated = None
+    redis_ok = False
+    client = _get_seed_redis_client()
+    if client is not None:
+        try:
+            raw = client.get(REDIS_SEED_BANK_KEY)
+            if raw:
+                redis_data = json.loads(raw)
+                if isinstance(redis_data, dict):
+                    redis_balance = int((redis_data.get("balances", {}) or {}).get(str(user_id), 0) or 0)
+                    redis_updated = int(redis_data.get("updated_at", 0) or 0)
+                    redis_ok = True
+        except Exception:
+            redis_ok = False
+
+    await ctx.send(
+        "Seed Debug\n"
+        f"Instance: `{BOT_INSTANCE_ID}` PID: `{os.getpid()}`\n"
+        f"Redis URL set: `{bool(REDIS_URL)}` Redis connected: `{redis_ok}`\n"
+        f"SEED_DATA_DIR: `{SEED_DATA_DIR}`\n"
+        f"SEED_BANK_FILE: `{SEED_BANK_FILE}`\n"
+        f"Effective balance: `{effective_balance}` updated_at: `{effective_updated}`\n"
+        f"File balance: `{file_balance}` updated_at: `{file_updated}`\n"
+        f"Redis balance: `{redis_balance}` updated_at: `{redis_updated}`"
+    )
 
 
 @bot.command(name="addtoshop")
