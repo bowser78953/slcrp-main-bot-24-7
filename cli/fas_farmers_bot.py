@@ -4,6 +4,7 @@ import re
 import asyncio
 import colorsys
 import random
+import shutil
 import aiohttp
 from datetime import datetime, timezone
 from threading import Lock
@@ -37,8 +38,11 @@ DATA_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "data"))
 VOUCH_DATA_FILE = os.path.join(DATA_DIR, "fas_farmers_reports.json")
 VOUCH_DATA_BACKUP_FILE = os.path.join(DATA_DIR, "fas_farmers_reports.backup.json")
 SEED_SHOP_LIVE_FILE = os.path.join(DATA_DIR, "fas_seed_shop_live.json")
-SEED_BANK_FILE = os.path.join(DATA_DIR, "fas_seed_bank.json")
-SEED_STORE_FILE = os.path.join(DATA_DIR, "fas_seed_store.json")
+SEED_DATA_DIR = os.path.abspath(os.getenv("SEED_DATA_DIR") or os.getenv("RENDER_DISK_PATH") or DATA_DIR)
+SEED_BANK_FILE = os.path.join(SEED_DATA_DIR, "fas_seed_bank.json")
+SEED_STORE_FILE = os.path.join(SEED_DATA_DIR, "fas_seed_store.json")
+LEGACY_SEED_BANK_FILE = os.path.join(DATA_DIR, "fas_seed_bank.json")
+LEGACY_SEED_STORE_FILE = os.path.join(DATA_DIR, "fas_seed_store.json")
 DATA_LOCK = Lock()
 
 VOUCH_CHANNEL_ID = 1524283822512799824
@@ -294,14 +298,24 @@ def _ensure_live_file() -> None:
 
 
 def _ensure_seed_bank_file() -> None:
-    os.makedirs(DATA_DIR, exist_ok=True)
+    os.makedirs(SEED_DATA_DIR, exist_ok=True)
+    if not os.path.exists(SEED_BANK_FILE) and os.path.exists(LEGACY_SEED_BANK_FILE):
+        try:
+            shutil.copy2(LEGACY_SEED_BANK_FILE, SEED_BANK_FILE)
+        except Exception:
+            pass
     if not os.path.exists(SEED_BANK_FILE):
         with open(SEED_BANK_FILE, "w", encoding="utf-8") as f:
             json.dump({"balances": {}}, f, indent=2)
 
 
 def _ensure_seed_store_file() -> None:
-    os.makedirs(DATA_DIR, exist_ok=True)
+    os.makedirs(SEED_DATA_DIR, exist_ok=True)
+    if not os.path.exists(SEED_STORE_FILE) and os.path.exists(LEGACY_SEED_STORE_FILE):
+        try:
+            shutil.copy2(LEGACY_SEED_STORE_FILE, SEED_STORE_FILE)
+        except Exception:
+            pass
     if not os.path.exists(SEED_STORE_FILE):
         with open(SEED_STORE_FILE, "w", encoding="utf-8") as f:
             json.dump({"next_item_id": 1, "items": []}, f, indent=2)
