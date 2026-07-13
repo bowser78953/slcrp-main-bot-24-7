@@ -86,6 +86,9 @@ BOOSTER_SEED_CLAIM_MIN = 1000
 BOOSTER_SEED_CLAIM_MAX = 3000
 SEED_CLAIM_COOLDOWN_SECONDS = 86400
 BOOSTER_CLAIM_MULTIPLIER = 2.5
+TOP1_CLAIM_MULTIPLIER = 1.75
+TOP2_CLAIM_MULTIPLIER = 1.5
+TOP3_CLAIM_MULTIPLIER = 1.25
 SEED_SHOP_PAGE_SIZE = 8
 
 RARITY_EMOJIS = {
@@ -1694,11 +1697,23 @@ async def seedclaim(ctx: commands.Context):
         return
 
     is_booster = _is_server_booster(ctx.author)
+    top_users = _highest_seed_balances(bank_data, top_n=3)
+    leaderboard_multiplier = 1.0
+    if len(top_users) > 0 and top_users[0] == ctx.author.id:
+        leaderboard_multiplier = TOP1_CLAIM_MULTIPLIER
+    elif len(top_users) > 1 and top_users[1] == ctx.author.id:
+        leaderboard_multiplier = TOP2_CLAIM_MULTIPLIER
+    elif len(top_users) > 2 and top_users[2] == ctx.author.id:
+        leaderboard_multiplier = TOP3_CLAIM_MULTIPLIER
+
     if is_booster:
         base_amount = random.randint(BOOSTER_SEED_CLAIM_MIN, BOOSTER_SEED_CLAIM_MAX)
         amount = int(base_amount * BOOSTER_CLAIM_MULTIPLIER)
     else:
         amount = random.randint(SEED_CLAIM_MIN, SEED_CLAIM_MAX)
+
+    if leaderboard_multiplier > 1.0:
+        amount = int(amount * leaderboard_multiplier)
 
     current_balance = _get_seed_balance(bank_data, ctx.author.id)
     new_balance = current_balance + amount
@@ -1707,8 +1722,13 @@ async def seedclaim(ctx: commands.Context):
     _save_seed_bank(bank_data)
     await _sync_seed_leader_roles(ctx.guild, bank_data)
 
-    booster_text = " (Booster bonus applied)" if is_booster else ""
-    await ctx.send(f"{ctx.author.mention} claimed `{amount}` seeds{booster_text}. You now have `{new_balance}` seeds.")
+    bonus_parts: list[str] = []
+    if is_booster:
+        bonus_parts.append(f"Booster x{BOOSTER_CLAIM_MULTIPLIER:g}")
+    if leaderboard_multiplier > 1.0:
+        bonus_parts.append(f"Collector x{leaderboard_multiplier:g}")
+    bonus_text = f" ({', '.join(bonus_parts)})" if bonus_parts else ""
+    await ctx.send(f"{ctx.author.mention} claimed `{amount}` seeds{bonus_text}. You now have `{new_balance}` seeds.")
 
 
 @bot.command(name="seedbalance")
