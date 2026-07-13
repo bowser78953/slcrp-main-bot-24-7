@@ -448,6 +448,7 @@ def _load_seed_bank() -> dict:
                     "claim_cooldowns": {},
                     "message_counts": {},
                     "message_bonus_remaining": {},
+                    "roblox_users": {},
                 }
 
         if not isinstance(redis_data, dict):
@@ -456,6 +457,7 @@ def _load_seed_bank() -> dict:
                 "claim_cooldowns": {},
                 "message_counts": {},
                 "message_bonus_remaining": {},
+                "roblox_users": {},
             }
             try:
                 client.set(REDIS_SEED_BANK_KEY, json.dumps(data))
@@ -490,6 +492,7 @@ def _load_seed_bank() -> dict:
     data.setdefault("claim_cooldowns", {})
     data.setdefault("message_counts", {})
     data.setdefault("message_bonus_remaining", {})
+    data.setdefault("roblox_users", {})
     return data
 
 
@@ -523,6 +526,17 @@ def _get_seed_balance(bank_data: dict, user_id: int) -> int:
 def _set_seed_balance(bank_data: dict, user_id: int, amount: int) -> None:
     balances = bank_data.setdefault("balances", {})
     balances[str(user_id)] = max(0, int(amount))
+
+
+def _get_registered_roblox_user(bank_data: dict, user_id: int) -> str | None:
+    users = bank_data.setdefault("roblox_users", {})
+    value = str(users.get(str(user_id), "") or "").strip()
+    return value if value else None
+
+
+def _set_registered_roblox_user(bank_data: dict, user_id: int, roblox_user: str) -> None:
+    users = bank_data.setdefault("roblox_users", {})
+    users[str(user_id)] = roblox_user.strip()
 
 
 def _get_claim_cooldown_unix(bank_data: dict, user_id: int) -> int:
@@ -673,43 +687,22 @@ async def _sync_seed_leader_roles(guild: discord.Guild | None, bank_data: dict) 
                     pass
 
 
-def _find_seed_shop_item(items: list[dict], item_name: str, host_id: int, shop_type: str) -> dict | None:
-    normalized_name = item_name.strip().lower()
+def _find_seed_shop_item_by_id(items: list[dict], item_id: int) -> dict | None:
     for item in items:
         if not isinstance(item, dict):
             continue
         if not bool(item.get("active", True)):
             continue
-        if str(item.get("shop_type", "normal")) != shop_type:
-            continue
-        if int(item.get("host_id", 0) or 0) != host_id:
-            continue
-        if str(item.get("name", "")).strip().lower() == normalized_name:
+        if int(item.get("id", 0) or 0) == int(item_id):
             return item
     return None
 
 
-def _parse_buy_arguments(raw: str) -> tuple[str, int, str] | None:
-    # Expected: -buy <Item Name> <@host_or_id> <roblox_user>
-    tokens = raw.strip().split()
-    if len(tokens) < 3:
+def _parse_buy_item_id(raw: str) -> int | None:
+    token = raw.strip()
+    if not token or not token.isdigit():
         return None
-
-    host_token = tokens[-2]
-    roblox_user = tokens[-1]
-    item_name = " ".join(tokens[:-2]).strip()
-    if not item_name:
-        return None
-
-    host_match = re.fullmatch(r"<@!?(\d+)>", host_token)
-    if host_match:
-        host_id = int(host_match.group(1))
-    else:
-        if not host_token.isdigit():
-            return None
-        host_id = int(host_token)
-
-    return item_name, host_id, roblox_user
+    return int(token)
 
 
 def _parse_item_price_arguments(raw: str) -> tuple[str, int] | None:
@@ -822,11 +815,12 @@ def _seed_shop_item_pages(items: list[dict], page_size: int = SEED_SHOP_PAGE_SIZ
 def _build_seed_shop_page_embed(page_items: list[dict], page_index: int, total_pages: int, total_items: int) -> discord.Embed:
     lines: list[str] = []
     for item in page_items:
+        item_id = int(item.get("id", 0) or 0)
         item_name = str(item.get("name", "Unknown Item"))
         price = int(item.get("price", 0) or 0)
         host_id = int(item.get("host_id", 0) or 0)
-        lines.append(f"{item_name} For {price} Seeds - <@{host_id}>")
-        lines.append("-# Wondering How to buy this? Do -buy <The Item You want> <the Host> <Your roblox user>")
+        lines.append(f"ID `{item_id}` | {item_name} For {price} Seeds - <@{host_id}>")
+        lines.append("-# Buy format: -buy <item_id> (or -buty <item_id>)")
 
     if not lines:
         lines = ["No items are in stock right now."]
@@ -2136,27 +2130,55 @@ async def seedleaderboard(ctx: commands.Context):
     await ctx.send(embed=embed, view=view)
 
 
-@bot.command(name="buy")
-async def buy(ctx: commands.Context, *, raw_args: str):
-    parsed = _parse_buy_arguments(raw_args)
-    if parsed is None:
-        await ctx.send("Usage: -buy <The Item You want> <the Host> <Your roblox user>")
+@bot.command(name="register")
+async def register(ctx: commands.Context, *, roblox_user: str):
+    username = roblox_user.strip()
+    if len(username) < 3:
+        await ctx.send("Usage: -register <roblox user>")
+        return
+    if len(username) > 32:
+        await ctx.send("Roblox username looks too long. Keep it under 33 characters.")
         return
 
-    item_name, host_id, roblox_user = parsed
+    bank_data = _load_seed_bank()
+    _set_registered_roblox_user(bank_data, ctx.author.id, username)
+    _save_seed_bank(bank_data)
+    await ctx.send(f"{ctx.author.mention} registered Roblox user: `{username}`")
+
+
+@bot.command(name="buy", aliases=["buty", "but"])
+async def buy(ctx: commands.Context, *, raw_args: str):
+    item_id = _parse_buy_item_id(raw_args)
+    if item_id is None:
+        await ctx.send("Usage: -buy <item_id>")
+        return
+
+    bank_data = _load_seed_bank()
+    roblox_user = _get_registered_roblox_user(bank_data, ctx.author.id)
+    if not roblox_user:
+        await ctx.send("You must register first with `-register <roblox user>` before buying.")
+        return
 
     store_data = _load_seed_store()
     items = _active_seed_shop_items(store_data)
-    item = _find_seed_shop_item(items, item_name, host_id, "normal")
-    if item is None:
-        super_candidate = _find_seed_shop_item(items, item_name, host_id, "super")
-        if super_candidate is not None and not _is_server_booster(ctx.author):
-            await ctx.send("That item is in Super Shop and only boosters can buy it.")
-            return
-        item = super_candidate
+    item = _find_seed_shop_item_by_id(items, item_id)
 
     if item is None:
-        await ctx.send("I could not find that item/host combination in stock.")
+        await ctx.send(f"I could not find an active item with ID `{item_id}`.")
+        return
+
+    item_shop_type = str(item.get("shop_type", "normal"))
+    if item_shop_type == "super" and not _is_server_booster(ctx.author):
+        await ctx.send("That item is in Super Shop and only boosters can buy it.")
+        return
+
+    host_id = int(item.get("host_id", 0) or 0)
+    if host_id <= 0:
+        await ctx.send("This item has an invalid host and cannot be purchased.")
+        return
+
+    if host_id == ctx.author.id:
+        await ctx.send("You cannot buy your own item.")
         return
 
     purchase_channel = bot.get_channel(SEED_PURCHASE_CHANNEL_ID)
@@ -2171,7 +2193,6 @@ async def buy(ctx: commands.Context, *, raw_args: str):
         return
 
     price = int(item.get("price", 0) or 0)
-    bank_data = _load_seed_bank()
     buyer_balance = _get_seed_balance(bank_data, ctx.author.id)
     if buyer_balance < price:
         await ctx.send(f"You need `{price}` seeds, but you only have `{buyer_balance}`.")
@@ -2189,7 +2210,7 @@ async def buy(ctx: commands.Context, *, raw_args: str):
     sale_embed = discord.Embed(
         description=(
             "# Your Item has been bought!\n"
-            f"{ctx.author.mention} has bought your {item.get('name', 'item')} please send them the item!\n\n"
+            f"{ctx.author.mention} has bought your {item.get('name', 'item')} (ID `{int(item.get('id', 0) or 0)}`) please send them the item!\n\n"
             f"Buyer Roblox: `{roblox_user}`\n\n"
             "Action - In-complete.\n\n"
             f"💰When comlpete you will get: `{price}`"
@@ -2200,7 +2221,7 @@ async def buy(ctx: commands.Context, *, raw_args: str):
     await purchase_channel.send(content=f"<@{host_id}>", embed=sale_embed, view=sale_view)
 
     await ctx.send(
-        f"Purchase submitted for `{item.get('name', 'item')}` from <@{host_id}>. "
+        f"Purchase submitted for ID `{int(item.get('id', 0) or 0)}` (`{item.get('name', 'item')}`) from <@{host_id}>. "
         f"`{price}` seeds deducted. Your new balance is `{buyer_balance - price}`."
     )
 
