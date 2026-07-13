@@ -51,7 +51,7 @@ SEED_TOP_1_ROLE_ID = 1525980861097574581
 SEED_TOP_2_ROLE_ID = 1525980968958296154
 SEED_TOP_3_ROLE_ID = 1525981030975275119
 SEED_CLAIM_WIPE_ADMINS = {1273130266629640243, 1332458947067773072, 866957916933455912}
-SEED_BALANCE_ADMIN_ID = 1526236532980318462
+SEED_BALANCE_ADMIN_ROLE_ID = 1526236532980318462
 
 NO_VOUCH_ROLE_ID = 1526215394283487302
 VOUCH_ANY_ROLE_ID = 1526214841264767139
@@ -409,6 +409,12 @@ def _has_seed_shop_seller_role(member: discord.Member | None) -> bool:
     if member is None:
         return False
     return any(role.id == SEED_SHOP_MANAGER_ROLE_ID for role in member.roles)
+
+
+def _has_seed_balance_admin_role(member: discord.Member | None) -> bool:
+    if member is None:
+        return False
+    return any(role.id == SEED_BALANCE_ADMIN_ROLE_ID for role in member.roles)
 
 
 def _highest_seed_balances(bank_data: dict, top_n: int = 3) -> list[int]:
@@ -1784,7 +1790,7 @@ async def seedclaimwipe(ctx: commands.Context, target: str):
 
 @bot.command(name="addseeds")
 async def addseeds(ctx: commands.Context, user: discord.Member, amount: int):
-    if ctx.author.id != SEED_BALANCE_ADMIN_ID:
+    if not _has_seed_balance_admin_role(ctx.author):
         await ctx.send("You are not allowed to use this command.")
         return
     if amount <= 0:
@@ -1802,7 +1808,7 @@ async def addseeds(ctx: commands.Context, user: discord.Member, amount: int):
 
 @bot.command(name="removeseeds", aliases=["remove_seeds"])
 async def remove_seeds(ctx: commands.Context, user: discord.Member, amount: int):
-    if ctx.author.id != SEED_BALANCE_ADMIN_ID:
+    if not _has_seed_balance_admin_role(ctx.author):
         await ctx.send("You are not allowed to use this command.")
         return
     if amount <= 0:
