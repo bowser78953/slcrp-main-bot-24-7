@@ -6,19 +6,23 @@ import sys
 import time
 
 
-def start_process(script_name: str) -> subprocess.Popen:
+def start_process(script_name: str, extra_env: dict[str, str] | None = None) -> subprocess.Popen:
     repo_root = Path(__file__).resolve().parent
     script_path = repo_root / script_name
-    return subprocess.Popen([sys.executable, str(script_path)], cwd=str(repo_root))
+    env = os.environ.copy()
+    if extra_env:
+        env.update(extra_env)
+    return subprocess.Popen([sys.executable, str(script_path)], cwd=str(repo_root), env=env)
 
 
 def main() -> int:
-    bot_specs: list[tuple[str, str, str | None]] = [
-        ("main", "bot_fresh_standalone.py", "NEW_BOT_TOKEN"),
-        ("farmers", "cli/fas_farmers_bot.py", "FAS_FARMERS_BOT_TOKEN"),
-        ("modmail", "modmail.py", "MODMAIL_TOKEN"),
-        ("ycf", "ycf_bot.py", "YCF_BOT_TOKEN"),
-        ("third", "bot_third.py", "THIRD_BOT_TOKEN"),
+    bot_specs: list[tuple[str, str, str | None, dict[str, str] | None]] = [
+        ("main", "bot_fresh_standalone.py", "NEW_BOT_TOKEN", None),
+        ("farmers", "cli/fas_farmers_bot.py", "FAS_FARMERS_BOT_TOKEN", {"FAS_BOT_MODE": "farmers"}),
+        ("seed", "cli/fas_farmers_bot.py", "FAS_SEED_BOT_TOKEN", {"FAS_BOT_MODE": "seed"}),
+        ("modmail", "modmail.py", "MODMAIL_TOKEN", None),
+        ("ycf", "ycf_bot.py", "YCF_BOT_TOKEN", None),
+        ("third", "bot_third.py", "THIRD_BOT_TOKEN", None),
     ]
     processes: dict[str, subprocess.Popen] = {}
     next_restart_at: dict[str, float] = {}
@@ -26,13 +30,13 @@ def main() -> int:
     def can_start(token_env_var: str | None) -> bool:
         return token_env_var is None or bool(os.getenv(token_env_var))
 
-    def start_named_process(name: str, script_name: str, token_env_var: str | None) -> None:
+    def start_named_process(name: str, script_name: str, token_env_var: str | None, extra_env: dict[str, str] | None) -> None:
         if not can_start(token_env_var):
             if token_env_var:
                 print(f"Skipping {script_name}: missing {token_env_var}")
             return
         print(f"Starting {script_name}...")
-        processes[name] = start_process(script_name)
+        processes[name] = start_process(script_name, extra_env=extra_env)
         next_restart_at[name] = 0.0
 
     def stop_all() -> None:
@@ -57,8 +61,8 @@ def main() -> int:
         signal.signal(signal.SIGTERM, handle_signal)
 
     print("Starting bot processes...")
-    for name, script_name, token_env_var in bot_specs:
-        start_named_process(name, script_name, token_env_var)
+    for name, script_name, token_env_var, extra_env in bot_specs:
+        start_named_process(name, script_name, token_env_var, extra_env)
 
     if not processes:
         print("No bot processes started. Set at least one bot token.")
@@ -67,11 +71,11 @@ def main() -> int:
     try:
         while True:
             now = time.time()
-            for name, script_name, token_env_var in bot_specs:
+            for name, script_name, token_env_var, extra_env in bot_specs:
                 process = processes.get(name)
                 if process is None:
                     if now >= next_restart_at.get(name, 0.0) and can_start(token_env_var):
-                        start_named_process(name, script_name, token_env_var)
+                        start_named_process(name, script_name, token_env_var, extra_env)
                     continue
 
                 code = process.poll()

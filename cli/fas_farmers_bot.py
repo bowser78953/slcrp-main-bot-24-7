@@ -28,11 +28,20 @@ BASE_DIR = os.path.dirname(__file__)
 ENV_PATH = os.path.join(BASE_DIR, ".env.fas_farmers")
 load_dotenv(dotenv_path=ENV_PATH)
 
-# Use only the dedicated token variable for this bot.
-TOKEN = (os.getenv("FAS_FARMERS_BOT_TOKEN") or "").strip()
-if not TOKEN:
-    print("Missing FAS_FARMERS_BOT_TOKEN in .env.fas_farmers.")
-    raise SystemExit(1)
+BOT_MODE = (os.getenv("FAS_BOT_MODE") or "farmers").strip().lower()
+if BOT_MODE not in {"farmers", "seed"}:
+    BOT_MODE = "farmers"
+
+if BOT_MODE == "seed":
+    TOKEN = (os.getenv("FAS_SEED_BOT_TOKEN") or "").strip()
+    if not TOKEN:
+        print("Missing FAS_SEED_BOT_TOKEN for seed bot mode.")
+        raise SystemExit(1)
+else:
+    TOKEN = (os.getenv("FAS_FARMERS_BOT_TOKEN") or "").strip()
+    if not TOKEN:
+        print("Missing FAS_FARMERS_BOT_TOKEN in .env.fas_farmers.")
+        raise SystemExit(1)
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -285,6 +294,58 @@ last_stock_signature: str | None = None
 
 GIVEAWAYS: dict[int, dict] = {}
 TREE_SYNCED = False
+MODE_COMMANDS_CONFIGURED = False
+
+SEED_COMMAND_NAMES = {
+    "seedclaim",
+    "seedbalance",
+    "seeddebug",
+    "addtoshop",
+    "addtosshop",
+    "seedshop",
+    "supershop",
+    "seedleaderboard",
+    "seedlb",
+    "register",
+    "buy",
+    "seedclaimwipe",
+    "addseeds",
+    "removeseeds",
+    "remove_seeds",
+    "seedstock",
+    "seedshoplive",
+    "seedshopstop",
+    "sellprice",
+    "predict",
+}
+
+NON_SEED_COMMAND_NAMES = {
+    "ping",
+    "greroll",
+    "genterlist",
+    "forceend",
+    "vouch",
+    "addvouch",
+    "sreport",
+    "vouchlist",
+    "vouchremove",
+    "sreportremove",
+}
+
+
+def _configure_commands_for_mode() -> None:
+    global MODE_COMMANDS_CONFIGURED
+    if MODE_COMMANDS_CONFIGURED:
+        return
+
+    to_remove = SEED_COMMAND_NAMES if BOT_MODE == "farmers" else NON_SEED_COMMAND_NAMES
+    for name in to_remove:
+        try:
+            bot.remove_command(name)
+        except Exception:
+            pass
+
+    MODE_COMMANDS_CONFIGURED = True
 
 RARITY_RANK = {
     "common": 1,
@@ -1705,7 +1766,7 @@ async def on_message(message: discord.Message):
     if message.author.bot:
         return
 
-    if message.guild is not None:
+    if BOT_MODE == "seed" and message.guild is not None:
         content = (message.content or "").strip()
         if content and not content.startswith("-"):
             words = content.split()
@@ -1750,8 +1811,9 @@ async def on_message(message: discord.Message):
 @bot.event
 async def on_ready():
     global TREE_SYNCED
+    _configure_commands_for_mode()
     if bot.user:
-        print(f"{bot.user} is online.")
+        print(f"{bot.user} is online. mode={BOT_MODE}")
     if app_commands is not None and not TREE_SYNCED:
         guild_obj = discord.Object(id=TARGET_GUILD_ID)
         bot.tree.clear_commands(guild=guild_obj)
@@ -1779,12 +1841,13 @@ async def on_ready():
                 print(f"Pycord slash sync attempt {attempt}/5 failed: {exc}")
                 if attempt < 5:
                     await asyncio.sleep(attempt * 2)
-    try:
-        await _ensure_seed_shop_live_message_exists()
-    except Exception as exc:
-        print(f"Failed to initialize live seed shop message: {exc}")
-    if not seed_shop_live_loop.is_running():
-        seed_shop_live_loop.start()
+    if BOT_MODE == "seed":
+        try:
+            await _ensure_seed_shop_live_message_exists()
+        except Exception as exc:
+            print(f"Failed to initialize live seed shop message: {exc}")
+        if not seed_shop_live_loop.is_running():
+            seed_shop_live_loop.start()
 
 
 if app_commands is not None:
