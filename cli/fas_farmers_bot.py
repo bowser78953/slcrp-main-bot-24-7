@@ -820,7 +820,7 @@ def _build_seed_shop_page_embed(page_items: list[dict], page_index: int, total_p
         price = int(item.get("price", 0) or 0)
         host_id = int(item.get("host_id", 0) or 0)
         lines.append(f"ID `{item_id}` | {item_name} For {price} Seeds - <@{host_id}>")
-        lines.append("-# Buy format: -buy <item_id> (or -buty <item_id>)")
+        lines.append("-# Buy format: -buy <item_id>")
 
     if not lines:
         lines = ["No items are in stock right now."]
@@ -2146,7 +2146,7 @@ async def register(ctx: commands.Context, *, roblox_user: str):
     await ctx.send(f"{ctx.author.mention} registered Roblox user: `{username}`")
 
 
-@bot.command(name="buy", aliases=["buty", "but"])
+@bot.command(name="buy")
 async def buy(ctx: commands.Context, *, raw_args: str):
     item_id = _parse_buy_item_id(raw_args)
     if item_id is None:
