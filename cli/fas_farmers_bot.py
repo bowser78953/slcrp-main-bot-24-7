@@ -103,12 +103,12 @@ STOCK_ROLE_PINGS = {
 
 # Ordered output to match requested grouping.
 SEED_CONFIG = [
-    {"key": "carrot", "name": "Carrot", "emoji": "<:Carrot:1525704707451129926>", "rarity": "common"},
-    {"key": "strawberry", "name": "Strawberry", "emoji": "<:Strawberry:1525704796424896522>", "rarity": "common"},
-    {"key": "blueberry", "name": "Blueberry", "emoji": "<:Bluebarry:1525704857619533824>", "rarity": "common"},
-    {"key": "tulip", "name": "Tulip", "emoji": "<:Tulip:1525705344511246346>", "rarity": "uncommon"},
-    {"key": "tomato", "name": "Tomato", "emoji": "<:Tomato:1525705290371043378>", "rarity": "uncommon"},
-    {"key": "apple", "name": "Apple", "emoji": "<:Apple_Tree:1525705192505344090>", "rarity": "uncommon"},
+    {"key": "carrot", "name": "Carrot", "emoji": "<:Carrot:1526209710531936326>", "rarity": "common"},
+    {"key": "strawberry", "name": "Strawberry", "emoji": "<:Strawberry:1526209828282699776>", "rarity": "common"},
+    {"key": "blueberry", "name": "Blueberry", "emoji": "<:Blueberry:1526209794329939998>", "rarity": "common"},
+    {"key": "tulip", "name": "Tulip", "emoji": "<:Tulip:1526210020553920594>", "rarity": "uncommon"},
+    {"key": "tomato", "name": "Tomato", "emoji": "<:Tomato:1526209984160071710>", "rarity": "uncommon"},
+    {"key": "apple", "name": "Apple", "emoji": "<:Apple:1526209953491058798>", "rarity": "uncommon"},
     {"key": "bamboo", "name": "Bamboo", "emoji": "<:Bamboo:1525705734518476810>", "rarity": "rare"},
     {"key": "corn", "name": "Corn", "emoji": "<:corn:1525705776713170986>", "rarity": "rare"},
     {"key": "cactus", "name": "Cactus", "emoji": "<:cactus:1525705829460869283>", "rarity": "rare"},
