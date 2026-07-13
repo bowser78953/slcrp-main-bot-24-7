@@ -412,29 +412,52 @@ def _save_live_config(data: dict) -> None:
 
 def _load_seed_bank() -> dict:
     client = _get_seed_redis_client()
+    redis_data = None
+    file_data = None
+
     if client is not None:
-        data = None
         with DATA_LOCK:
             try:
                 raw = client.get(REDIS_SEED_BANK_KEY)
                 if raw:
-                    data = json.loads(raw)
+                    redis_data = json.loads(raw)
             except Exception:
-                data = None
+                redis_data = None
 
-        if not isinstance(data, dict):
-            _ensure_seed_bank_file()
-            with DATA_LOCK:
-                try:
-                    with open(SEED_BANK_FILE, "r", encoding="utf-8") as f:
-                        file_data = json.load(f)
-                except Exception:
-                    file_data = {"balances": {}, "claim_cooldowns": {}}
-                data = file_data if isinstance(file_data, dict) else {"balances": {}, "claim_cooldowns": {}}
+        _ensure_seed_bank_file()
+        with DATA_LOCK:
+            try:
+                with open(SEED_BANK_FILE, "r", encoding="utf-8") as f:
+                    file_data = json.load(f)
+            except Exception:
+                file_data = {"balances": {}, "claim_cooldowns": {}}
+
+        if not isinstance(redis_data, dict):
+            data = file_data if isinstance(file_data, dict) else {"balances": {}, "claim_cooldowns": {}}
+            try:
+                client.set(REDIS_SEED_BANK_KEY, json.dumps(data))
+            except Exception:
+                pass
+        else:
+            redis_updated = int(redis_data.get("updated_at", 0) or 0)
+            file_updated = int(file_data.get("updated_at", 0) or 0) if isinstance(file_data, dict) else 0
+            data = redis_data if redis_updated >= file_updated else file_data
+
+            # Keep both stores in sync with the newest copy.
+            if data is file_data:
                 try:
                     client.set(REDIS_SEED_BANK_KEY, json.dumps(data))
                 except Exception:
                     pass
+            elif isinstance(file_data, dict) and data is redis_data and redis_updated > file_updated:
+                with DATA_LOCK:
+                    try:
+                        tmp = SEED_BANK_FILE + ".tmp"
+                        with open(tmp, "w", encoding="utf-8") as f:
+                            json.dump(data, f, indent=2)
+                        os.replace(tmp, SEED_BANK_FILE)
+                    except Exception:
+                        pass
     else:
         _ensure_seed_bank_file()
         with DATA_LOCK:
@@ -446,12 +469,16 @@ def _load_seed_bank() -> dict:
 
 
 def _save_seed_bank(data: dict) -> None:
+    data["updated_at"] = int(datetime.now(timezone.utc).timestamp())
     client = _get_seed_redis_client()
     if client is not None:
         with DATA_LOCK:
             try:
                 client.set(REDIS_SEED_BANK_KEY, json.dumps(data))
             except Exception:
+                global SEED_REDIS_CLIENT, SEED_REDIS_DISABLED
+                SEED_REDIS_CLIENT = None
+                SEED_REDIS_DISABLED = True
                 pass
 
     _ensure_seed_bank_file()
@@ -613,29 +640,51 @@ def _parse_item_price_arguments(raw: str) -> tuple[str, int] | None:
 
 def _load_seed_store() -> dict:
     client = _get_seed_redis_client()
+    redis_data = None
+    file_data = None
+
     if client is not None:
-        data = None
         with DATA_LOCK:
             try:
                 raw = client.get(REDIS_SEED_STORE_KEY)
                 if raw:
-                    data = json.loads(raw)
+                    redis_data = json.loads(raw)
             except Exception:
-                data = None
+                redis_data = None
 
-        if not isinstance(data, dict):
-            _ensure_seed_store_file()
-            with DATA_LOCK:
-                try:
-                    with open(SEED_STORE_FILE, "r", encoding="utf-8") as f:
-                        file_data = json.load(f)
-                except Exception:
-                    file_data = {"next_item_id": 1, "items": []}
-                data = file_data if isinstance(file_data, dict) else {"next_item_id": 1, "items": []}
+        _ensure_seed_store_file()
+        with DATA_LOCK:
+            try:
+                with open(SEED_STORE_FILE, "r", encoding="utf-8") as f:
+                    file_data = json.load(f)
+            except Exception:
+                file_data = {"next_item_id": 1, "items": []}
+
+        if not isinstance(redis_data, dict):
+            data = file_data if isinstance(file_data, dict) else {"next_item_id": 1, "items": []}
+            try:
+                client.set(REDIS_SEED_STORE_KEY, json.dumps(data))
+            except Exception:
+                pass
+        else:
+            redis_updated = int(redis_data.get("updated_at", 0) or 0)
+            file_updated = int(file_data.get("updated_at", 0) or 0) if isinstance(file_data, dict) else 0
+            data = redis_data if redis_updated >= file_updated else file_data
+
+            if data is file_data:
                 try:
                     client.set(REDIS_SEED_STORE_KEY, json.dumps(data))
                 except Exception:
                     pass
+            elif isinstance(file_data, dict) and data is redis_data and redis_updated > file_updated:
+                with DATA_LOCK:
+                    try:
+                        tmp = SEED_STORE_FILE + ".tmp"
+                        with open(tmp, "w", encoding="utf-8") as f:
+                            json.dump(data, f, indent=2)
+                        os.replace(tmp, SEED_STORE_FILE)
+                    except Exception:
+                        pass
     else:
         _ensure_seed_store_file()
         with DATA_LOCK:
@@ -647,12 +696,16 @@ def _load_seed_store() -> dict:
 
 
 def _save_seed_store(data: dict) -> None:
+    data["updated_at"] = int(datetime.now(timezone.utc).timestamp())
     client = _get_seed_redis_client()
     if client is not None:
         with DATA_LOCK:
             try:
                 client.set(REDIS_SEED_STORE_KEY, json.dumps(data))
             except Exception:
+                global SEED_REDIS_CLIENT, SEED_REDIS_DISABLED
+                SEED_REDIS_CLIENT = None
+                SEED_REDIS_DISABLED = True
                 pass
 
     _ensure_seed_store_file()
