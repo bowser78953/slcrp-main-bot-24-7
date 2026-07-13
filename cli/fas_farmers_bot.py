@@ -45,6 +45,7 @@ SEED_SHOP_CHANNEL_ID = 1525702441608282113
 TARGET_GUILD_ID = 1521774456274686044
 
 NO_VOUCH_ROLE_ID = 1526215394283487302
+VOUCH_ANY_ROLE_ID = 1526214841264767139
 VOUCH_ROLE_1_ID = 1526215545299533875
 VOUCH_ROLE_5_ID = 1526214920574734426
 VOUCH_ROLE_15_ID = 1526214766706561074
@@ -345,11 +346,11 @@ def _mention_for_user(guild: discord.Guild | None, user_id: int) -> str:
 
 def _desired_vouch_role_ids(vouch_count: int) -> set[int]:
     if vouch_count >= 15:
-        return {VOUCH_ROLE_15_ID}
+        return {VOUCH_ANY_ROLE_ID, VOUCH_ROLE_15_ID}
     if vouch_count >= 5:
-        return {VOUCH_ROLE_5_ID}
+        return {VOUCH_ANY_ROLE_ID, VOUCH_ROLE_5_ID}
     if vouch_count >= 1:
-        return {VOUCH_ROLE_1_ID}
+        return {VOUCH_ANY_ROLE_ID, VOUCH_ROLE_1_ID}
     return {NO_VOUCH_ROLE_ID}
 
 
@@ -374,6 +375,7 @@ async def _sync_vouch_scam_roles(guild: discord.Guild | None, user_id: int, buck
 
     tracked_role_ids = {
         NO_VOUCH_ROLE_ID,
+        VOUCH_ANY_ROLE_ID,
         VOUCH_ROLE_1_ID,
         VOUCH_ROLE_5_ID,
         VOUCH_ROLE_15_ID,
@@ -397,6 +399,24 @@ async def _sync_vouch_scam_roles(guild: discord.Guild | None, user_id: int, buck
             await member.add_roles(*roles_to_add, reason="Updated vouch/scam tier roles")
         except Exception:
             pass
+
+
+def _highest_positive_trust_role_id(vouch_count: int) -> int:
+    if vouch_count >= 15:
+        return VOUCH_ROLE_15_ID
+    if vouch_count >= 5:
+        return VOUCH_ROLE_5_ID
+    if vouch_count >= 1:
+        return VOUCH_ROLE_1_ID
+    return NO_VOUCH_ROLE_ID
+
+
+def _highest_negative_trust_role_id(scam_count: int) -> int | None:
+    if scam_count >= 3:
+        return SCAM_ROLE_3_ID
+    if scam_count >= 1:
+        return SCAM_ROLE_1_ID
+    return None
 
 
 def _in_allowed_channel(ctx: commands.Context, channel_id: int) -> bool:
@@ -1383,11 +1403,23 @@ async def vouchlist(ctx: commands.Context, user: discord.Member):
     vouch_text = "\n".join(vouch_lines) if vouch_lines else "None"
     scam_text = "\n".join(scam_lines) if scam_lines else "None"
 
+    negative_role_id = _highest_negative_trust_role_id(len(scams))
+    if negative_role_id is not None:
+        trust_level_text = (
+            f"<:Lowest:1526219034876579930> This users highest trusted role is in the negatives and is: <@&{negative_role_id}>"
+        )
+    else:
+        positive_role_id = _highest_positive_trust_role_id(len(vouches))
+        trust_level_text = (
+            f"<:Highest:1526219072541556746> This users highest trust level is: <@&{positive_role_id}>"
+        )
+
     embed = discord.Embed(title=f"{user.display_name} Vouch and Scam Reports", color=discord.Color.green())
     embed.description = (
         f"User: {user.mention}\n\n"
         f"<:vouch_list:1525700827426066472>Vouch Reports: {len(vouches)}\n\n"
         f"<:Scam_list:1525701001858908251>Scam Reports: {len(scams)}\n\n"
+        f"{trust_level_text}\n\n"
         f"Vouch list,\n{vouch_text}\n\n"
         f"Scam List,\n{scam_text}"
     )
@@ -1397,6 +1429,7 @@ async def vouchlist(ctx: commands.Context, user: discord.Member):
             f"User: {user.mention}\n\n"
             f"<:vouch_list:1525700827426066472>Vouch Reports: {len(vouches)}\n\n"
             f"<:Scam_list:1525701001858908251>Scam Reports: {len(scams)}\n\n"
+            f"{trust_level_text}\n\n"
             "List is too long to display in one embed."
         )
 
