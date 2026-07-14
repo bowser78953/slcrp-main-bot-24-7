@@ -6,6 +6,23 @@
 3. To run seed features on a separate bot token, also set `FAS_SEED_BOT_TOKEN`.
 4. Deploy; Procfile runs the worker continuously.
 
+## Seed Data Persistence (Render)
+The seed balances and seed shop are stored in JSON files.
+On Render, the app filesystem is replaced on deploy, so these files must live on a persistent disk.
+
+This repo is configured in `render.yaml` to:
+- Mount a persistent disk at `/var/data`
+- Set `SEED_DATA_DIR=/var/data/seed-data`
+
+Files persisted there include:
+- `fas_seed_bank.json`
+- `fas_seed_store.json`
+- `fas_predictor_v2.json`
+
+Important:
+- Do not rely on committing runtime-updated JSON files to Git on each push.
+- Keep seed data on the Render disk (or Redis) so deploys do not reset balances.
+
 ## Local Run
 pip install -r requirements.txt
 python bot_fresh_standalone.py
