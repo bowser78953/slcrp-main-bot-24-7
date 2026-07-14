@@ -84,6 +84,19 @@ SEED_BALANCE_ADMIN_ROLE_ID = 1526236532980318462
 GIVEAWAY_PING_ROLE_ID = 1526304210910449765
 SEED_CLAIMWIPE_PING_ROLE_ID = 1526309075372085459
 PREDICTOR_V2_CHANNEL_ID = 1526381177127043263
+WATCHED_VOICE_CHANNEL_ID = 1521774457537167383
+KICK_ALERT_CHANNEL_ID = 1521777234258432100
+VOICE_KICK_WATCH_USER_IDS = {
+    836330845538877461,
+    252128902418268161,
+    235088799074484224,
+    814675864859836417,
+    836330954972725289,
+    814675803065155585,
+    836330724990517248,
+    836330384530735196,
+    836330611337330768,
+}
 
 NO_VOUCH_ROLE_ID = 1526215394283487302
 VOUCH_ANY_ROLE_ID = 1526214841264767139
@@ -2076,6 +2089,40 @@ async def _resolve_seed_shop_channel() -> discord.TextChannel | None:
     return channel if isinstance(channel, discord.TextChannel) else None
 
 
+async def _find_voice_kick_actor(guild: discord.Guild, target_user_id: int) -> int | None:
+    action_names = ("member_disconnect", "member_move")
+    for action_name in action_names:
+        action = getattr(discord.AuditLogAction, action_name, None)
+        if action is None:
+            continue
+        try:
+            async for entry in guild.audit_logs(limit=12, action=action):
+                if entry is None or entry.user is None or entry.target is None:
+                    continue
+                if int(getattr(entry.target, "id", 0) or 0) != int(target_user_id):
+                    continue
+                created_at = getattr(entry, "created_at", None)
+                if created_at is not None:
+                    delta = abs((datetime.now(timezone.utc) - created_at).total_seconds())
+                    if delta > 15:
+                        continue
+
+                # For move actions, ensure the source channel is the watched channel.
+                if action_name == "member_move":
+                    before_channel = getattr(entry, "before", None)
+                    if before_channel is None:
+                        extra = getattr(entry, "extra", None)
+                        before_channel = getattr(extra, "channel", None)
+                    before_channel_id = int(getattr(before_channel, "id", 0) or 0)
+                    if before_channel_id and before_channel_id != WATCHED_VOICE_CHANNEL_ID:
+                        continue
+
+                return int(entry.user.id)
+        except Exception:
+            continue
+    return None
+
+
 async def _ensure_seed_shop_live_message_exists() -> None:
     global last_live_post_ts, last_stock_signature
     config = _load_live_config()
@@ -2197,6 +2244,44 @@ async def on_message(message: discord.Message):
                     await _sync_seed_leader_roles(message.guild, bank_data)
 
     await bot.process_commands(message)
+
+
+@bot.event
+async def on_voice_state_update(member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
+    if member.bot:
+        return
+    if member.guild is None:
+        return
+    if int(member.id) not in VOICE_KICK_WATCH_USER_IDS:
+        return
+
+    before_channel_id = int(before.channel.id) if before.channel is not None else 0
+    after_channel_id = int(after.channel.id) if after.channel is not None else 0
+
+    if before_channel_id != WATCHED_VOICE_CHANNEL_ID:
+        return
+    if after_channel_id == WATCHED_VOICE_CHANNEL_ID:
+        return
+
+    actor_user_id = await _find_voice_kick_actor(member.guild, member.id)
+    if actor_user_id is None:
+        return
+
+    alert_channel = bot.get_channel(KICK_ALERT_CHANNEL_ID)
+    if alert_channel is None:
+        try:
+            alert_channel = await bot.fetch_channel(KICK_ALERT_CHANNEL_ID)
+        except Exception:
+            return
+
+    if not isinstance(alert_channel, discord.TextChannel):
+        return
+
+    await alert_channel.send(
+        f"@everyone <@{actor_user_id}> Has Kicked <@{member.id}>. "
+        f"Shame on <@{actor_user_id}> for kicking <@{member.id}>",
+        allowed_mentions=discord.AllowedMentions(everyone=True, users=True),
+    )
 
 
 @bot.event
