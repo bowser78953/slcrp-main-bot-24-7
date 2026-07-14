@@ -1519,31 +1519,102 @@ def _record_predictor_v2_sightings(in_stock: dict[str, int], observed_at: int) -
         _save_predictor_v2_data(data)
 
 
-def _predictor_v2_chance(intervals: list[int], predicted_ts: int, now_ts: int, currently_in_stock: bool) -> int:
+def _predictor_v2_clean_intervals(intervals: list[int]) -> list[int]:
+    cleaned = [max(1, int(value)) for value in intervals if int(value) > 0]
+    if len(cleaned) <= 4:
+        return cleaned
+
+    sorted_values = sorted(cleaned)
+    mid = len(sorted_values) // 2
+    if len(sorted_values) % 2 == 1:
+        median = float(sorted_values[mid])
+    else:
+        median = (float(sorted_values[mid - 1]) + float(sorted_values[mid])) / 2.0
+
+    abs_devs = sorted(abs(value - median) for value in sorted_values)
+    mad_mid = len(abs_devs) // 2
+    if len(abs_devs) % 2 == 1:
+        mad = float(abs_devs[mad_mid])
+    else:
+        mad = (float(abs_devs[mad_mid - 1]) + float(abs_devs[mad_mid])) / 2.0
+
+    if mad < 1.0:
+        return cleaned
+
+    filtered = [
+        value
+        for value in cleaned
+        if abs(0.6745 * (float(value) - median) / mad) <= 3.5
+    ]
+    return filtered if len(filtered) >= 3 else cleaned
+
+
+def _predictor_v2_interval_profile(intervals: list[int]) -> tuple[int, int, int, int, float]:
+    cleaned = _predictor_v2_clean_intervals(intervals)
+    if not cleaned:
+        return 1, 1, 1, 1, 1.0
+
+    sorted_values = sorted(cleaned)
+    n = len(sorted_values)
+    median = int(sorted_values[n // 2])
+    q1 = int(sorted_values[max(0, (n - 1) // 4)])
+    q3 = int(sorted_values[min(n - 1, ((n - 1) * 3) // 4)])
+    iqr = max(1, q3 - q1)
+
+    # Recency-weighted cadence to react quickly when cycle timing shifts.
+    weights = list(range(1, len(cleaned) + 1))
+    weighted_avg = float(sum(value * weight for value, weight in zip(cleaned, weights))) / float(max(1, sum(weights)))
+
+    # EWMA puts extra focus on recent restocks while still respecting history.
+    ewma = float(cleaned[0])
+    for value in cleaned[1:]:
+        ewma = (0.45 * float(value)) + (0.55 * ewma)
+
+    predicted_interval = int(round((ewma * 0.50) + (weighted_avg * 0.35) + (float(median) * 0.15)))
+    predicted_interval = max(60, predicted_interval)
+    variability = float(iqr) / float(max(1, median))
+    return predicted_interval, q1, q3, len(cleaned), variability
+
+
+def _predictor_v2_window_seconds(predicted_interval: int, q1: int, q3: int, sample_count: int) -> tuple[int, int]:
+    lower = int(round((predicted_interval * 0.62) + (float(q1) * 0.38)))
+    upper = int(round((predicted_interval * 1.15) + (float(q3) * 0.35)))
+
+    if sample_count < 6:
+        lower = int(lower * 0.85)
+        upper = int(upper * 1.20)
+
+    lower = max(60, lower)
+    upper = max(lower + 60, upper)
+    return lower, upper
+
+
+def _predictor_v2_chance(intervals: list[int], last_seen: int, predicted_ts: int, now_ts: int, currently_in_stock: bool) -> int:
     if currently_in_stock:
         return 100
     if not intervals:
         return 0
 
-    avg_interval = max(1.0, float(sum(intervals)) / float(len(intervals)))
-    variance = sum((value - avg_interval) ** 2 for value in intervals) / float(max(1, len(intervals)))
-    std_dev = math.sqrt(max(0.0, variance))
-    coeff_var = std_dev / max(1.0, avg_interval)
+    predicted_interval, q1, q3, sample_count, variability = _predictor_v2_interval_profile(intervals)
+    window_low, window_high = _predictor_v2_window_seconds(predicted_interval, q1, q3, sample_count)
+    elapsed = max(0, int(now_ts) - int(last_seen))
 
-    # More stable cycles should get a stronger confidence score.
-    consistency = max(0.10, 1.0 - min(0.90, coeff_var))
-    sample_score = min(1.0, float(len(intervals)) / 8.0)
+    if elapsed < window_low:
+        time_score = max(0.05, min(0.80, float(elapsed) / float(max(1, window_low))))
+    elif elapsed <= window_high:
+        center = (float(window_low) + float(window_high)) / 2.0
+        half_span = max(30.0, (float(window_high) - float(window_low)) / 2.0)
+        normalized_distance = abs(float(elapsed) - center) / half_span
+        time_score = max(0.40, 1.0 - (normalized_distance * 0.65))
+    else:
+        overdue_factor = float(elapsed - window_high) / float(max(60, predicted_interval))
+        time_score = max(0.03, math.exp(-1.35 * overdue_factor))
 
-    timing_sigma = max(300.0, avg_interval * max(0.35, 1.10 - consistency))
-    time_gap = abs(now_ts - predicted_ts)
-    time_score = math.exp(-0.5 * ((float(time_gap) / timing_sigma) ** 2))
+    consistency = max(0.10, 1.0 - min(0.90, variability))
+    sample_score = min(1.0, float(sample_count) / 10.0)
+    alignment = max(0.05, 1.0 - min(0.95, abs(int(now_ts) - int(predicted_ts)) / float(max(120, predicted_interval * 2))))
 
-    chance = int(round(((time_score * 0.55) + (consistency * 0.25) + (sample_score * 0.20)) * 100))
-
-    # Far beyond the expected cadence should sharply reduce confidence.
-    if time_gap > int(avg_interval * 4):
-        chance = min(chance, 15)
-
+    chance = int(round(((time_score * 0.56) + (consistency * 0.24) + (sample_score * 0.12) + (alignment * 0.08)) * 100.0))
     return max(1, min(99, chance))
 
 
@@ -1567,7 +1638,7 @@ async def _build_predictor_v2_response(query: str, guild: discord.Guild | None) 
 
     matches = _resolve_predictor_seed(cleaned_query)
     if not matches:
-        return None, f"I could not find a fruit matching `{cleaned_query}`."
+        return None, f"I could not find an item matching `{cleaned_query}`."
 
     if len(matches) > 1:
         match_names = ", ".join(entry["name"] for entry in matches[:8])
@@ -1613,26 +1684,20 @@ async def _build_predictor_v2_response(query: str, guild: discord.Guild | None) 
     ]
     recent_intervals = intervals[-8:] if len(intervals) > 8 else intervals
     last_seen = recent_sightings[-1]
-
-    sorted_intervals = sorted(recent_intervals)
-    mid = len(sorted_intervals) // 2
-    if len(sorted_intervals) % 2 == 1:
-        median_interval = sorted_intervals[mid]
-    else:
-        median_interval = int(round((sorted_intervals[mid - 1] + sorted_intervals[mid]) / 2))
-
-    weights = list(range(1, len(recent_intervals) + 1))
-    weighted_avg_interval = int(round(sum(value * weight for value, weight in zip(recent_intervals, weights)) / max(1, sum(weights))))
-    predicted_interval = max(1, int(round((weighted_avg_interval * 0.7) + (median_interval * 0.3))))
+    predicted_interval, q1, q3, sample_count, _variability = _predictor_v2_interval_profile(recent_intervals)
+    window_low, window_high = _predictor_v2_window_seconds(predicted_interval, q1, q3, sample_count)
 
     now_ts = int(datetime.now(timezone.utc).timestamp())
     predicted_ts = last_seen + predicted_interval
-    chance = _predictor_v2_chance(recent_intervals, predicted_ts, now_ts, False)
+    window_start_ts = last_seen + window_low
+    window_end_ts = last_seen + window_high
+    chance = _predictor_v2_chance(recent_intervals, last_seen, predicted_ts, now_ts, False)
 
     embed = discord.Embed(
         description=(
             f"# 🤩 We Predict {name} Will be in-stock in <t:{predicted_ts}:R>\n"
             f"> Last seen in-stock: <t:{last_seen}:R>\n"
+            f"> Strongest window: <t:{window_start_ts}:R> to <t:{window_end_ts}:R>\n"
             f"> Estimated chance right now: `{chance}%` (based on `{len(recent_intervals)}` tracked cycles)."
         ),
         timestamp=datetime.now(timezone.utc),
