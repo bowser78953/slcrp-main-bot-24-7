@@ -47,6 +47,7 @@ else:
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
+intents.voice_states = True
 
 bot = commands.Bot(command_prefix="-", intents=intents, help_command=None)
 
@@ -89,6 +90,7 @@ KICK_ALERT_CHANNEL_ID = 1521777234258432100
 VOICE_KICK_AUDIT_LOOKBACK_SECONDS = 90
 VOICE_KICK_AUDIT_RETRIES = 4
 VOICE_KICK_AUDIT_RETRY_DELAY_SECONDS = 1.0
+VOICE_KICK_ALERT_ON_UNRESOLVED_ACTOR = True
 VOICE_KICK_WATCH_USER_IDS = {
     836330845538877461,
     252128902418268161,
@@ -2093,10 +2095,10 @@ async def _resolve_seed_shop_channel() -> discord.TextChannel | None:
 
 
 async def _find_voice_kick_actor(guild: discord.Guild, target_user_id: int) -> int | None:
-    action_names = ("member_disconnect", "member_move")
+    action_name_candidates = ("member_disconnect", "member_move", "disconnect", "move")
 
     for attempt in range(VOICE_KICK_AUDIT_RETRIES):
-        for action_name in action_names:
+        for action_name in action_name_candidates:
             action = getattr(discord.AuditLogAction, action_name, None)
             if action is None:
                 continue
@@ -2113,7 +2115,7 @@ async def _find_voice_kick_actor(guild: discord.Guild, target_user_id: int) -> i
                             continue
 
                     # For move actions, ensure this was from the watched channel when available.
-                    if action_name == "member_move":
+                    if "move" in action_name:
                         before_channel = None
                         before_state = getattr(entry, "before", None)
                         if before_state is not None:
@@ -2276,7 +2278,7 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
         return
 
     actor_user_id = await _find_voice_kick_actor(member.guild, member.id)
-    if actor_user_id is None:
+    if actor_user_id is None and not VOICE_KICK_ALERT_ON_UNRESOLVED_ACTOR:
         return
 
     alert_channel = bot.get_channel(KICK_ALERT_CHANNEL_ID)
@@ -2289,9 +2291,19 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
     if not isinstance(alert_channel, discord.TextChannel):
         return
 
+    if actor_user_id is not None:
+        message = (
+            f"@everyone <@{actor_user_id}> Has Kicked <@{member.id}>. "
+            f"Shame on <@{actor_user_id}> for kicking <@{member.id}>"
+        )
+    else:
+        message = (
+            f"@everyone Someone Has Kicked <@{member.id}>. "
+            f"Shame on them for kicking <@{member.id}>"
+        )
+
     await alert_channel.send(
-        f"@everyone <@{actor_user_id}> Has Kicked <@{member.id}>. "
-        f"Shame on <@{actor_user_id}> for kicking <@{member.id}>",
+        message,
         allowed_mentions=discord.AllowedMentions(everyone=True, users=True),
     )
 
