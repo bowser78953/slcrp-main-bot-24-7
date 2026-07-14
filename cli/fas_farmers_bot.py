@@ -3,6 +3,7 @@ import json
 import re
 import asyncio
 import colorsys
+import math
 import random
 import shutil
 import uuid
@@ -1356,13 +1357,26 @@ def _predictor_v2_chance(intervals: list[int], predicted_ts: int, now_ts: int, c
     if not intervals:
         return 0
 
-    avg_interval = max(1, int(sum(intervals) / len(intervals)))
-    spread = max(intervals) - min(intervals)
-    consistency = max(0.05, 1.0 - min(0.9, spread / avg_interval))
+    avg_interval = max(1.0, float(sum(intervals)) / float(len(intervals)))
+    variance = sum((value - avg_interval) ** 2 for value in intervals) / float(max(1, len(intervals)))
+    std_dev = math.sqrt(max(0.0, variance))
+    coeff_var = std_dev / max(1.0, avg_interval)
+
+    # More stable cycles should get a stronger confidence score.
+    consistency = max(0.10, 1.0 - min(0.90, coeff_var))
+    sample_score = min(1.0, float(len(intervals)) / 8.0)
+
+    timing_sigma = max(300.0, avg_interval * max(0.35, 1.10 - consistency))
     time_gap = abs(now_ts - predicted_ts)
-    time_score = max(0.05, 1.0 - min(0.95, time_gap / max(300, avg_interval)))
-    chance = int(round(((consistency * 0.6) + (time_score * 0.4)) * 100))
-    return max(5, min(99, chance))
+    time_score = math.exp(-0.5 * ((float(time_gap) / timing_sigma) ** 2))
+
+    chance = int(round(((time_score * 0.55) + (consistency * 0.25) + (sample_score * 0.20)) * 100))
+
+    # Far beyond the expected cadence should sharply reduce confidence.
+    if time_gap > int(avg_interval * 4):
+        chance = min(chance, 15)
+
+    return max(1, min(99, chance))
 
 
 def _apply_predictor_v2_embed_style(embed: discord.Embed, guild: discord.Guild | None) -> discord.Embed:
@@ -1410,18 +1424,34 @@ async def _build_predictor_v2_response(query: str, guild: discord.Guild | None) 
         )
         return _apply_predictor_v2_embed_style(embed, guild), None
 
-    recent_sightings = sightings[-PREDICTOR_V2_MIN_SIGHTINGS:]
-    intervals = [recent_sightings[idx] - recent_sightings[idx - 1] for idx in range(1, len(recent_sightings))]
+    recent_sightings = sightings[-PREDICTOR_V2_HISTORY_LIMIT:]
+    intervals = [
+        max(1, recent_sightings[idx] - recent_sightings[idx - 1])
+        for idx in range(1, len(recent_sightings))
+    ]
+    recent_intervals = intervals[-8:] if len(intervals) > 8 else intervals
     last_seen = recent_sightings[-1]
-    avg_interval = max(1, int(round(sum(intervals) / len(intervals)))) if intervals else 0
+
+    sorted_intervals = sorted(recent_intervals)
+    mid = len(sorted_intervals) // 2
+    if len(sorted_intervals) % 2 == 1:
+        median_interval = sorted_intervals[mid]
+    else:
+        median_interval = int(round((sorted_intervals[mid - 1] + sorted_intervals[mid]) / 2))
+
+    weights = list(range(1, len(recent_intervals) + 1))
+    weighted_avg_interval = int(round(sum(value * weight for value, weight in zip(recent_intervals, weights)) / max(1, sum(weights))))
+    predicted_interval = max(1, int(round((weighted_avg_interval * 0.7) + (median_interval * 0.3))))
+
     now_ts = int(datetime.now(timezone.utc).timestamp())
-    predicted_ts = now_ts if currently_in_stock else last_seen + avg_interval
-    chance = _predictor_v2_chance(intervals, predicted_ts, now_ts, currently_in_stock)
+    predicted_ts = now_ts if currently_in_stock else last_seen + predicted_interval
+    chance = _predictor_v2_chance(recent_intervals, predicted_ts, now_ts, currently_in_stock)
 
     embed = discord.Embed(
         description=(
             f"# 🤩 We Predict {name} Will be in-stock in <t:{predicted_ts}:R>\n"
-            f"> The Last time this fruit was in-stock was <t:{last_seen}:R> and we predict there is a `{chance}%` ammount chance its in stock right now."
+            f"> Last seen in-stock: <t:{last_seen}:R>\n"
+            f"> Estimated chance right now: `{chance}%` (based on `{len(recent_intervals)}` tracked cycles)."
         ),
         timestamp=datetime.now(timezone.utc),
     )
