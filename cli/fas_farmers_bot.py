@@ -86,6 +86,9 @@ SEED_CLAIMWIPE_PING_ROLE_ID = 1526309075372085459
 PREDICTOR_V2_CHANNEL_ID = 1526381177127043263
 WATCHED_VOICE_CHANNEL_ID = 1521774457537167383
 KICK_ALERT_CHANNEL_ID = 1521777234258432100
+VOICE_KICK_AUDIT_LOOKBACK_SECONDS = 90
+VOICE_KICK_AUDIT_RETRIES = 4
+VOICE_KICK_AUDIT_RETRY_DELAY_SECONDS = 1.0
 VOICE_KICK_WATCH_USER_IDS = {
     836330845538877461,
     252128902418268161,
@@ -2091,35 +2094,44 @@ async def _resolve_seed_shop_channel() -> discord.TextChannel | None:
 
 async def _find_voice_kick_actor(guild: discord.Guild, target_user_id: int) -> int | None:
     action_names = ("member_disconnect", "member_move")
-    for action_name in action_names:
-        action = getattr(discord.AuditLogAction, action_name, None)
-        if action is None:
-            continue
-        try:
-            async for entry in guild.audit_logs(limit=12, action=action):
-                if entry is None or entry.user is None or entry.target is None:
-                    continue
-                if int(getattr(entry.target, "id", 0) or 0) != int(target_user_id):
-                    continue
-                created_at = getattr(entry, "created_at", None)
-                if created_at is not None:
-                    delta = abs((datetime.now(timezone.utc) - created_at).total_seconds())
-                    if delta > 15:
-                        continue
 
-                # For move actions, ensure the source channel is the watched channel.
-                if action_name == "member_move":
-                    before_channel = getattr(entry, "before", None)
-                    if before_channel is None:
-                        extra = getattr(entry, "extra", None)
-                        before_channel = getattr(extra, "channel", None)
-                    before_channel_id = int(getattr(before_channel, "id", 0) or 0)
-                    if before_channel_id and before_channel_id != WATCHED_VOICE_CHANNEL_ID:
+    for attempt in range(VOICE_KICK_AUDIT_RETRIES):
+        for action_name in action_names:
+            action = getattr(discord.AuditLogAction, action_name, None)
+            if action is None:
+                continue
+            try:
+                async for entry in guild.audit_logs(limit=40, action=action):
+                    if entry is None or entry.user is None or entry.target is None:
                         continue
+                    if int(getattr(entry.target, "id", 0) or 0) != int(target_user_id):
+                        continue
+                    created_at = getattr(entry, "created_at", None)
+                    if created_at is not None:
+                        delta = abs((datetime.now(timezone.utc) - created_at).total_seconds())
+                        if delta > VOICE_KICK_AUDIT_LOOKBACK_SECONDS:
+                            continue
 
-                return int(entry.user.id)
-        except Exception:
-            continue
+                    # For move actions, ensure this was from the watched channel when available.
+                    if action_name == "member_move":
+                        before_channel = None
+                        before_state = getattr(entry, "before", None)
+                        if before_state is not None:
+                            before_channel = getattr(before_state, "channel", None)
+                        if before_channel is None:
+                            extra = getattr(entry, "extra", None)
+                            before_channel = getattr(extra, "channel", None)
+                        before_channel_id = int(getattr(before_channel, "id", 0) or 0)
+                        if before_channel_id and before_channel_id != WATCHED_VOICE_CHANNEL_ID:
+                            continue
+
+                    return int(entry.user.id)
+            except Exception:
+                continue
+
+        if attempt < (VOICE_KICK_AUDIT_RETRIES - 1):
+            await asyncio.sleep(VOICE_KICK_AUDIT_RETRY_DELAY_SECONDS)
+
     return None
 
 
