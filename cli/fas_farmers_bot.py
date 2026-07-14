@@ -1418,6 +1418,10 @@ def _normalize_seed_name(name: str) -> str:
     return cleaned
 
 
+def _predictor_catalog_entries() -> list[dict]:
+    return [*SEED_CONFIG, *GEAR_CONFIG]
+
+
 def _predictor_aliases_for_seed(entry: dict) -> set[str]:
     key = str(entry.get("key", ""))
     name = str(entry.get("name", key))
@@ -1446,7 +1450,7 @@ def _resolve_predictor_seed(query: str) -> list[dict]:
     startswith_matches: list[dict] = []
     contains_matches: list[dict] = []
 
-    for entry in SEED_CONFIG:
+    for entry in _predictor_catalog_entries():
         aliases = _predictor_aliases_for_seed(entry)
         if normalized_query in aliases:
             exact_matches.append(entry)
@@ -1472,7 +1476,7 @@ def _record_predictor_v2_sightings(in_stock: dict[str, int], observed_at: int) -
     seeds = data.setdefault("seeds", {})
     changed = False
 
-    for entry in SEED_CONFIG:
+    for entry in _predictor_catalog_entries():
         key = entry["key"]
         seed_state = seeds.setdefault(key, {"sightings": [], "currently_in_stock": False})
         currently_in_stock = bool(in_stock.get(key, 0) > 0)
@@ -1533,7 +1537,7 @@ def _apply_predictor_v2_embed_style(embed: discord.Embed, guild: discord.Guild |
 async def _build_predictor_v2_response(query: str, guild: discord.Guild | None) -> tuple[discord.Embed | None, str | None]:
     cleaned_query = query.strip()
     if not cleaned_query:
-        return None, "Usage: -predict <Fruit_Name/Fruit_abbreviation>"
+        return None, "Usage: -predict <item_name/item_abbreviation>"
 
     try:
         await _fetch_stock_lines_and_next_restock()
@@ -1557,11 +1561,25 @@ async def _build_predictor_v2_response(query: str, guild: discord.Guild | None) 
     sightings = [int(value) for value in (seed_state.get("sightings", []) or []) if str(value).isdigit()]
     currently_in_stock = bool(seed_state.get("currently_in_stock", False))
 
+    if currently_in_stock:
+        now_ts = int(datetime.now(timezone.utc).timestamp())
+        last_seen = sightings[-1] if sightings else now_ts
+        interval_count = max(0, len(sightings) - 1)
+        embed = discord.Embed(
+            description=(
+                f"# 🤩 We Predict {name} Will be in-stock in <t:{now_ts}:R>\n"
+                f"> Last seen in-stock: <t:{last_seen}:R>\n"
+                f"> Estimated chance right now: `100%` (based on `{interval_count}` tracked cycles)."
+            ),
+            timestamp=datetime.now(timezone.utc),
+        )
+        return _apply_predictor_v2_embed_style(embed, guild), None
+
     if len(sightings) < PREDICTOR_V2_MIN_SIGHTINGS:
         embed = discord.Embed(
             description=(
                 f"# ⏰I don't have enough data on {name}\n"
-                "> We have not collected enough data to give you the prediction for this seed please wait 5-20 minutes so I can get more data!"
+                "> We have not collected enough data to give you the prediction for this item please wait 5-20 minutes so I can get more data!"
             ),
             timestamp=datetime.now(timezone.utc),
         )
@@ -1587,8 +1605,8 @@ async def _build_predictor_v2_response(query: str, guild: discord.Guild | None) 
     predicted_interval = max(1, int(round((weighted_avg_interval * 0.7) + (median_interval * 0.3))))
 
     now_ts = int(datetime.now(timezone.utc).timestamp())
-    predicted_ts = now_ts if currently_in_stock else last_seen + predicted_interval
-    chance = _predictor_v2_chance(recent_intervals, predicted_ts, now_ts, currently_in_stock)
+    predicted_ts = last_seen + predicted_interval
+    chance = _predictor_v2_chance(recent_intervals, predicted_ts, now_ts, False)
 
     embed = discord.Embed(
         description=(
@@ -2019,7 +2037,9 @@ async def _fetch_stock_lines_and_next_restock() -> tuple[list[str], list[str], s
         gear_in_stock[key] = qty
 
     if BOT_MODE == "farmers":
-        _record_predictor_v2_sightings(in_stock, now_unix)
+        predictor_stock = dict(in_stock)
+        predictor_stock.update(gear_in_stock)
+        _record_predictor_v2_sightings(predictor_stock, now_unix)
 
     lines: list[str] = []
     gear_lines: list[str] = []
