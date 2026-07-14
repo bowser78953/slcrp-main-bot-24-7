@@ -1201,10 +1201,17 @@ class SeedLeaderboardPagesView(discord.ui.View):
 
 
 class CompleteSellView(discord.ui.View):
-    def __init__(self, host_id: int):
+    def __init__(self, host_id: int, buyer_id: int, price: int):
         super().__init__(timeout=None)
         self.host_id = host_id
+        self.buyer_id = int(buyer_id)
+        self.price = max(0, int(price))
         self.completed = False
+
+    def _disable_action_buttons(self) -> None:
+        for child in self.children:
+            if isinstance(child, discord.ui.Button):
+                child.disabled = True
 
     @discord.ui.button(label="Complete Sell", style=discord.ButtonStyle.success, custom_id="fas_complete_sell")
     async def complete_sell(self, first, second):
@@ -1235,7 +1242,50 @@ class CompleteSellView(discord.ui.View):
         embed.color = discord.Color.red()
 
         self.completed = True
-        button.disabled = True
+        self._disable_action_buttons()
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    @discord.ui.button(label="Deny Sale", style=discord.ButtonStyle.danger, custom_id="fas_deny_sell")
+    async def deny_sell(self, first, second):
+        if isinstance(first, discord.ui.Button):
+            button = first
+            interaction = second
+        else:
+            interaction = first
+            button = second
+        if not isinstance(interaction, discord.Interaction) or not isinstance(button, discord.ui.Button):
+            return
+        if interaction.user.id != self.host_id:
+            await interaction.response.send_message("Only the host can deny this sale.", ephemeral=True)
+            return
+
+        if self.completed:
+            await interaction.response.send_message("This sale is already finalized.", ephemeral=True)
+            return
+
+        bank_data = _load_seed_bank()
+        buyer_balance = _get_seed_balance(bank_data, self.buyer_id)
+        host_balance = _get_seed_balance(bank_data, self.host_id)
+        _set_seed_balance(bank_data, self.buyer_id, buyer_balance + self.price)
+        _set_seed_balance(bank_data, self.host_id, max(0, host_balance - self.price))
+        _save_seed_bank(bank_data)
+        await _sync_seed_leader_roles(interaction.guild, bank_data)
+
+        message = interaction.message
+        if message is None or not message.embeds:
+            await interaction.response.send_message("Sale denied and seeds refunded.", ephemeral=True)
+            self.completed = True
+            self._disable_action_buttons()
+            return
+
+        embed = message.embeds[0].copy()
+        if embed.description:
+            embed.description = embed.description.replace("In-complete", "Denied")
+            embed.description += f"\n\nRefunded `{self.price}` seeds back to <@{self.buyer_id}>."
+        embed.color = discord.Color.orange()
+
+        self.completed = True
+        self._disable_action_buttons()
         await interaction.response.edit_message(embed=embed, view=self)
 
 
@@ -2783,7 +2833,7 @@ async def buy(ctx: commands.Context, *, raw_args: str):
         ),
         color=discord.Color.green(),
     )
-    sale_view = CompleteSellView(host_id=host_id)
+    sale_view = CompleteSellView(host_id=host_id, buyer_id=ctx.author.id, price=price)
     await purchase_channel.send(content=f"<@{host_id}>", embed=sale_embed, view=sale_view)
 
     await ctx.send(
