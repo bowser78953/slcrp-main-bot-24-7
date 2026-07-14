@@ -55,6 +55,7 @@ VOUCH_DATA_BACKUP_FILE = os.path.join(DATA_DIR, "fas_farmers_reports.backup.json
 SEED_SHOP_LIVE_FILE = os.path.join(DATA_DIR, "fas_seed_shop_live.json")
 SEED_DATA_DIR = os.path.abspath(os.getenv("SEED_DATA_DIR") or os.getenv("RENDER_DISK_PATH") or DATA_DIR)
 REDIS_URL = (os.getenv("REDIS_URL") or "").strip()
+REDIS_VOUCH_DATA_KEY = "fas:vouch_reports"
 REDIS_SEED_BANK_KEY = "fas:seed_bank"
 REDIS_SEED_STORE_KEY = "fas:seed_store"
 PREDICTOR_V2_FILE = os.path.join(SEED_DATA_DIR, "fas_predictor_v2.json")
@@ -476,15 +477,63 @@ def _get_seed_redis_client():
 
 
 def _load_data() -> dict:
+    client = _get_seed_redis_client()
+    redis_data = None
+    file_data = None
+
+    if client is not None:
+        with DATA_LOCK:
+            try:
+                raw = client.get(REDIS_VOUCH_DATA_KEY)
+                if raw:
+                    redis_data = json.loads(raw)
+            except Exception:
+                redis_data = None
+
     _ensure_data_file()
     with DATA_LOCK:
         try:
             with open(VOUCH_DATA_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
+                file_data = json.load(f)
         except (json.JSONDecodeError, OSError):
             # Fall back to backup if the primary file is unreadable/corrupt.
             with open(VOUCH_DATA_BACKUP_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
+                file_data = json.load(f)
+
+    if client is not None:
+        if not isinstance(redis_data, dict):
+            data = file_data if isinstance(file_data, dict) else {"next_vouch_id": 1, "next_scam_id": 1, "users": {}}
+            try:
+                client.set(REDIS_VOUCH_DATA_KEY, json.dumps(data))
+            except Exception:
+                pass
+        else:
+            redis_updated = int(redis_data.get("updated_at", 0) or 0)
+            file_updated = int(file_data.get("updated_at", 0) or 0) if isinstance(file_data, dict) else 0
+            data = redis_data if redis_updated >= file_updated else file_data
+
+            if data is file_data:
+                try:
+                    client.set(REDIS_VOUCH_DATA_KEY, json.dumps(data))
+                except Exception:
+                    pass
+            elif isinstance(file_data, dict) and data is redis_data and redis_updated > file_updated:
+                with DATA_LOCK:
+                    try:
+                        tmp = VOUCH_DATA_FILE + ".tmp"
+                        with open(tmp, "w", encoding="utf-8") as f:
+                            json.dump(data, f, indent=2)
+                        os.replace(tmp, VOUCH_DATA_FILE)
+
+                        backup_tmp = VOUCH_DATA_BACKUP_FILE + ".tmp"
+                        with open(backup_tmp, "w", encoding="utf-8") as f:
+                            json.dump(data, f, indent=2)
+                        os.replace(backup_tmp, VOUCH_DATA_BACKUP_FILE)
+                    except Exception:
+                        pass
+    else:
+        data = file_data if isinstance(file_data, dict) else {"next_vouch_id": 1, "next_scam_id": 1, "users": {}}
+
     data.setdefault("next_vouch_id", 1)
     data.setdefault("next_scam_id", 1)
     data.setdefault("users", {})
@@ -492,6 +541,18 @@ def _load_data() -> dict:
 
 
 def _save_data(data: dict) -> None:
+    data["updated_at"] = int(datetime.now(timezone.utc).timestamp())
+    client = _get_seed_redis_client()
+    if client is not None:
+        with DATA_LOCK:
+            try:
+                client.set(REDIS_VOUCH_DATA_KEY, json.dumps(data))
+            except Exception:
+                global SEED_REDIS_CLIENT, SEED_REDIS_DISABLED
+                SEED_REDIS_CLIENT = None
+                SEED_REDIS_DISABLED = True
+                pass
+
     _ensure_data_file()
     with DATA_LOCK:
         tmp = VOUCH_DATA_FILE + ".tmp"
