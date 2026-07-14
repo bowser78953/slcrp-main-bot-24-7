@@ -59,6 +59,7 @@ REDIS_URL = (os.getenv("REDIS_URL") or "").strip()
 REDIS_VOUCH_DATA_KEY = "fas:vouch_reports"
 REDIS_SEED_BANK_KEY = "fas:seed_bank"
 REDIS_SEED_STORE_KEY = "fas:seed_store"
+REDIS_PREDICTOR_V2_KEY = "fas:predictor_v2"
 PREDICTOR_V2_FILE = os.path.join(SEED_DATA_DIR, "fas_predictor_v2.json")
 SEED_BANK_FILE = os.path.join(SEED_DATA_DIR, "fas_seed_bank.json")
 SEED_STORE_FILE = os.path.join(SEED_DATA_DIR, "fas_seed_store.json")
@@ -578,18 +579,73 @@ def _load_live_config() -> dict:
 
 
 def _load_predictor_v2_data() -> dict:
+    client = _get_seed_redis_client()
+    redis_data = None
+    file_data = None
+
+    if client is not None:
+        with DATA_LOCK:
+            try:
+                raw = client.get(REDIS_PREDICTOR_V2_KEY)
+                if raw:
+                    redis_data = json.loads(raw)
+            except Exception:
+                redis_data = None
+
     _ensure_predictor_v2_file()
     with DATA_LOCK:
         try:
             with open(PREDICTOR_V2_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
+                file_data = json.load(f)
         except Exception:
-            data = {"seeds": {}}
+            file_data = {"seeds": {}}
+
+    if client is not None:
+        if not isinstance(redis_data, dict):
+            data = file_data if isinstance(file_data, dict) else {"seeds": {}}
+            try:
+                client.set(REDIS_PREDICTOR_V2_KEY, json.dumps(data))
+            except Exception:
+                pass
+        else:
+            redis_updated = int(redis_data.get("updated_at", 0) or 0)
+            file_updated = int(file_data.get("updated_at", 0) or 0) if isinstance(file_data, dict) else 0
+            data = redis_data if redis_updated >= file_updated else file_data
+
+            if data is file_data:
+                try:
+                    client.set(REDIS_PREDICTOR_V2_KEY, json.dumps(data))
+                except Exception:
+                    pass
+            elif isinstance(file_data, dict) and data is redis_data and redis_updated > file_updated:
+                with DATA_LOCK:
+                    try:
+                        tmp = PREDICTOR_V2_FILE + ".tmp"
+                        with open(tmp, "w", encoding="utf-8") as f:
+                            json.dump(data, f, indent=2)
+                        os.replace(tmp, PREDICTOR_V2_FILE)
+                    except Exception:
+                        pass
+    else:
+        data = file_data if isinstance(file_data, dict) else {"seeds": {}}
+
     data.setdefault("seeds", {})
     return data
 
 
 def _save_predictor_v2_data(data: dict) -> None:
+    data["updated_at"] = int(datetime.now(timezone.utc).timestamp())
+    client = _get_seed_redis_client()
+    if client is not None:
+        with DATA_LOCK:
+            try:
+                client.set(REDIS_PREDICTOR_V2_KEY, json.dumps(data))
+            except Exception:
+                global SEED_REDIS_CLIENT, SEED_REDIS_DISABLED
+                SEED_REDIS_CLIENT = None
+                SEED_REDIS_DISABLED = True
+                pass
+
     _ensure_predictor_v2_file()
     with DATA_LOCK:
         tmp = PREDICTOR_V2_FILE + ".tmp"
