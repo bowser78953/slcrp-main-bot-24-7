@@ -134,6 +134,9 @@ MESSAGE_BONUS_TRIGGER_MESSAGES = 20
 MESSAGE_BONUS_MESSAGES = 5
 MESSAGE_BONUS_MULTIPLIER = 2
 MESSAGE_SEED_ROLE_SYNC_INTERVAL = 30
+SPAM_WINDOW_SECONDS = 8
+SPAM_MESSAGE_THRESHOLD = 6
+SPAM_TRACKER_LIMIT = 12
 PREDICTOR_V2_MIN_SIGHTINGS = 4
 PREDICTOR_V2_HISTORY_LIMIT = 12
 PREDICTOR_V2_EMBED_COLOR = 0xF6B26B
@@ -707,6 +710,7 @@ def _load_seed_bank() -> dict:
                     "message_counts": {},
                     "message_bonus_remaining": {},
                     "roblox_users": {},
+                    "spam_tracker": {},
                 }
 
         if not isinstance(redis_data, dict):
@@ -716,6 +720,7 @@ def _load_seed_bank() -> dict:
                 "message_counts": {},
                 "message_bonus_remaining": {},
                 "roblox_users": {},
+                "spam_tracker": {},
             }
             try:
                 client.set(REDIS_SEED_BANK_KEY, json.dumps(data))
@@ -751,6 +756,7 @@ def _load_seed_bank() -> dict:
     data.setdefault("message_counts", {})
     data.setdefault("message_bonus_remaining", {})
     data.setdefault("roblox_users", {})
+    data.setdefault("spam_tracker", {})
     return data
 
 
@@ -2275,9 +2281,36 @@ async def on_message(message: discord.Message):
             if len(words) >= MESSAGE_MIN_WORDS:
                 bank_data = _load_seed_bank()
                 user_key = str(message.author.id)
+                now_unix = int(datetime.now(timezone.utc).timestamp())
 
                 message_counts = bank_data.setdefault("message_counts", {})
                 message_bonus_remaining = bank_data.setdefault("message_bonus_remaining", {})
+                spam_tracker = bank_data.setdefault("spam_tracker", {})
+
+                raw_recent = spam_tracker.get(user_key, [])
+                recent_timestamps = [
+                    int(value)
+                    for value in raw_recent
+                    if str(value).isdigit()
+                ]
+                recent_timestamps = [
+                    ts for ts in recent_timestamps
+                    if (now_unix - ts) <= SPAM_WINDOW_SECONDS
+                ]
+                recent_timestamps.append(now_unix)
+                spam_tracker[user_key] = recent_timestamps[-SPAM_TRACKER_LIMIT:]
+
+                if len(recent_timestamps) >= SPAM_MESSAGE_THRESHOLD:
+                    _set_seed_balance(bank_data, message.author.id, 0)
+                    message_counts.pop(user_key, None)
+                    message_bonus_remaining.pop(user_key, None)
+                    spam_tracker[user_key] = []
+                    _save_seed_bank(bank_data)
+                    await _sync_seed_leader_roles(message.guild, bank_data)
+                    await message.channel.send(
+                        f"{message.author.mention} stop spamming. Your seed balance has been reset to `0`."
+                    )
+                    return
 
                 streak_count = int(message_counts.get(user_key, 0) or 0) + 1
                 bonus_remaining = int(message_bonus_remaining.get(user_key, 0) or 0)
@@ -2302,7 +2335,6 @@ async def on_message(message: discord.Message):
 
                 _save_seed_bank(bank_data)
 
-                now_unix = int(datetime.now(timezone.utc).timestamp())
                 if (now_unix - last_message_seed_role_sync) >= MESSAGE_SEED_ROLE_SYNC_INTERVAL:
                     last_message_seed_role_sync = now_unix
                     await _sync_seed_leader_roles(message.guild, bank_data)
