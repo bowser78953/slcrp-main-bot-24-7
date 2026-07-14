@@ -101,7 +101,7 @@ BOOSTER_SEED_CLAIM_MIN = 100
 BOOSTER_SEED_CLAIM_MAX = 2000
 SEED_CLAIM_COOLDOWN_SECONDS = 86400
 BOOSTER_CLAIM_MULTIPLIER = 2.5
-BOOSTER_CLAIM_MULTIPLIER_CHANCE = 0.25
+BOOSTER_CLAIM_MULTIPLIER_CHANCE = 0.10
 TOP1_CLAIM_MULTIPLIER = 1.75
 TOP2_CLAIM_MULTIPLIER = 1.5
 TOP3_CLAIM_MULTIPLIER = 1.25
@@ -2234,7 +2234,7 @@ async def seedclaim(ctx: commands.Context):
     else:
         amount = random.randint(SEED_CLAIM_MIN, SEED_CLAIM_MAX)
 
-    if leaderboard_multiplier > 1.0:
+    if leaderboard_multiplier > 1.0 and not booster_multiplier_applied:
         amount = int(amount * leaderboard_multiplier)
 
     current_balance = _get_seed_balance(bank_data, ctx.author.id)
@@ -2247,7 +2247,7 @@ async def seedclaim(ctx: commands.Context):
     bonus_parts: list[str] = []
     if booster_multiplier_applied:
         bonus_parts.append(f"Booster x{BOOSTER_CLAIM_MULTIPLIER:g}")
-    if leaderboard_multiplier > 1.0:
+    if leaderboard_multiplier > 1.0 and not booster_multiplier_applied:
         bonus_parts.append(f"Collector x{leaderboard_multiplier:g}")
     bonus_text = f" ({', '.join(bonus_parts)})" if bonus_parts else ""
     await ctx.send(f"{ctx.author.mention} claimed `{amount}` seeds{bonus_text}. You now have `{new_balance}` seeds.")
@@ -2532,7 +2532,7 @@ async def seedclaimwipe(ctx: commands.Context, target: str):
 
     _clear_claim_cooldown(bank_data, target_id)
     _save_seed_bank(bank_data)
-    await ctx.send(f"<@&{SEED_CLAIMWIPE_PING_ROLE_ID}> Wiped claim cooldown for <@{target_id}>.")
+    await ctx.send(f"Wiped claim cooldown for <@{target_id}>.")
 
 
 @bot.command(name="addseeds")
