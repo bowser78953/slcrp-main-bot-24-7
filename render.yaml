@@ -23,3 +23,20 @@ services:
         sync: false
       - key: ERLC_SERVER_CODE
         sync: false
+
+  - type: web
+    name: gag2-webhook-api
+    runtime: python
+    buildCommand: python -m pip install -r requirements.txt
+    startCommand: uvicorn gag2_webhook_api:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.4
+      - key: ROBLOX_GAME_SECRET
+        sync: false
+      - key: ROBLOX_EVENTS_DISCORD_WEBHOOK_URL
+        sync: false
+      - key: GAG2_STOCK_API_URL
+        value: https://api.gag2.gg/api/live/stock
+      - key: GAG2_TOP_GUILDS_API_URL
+        sync: false
