@@ -62,6 +62,7 @@ REDIS_SEED_BANK_KEY = "fas:seed_bank"
 REDIS_SEED_STORE_KEY = "fas:seed_store"
 REDIS_PREDICTOR_V2_KEY = "fas:predictor_v2"
 PREDICTOR_V2_FILE = os.path.join(SEED_DATA_DIR, "fas_predictor_v2.json")
+PREDICTOR_V2_BACKUP_FILE = os.path.join(SEED_DATA_DIR, "fas_predictor_v2.backup.json")
 SEED_BANK_FILE = os.path.join(SEED_DATA_DIR, "fas_seed_bank.json")
 SEED_STORE_FILE = os.path.join(SEED_DATA_DIR, "fas_seed_store.json")
 LEGACY_SEED_BANK_FILE = os.path.join(DATA_DIR, "fas_seed_bank.json")
@@ -470,6 +471,12 @@ def _ensure_predictor_v2_file() -> None:
     if not os.path.exists(PREDICTOR_V2_FILE):
         with open(PREDICTOR_V2_FILE, "w", encoding="utf-8") as f:
             json.dump({"seeds": {}}, f, indent=2)
+    if not os.path.exists(PREDICTOR_V2_BACKUP_FILE):
+        try:
+            shutil.copy2(PREDICTOR_V2_FILE, PREDICTOR_V2_BACKUP_FILE)
+        except Exception:
+            with open(PREDICTOR_V2_BACKUP_FILE, "w", encoding="utf-8") as f:
+                json.dump({"seeds": {}}, f, indent=2)
 
 
 def _get_seed_redis_client():
@@ -619,7 +626,11 @@ def _load_predictor_v2_data() -> dict:
             with open(PREDICTOR_V2_FILE, "r", encoding="utf-8") as f:
                 file_data = json.load(f)
         except Exception:
-            file_data = {"seeds": {}}
+            try:
+                with open(PREDICTOR_V2_BACKUP_FILE, "r", encoding="utf-8") as f:
+                    file_data = json.load(f)
+            except Exception:
+                file_data = {"seeds": {}}
 
     if client is not None:
         if not isinstance(redis_data, dict):
@@ -645,6 +656,11 @@ def _load_predictor_v2_data() -> dict:
                         with open(tmp, "w", encoding="utf-8") as f:
                             json.dump(data, f, indent=2)
                         os.replace(tmp, PREDICTOR_V2_FILE)
+
+                        backup_tmp = PREDICTOR_V2_BACKUP_FILE + ".tmp"
+                        with open(backup_tmp, "w", encoding="utf-8") as f:
+                            json.dump(data, f, indent=2)
+                        os.replace(backup_tmp, PREDICTOR_V2_BACKUP_FILE)
                     except Exception:
                         pass
     else:
@@ -673,6 +689,11 @@ def _save_predictor_v2_data(data: dict) -> None:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
         os.replace(tmp, PREDICTOR_V2_FILE)
+
+        backup_tmp = PREDICTOR_V2_BACKUP_FILE + ".tmp"
+        with open(backup_tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        os.replace(backup_tmp, PREDICTOR_V2_BACKUP_FILE)
 
 
 def _save_live_config(data: dict) -> None:
