@@ -97,10 +97,11 @@ POLL_SECONDS = 10
 SHOP_REFRESH_SECONDS = 300
 SEED_CLAIM_MIN = 100
 SEED_CLAIM_MAX = 1000
-BOOSTER_SEED_CLAIM_MIN = 1000
-BOOSTER_SEED_CLAIM_MAX = 3000
+BOOSTER_SEED_CLAIM_MIN = 100
+BOOSTER_SEED_CLAIM_MAX = 2000
 SEED_CLAIM_COOLDOWN_SECONDS = 86400
 BOOSTER_CLAIM_MULTIPLIER = 2.5
+BOOSTER_CLAIM_MULTIPLIER_CHANCE = 0.25
 TOP1_CLAIM_MULTIPLIER = 1.75
 TOP2_CLAIM_MULTIPLIER = 1.5
 TOP3_CLAIM_MULTIPLIER = 1.25
@@ -366,11 +367,11 @@ def _configure_commands_for_mode() -> None:
         return
 
     if BOT_MODE == "farmers":
-        # First bot: keep seed shop, non-seed commands, and predictor; remove XP and stock commands.
-        to_remove = XP_COMMAND_NAMES | STOCK_COMMAND_NAMES
+        # First bot: keep non-seed + predictor; remove XP, stock, and seed-shop commands.
+        to_remove = XP_COMMAND_NAMES | STOCK_COMMAND_NAMES | SEED_SHOP_COMMAND_NAMES
     else:
-        # Second bot: XP-only command surface.
-        to_remove = NON_SEED_COMMAND_NAMES | SEED_SHOP_COMMAND_NAMES | STOCK_COMMAND_NAMES | PREDICTOR_COMMAND_NAMES
+        # Second bot: XP + seed-shop command surface.
+        to_remove = NON_SEED_COMMAND_NAMES | STOCK_COMMAND_NAMES | PREDICTOR_COMMAND_NAMES
     for name in to_remove:
         try:
             bot.remove_command(name)
@@ -2224,9 +2225,12 @@ async def seedclaim(ctx: commands.Context):
     elif len(top_users) > 2 and top_users[2] == ctx.author.id:
         leaderboard_multiplier = TOP3_CLAIM_MULTIPLIER
 
+    booster_multiplier_applied = False
     if is_booster:
-        base_amount = random.randint(BOOSTER_SEED_CLAIM_MIN, BOOSTER_SEED_CLAIM_MAX)
-        amount = int(base_amount * BOOSTER_CLAIM_MULTIPLIER)
+        amount = random.randint(BOOSTER_SEED_CLAIM_MIN, BOOSTER_SEED_CLAIM_MAX)
+        if random.random() < BOOSTER_CLAIM_MULTIPLIER_CHANCE:
+            amount = int(amount * BOOSTER_CLAIM_MULTIPLIER)
+            booster_multiplier_applied = True
     else:
         amount = random.randint(SEED_CLAIM_MIN, SEED_CLAIM_MAX)
 
@@ -2241,7 +2245,7 @@ async def seedclaim(ctx: commands.Context):
     await _sync_seed_leader_roles(ctx.guild, bank_data)
 
     bonus_parts: list[str] = []
-    if is_booster:
+    if booster_multiplier_applied:
         bonus_parts.append(f"Booster x{BOOSTER_CLAIM_MULTIPLIER:g}")
     if leaderboard_multiplier > 1.0:
         bonus_parts.append(f"Collector x{leaderboard_multiplier:g}")
