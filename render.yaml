@@ -4,15 +4,11 @@ services:
     runtime: python
     buildCommand: python -m pip install -r requirements.txt
     startCommand: python run_bots.py
-    disk:
-      name: slcrp-seed-data
-      mountPath: /var/data
-      sizeGB: 1
     envVars:
       - key: PYTHON_VERSION
         value: 3.13.4
-      - key: SEED_DATA_DIR
-        value: /var/data/seed-data
+      - key: REDIS_URL
+        sync: false
       - key: NEW_BOT_TOKEN
         sync: false
       - key: FAS_FARMERS_BOT_TOKEN
