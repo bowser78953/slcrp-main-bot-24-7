@@ -1368,16 +1368,29 @@ def _resolve_predictor_seed(query: str) -> list[dict]:
     if not normalized_query:
         return []
 
-    matches: list[dict] = []
+    exact_matches: list[dict] = []
+    startswith_matches: list[dict] = []
+    contains_matches: list[dict] = []
+
     for entry in SEED_CONFIG:
         aliases = _predictor_aliases_for_seed(entry)
-        if normalized_query in aliases or any(alias.startswith(normalized_query) for alias in aliases):
-            matches.append(entry)
+        if normalized_query in aliases:
+            exact_matches.append(entry)
             continue
+
+        if any(alias.startswith(normalized_query) for alias in aliases):
+            startswith_matches.append(entry)
+            continue
+
         normalized_name = _normalize_sell_query(str(entry.get("name", "")))
         if normalized_query in normalized_name:
-            matches.append(entry)
-    return matches
+            contains_matches.append(entry)
+
+    if exact_matches:
+        return exact_matches
+    if startswith_matches:
+        return startswith_matches
+    return contains_matches
 
 
 def _record_predictor_v2_sightings(in_stock: dict[str, int], observed_at: int) -> None:
