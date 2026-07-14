@@ -57,6 +57,7 @@ SEED_DATA_DIR = os.path.abspath(os.getenv("SEED_DATA_DIR") or os.getenv("RENDER_
 REDIS_URL = (os.getenv("REDIS_URL") or "").strip()
 REDIS_SEED_BANK_KEY = "fas:seed_bank"
 REDIS_SEED_STORE_KEY = "fas:seed_store"
+PREDICTOR_V2_FILE = os.path.join(SEED_DATA_DIR, "fas_predictor_v2.json")
 SEED_BANK_FILE = os.path.join(SEED_DATA_DIR, "fas_seed_bank.json")
 SEED_STORE_FILE = os.path.join(SEED_DATA_DIR, "fas_seed_store.json")
 LEGACY_SEED_BANK_FILE = os.path.join(DATA_DIR, "fas_seed_bank.json")
@@ -79,6 +80,7 @@ SEED_CLAIM_WIPE_ADMINS = {1273130266629640243, 1332458947067773072, 866957916933
 SEED_BALANCE_ADMIN_ROLE_ID = 1526236532980318462
 GIVEAWAY_PING_ROLE_ID = 1526304210910449765
 SEED_CLAIMWIPE_PING_ROLE_ID = 1526309075372085459
+PREDICTOR_V2_CHANNEL_ID = 1526381177127043263
 
 NO_VOUCH_ROLE_ID = 1526215394283487302
 VOUCH_ANY_ROLE_ID = 1526214841264767139
@@ -110,6 +112,10 @@ MESSAGE_BONUS_TRIGGER_MESSAGES = 20
 MESSAGE_BONUS_MESSAGES = 5
 MESSAGE_BONUS_MULTIPLIER = 2
 MESSAGE_SEED_ROLE_SYNC_INTERVAL = 30
+PREDICTOR_V2_MIN_SIGHTINGS = 4
+PREDICTOR_V2_HISTORY_LIMIT = 12
+PREDICTOR_V2_EMBED_COLOR = 0xF6B26B
+PREDICTOR_V2_FOOTER = "Sported by Predictor V2 which could be very wrong. Do not trust this tell fully complete."
 
 last_message_seed_role_sync = 0
 
@@ -199,6 +205,18 @@ SEED_CONFIG = [
 ]
 
 SEED_LOOKUP = {entry["key"]: entry for entry in SEED_CONFIG}
+PREDICTOR_V2_CUSTOM_ALIASES = {
+    "star fruit": {"sf"},
+    "sun bloom": {"sb"},
+    "moon bloom": {"mb"},
+    "hypno bloom": {"hb"},
+    "dragons breath": {"db", "dragon's breath", "dragonsbreath", "dragonbreath"},
+    "venus fly trap": {"vft", "venusflytrap"},
+    "venom spitter": {"vs", "venom spiter", "venomspiter"},
+    "poison apple": {"pa"},
+    "fire fern": {"ff"},
+    "dragon fruit": {"df"},
+}
 
 GEAR_CONFIG = [
     {"key": "common watering can", "name": "Common Watering Can", "emoji": "<:Common_watering_can:1525708071836323981>", "rarity": "common"},
@@ -419,6 +437,13 @@ def _ensure_seed_store_file() -> None:
             json.dump({"next_item_id": 1, "items": []}, f, indent=2)
 
 
+def _ensure_predictor_v2_file() -> None:
+    os.makedirs(SEED_DATA_DIR, exist_ok=True)
+    if not os.path.exists(PREDICTOR_V2_FILE):
+        with open(PREDICTOR_V2_FILE, "w", encoding="utf-8") as f:
+            json.dump({"seeds": {}}, f, indent=2)
+
+
 def _get_seed_redis_client():
     global SEED_REDIS_CLIENT, SEED_REDIS_DISABLED
     if SEED_REDIS_DISABLED:
@@ -484,6 +509,27 @@ def _load_live_config() -> dict:
     data.setdefault("channel_id", None)
     data.setdefault("message_id", None)
     return data
+
+
+def _load_predictor_v2_data() -> dict:
+    _ensure_predictor_v2_file()
+    with DATA_LOCK:
+        try:
+            with open(PREDICTOR_V2_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            data = {"seeds": {}}
+    data.setdefault("seeds", {})
+    return data
+
+
+def _save_predictor_v2_data(data: dict) -> None:
+    _ensure_predictor_v2_file()
+    with DATA_LOCK:
+        tmp = PREDICTOR_V2_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp, PREDICTOR_V2_FILE)
 
 
 def _save_live_config(data: dict) -> None:
@@ -1158,6 +1204,147 @@ def _normalize_seed_name(name: str) -> str:
     return cleaned
 
 
+def _predictor_aliases_for_seed(entry: dict) -> set[str]:
+    key = str(entry.get("key", ""))
+    name = str(entry.get("name", key))
+    aliases = {
+        key,
+        name,
+        key.replace("_", " "),
+        key.replace("_", ""),
+    }
+
+    words = [word for word in re.findall(r"[a-z0-9]+", _normalize_seed_name(name)) if word]
+    if words:
+        aliases.add("".join(words))
+        aliases.add("".join(word[0] for word in words))
+
+    aliases |= PREDICTOR_V2_CUSTOM_ALIASES.get(key, set())
+    return {_normalize_sell_query(alias) for alias in aliases if alias}
+
+
+def _resolve_predictor_seed(query: str) -> list[dict]:
+    normalized_query = _normalize_sell_query(query)
+    if not normalized_query:
+        return []
+
+    matches: list[dict] = []
+    for entry in SEED_CONFIG:
+        aliases = _predictor_aliases_for_seed(entry)
+        if normalized_query in aliases or any(alias.startswith(normalized_query) for alias in aliases):
+            matches.append(entry)
+            continue
+        normalized_name = _normalize_sell_query(str(entry.get("name", "")))
+        if normalized_query in normalized_name:
+            matches.append(entry)
+    return matches
+
+
+def _record_predictor_v2_sightings(in_stock: dict[str, int], observed_at: int) -> None:
+    data = _load_predictor_v2_data()
+    seeds = data.setdefault("seeds", {})
+    changed = False
+
+    for entry in SEED_CONFIG:
+        key = entry["key"]
+        seed_state = seeds.setdefault(key, {"sightings": [], "currently_in_stock": False})
+        currently_in_stock = bool(in_stock.get(key, 0) > 0)
+        previous_in_stock = bool(seed_state.get("currently_in_stock", False))
+        sightings = seed_state.setdefault("sightings", [])
+
+        if currently_in_stock and not previous_in_stock:
+            if not sightings or abs(int(sightings[-1]) - observed_at) > 60:
+                sightings.append(int(observed_at))
+                if len(sightings) > PREDICTOR_V2_HISTORY_LIMIT:
+                    del sightings[:-PREDICTOR_V2_HISTORY_LIMIT]
+                changed = True
+
+        if previous_in_stock != currently_in_stock:
+            seed_state["currently_in_stock"] = currently_in_stock
+            changed = True
+
+    if changed:
+        _save_predictor_v2_data(data)
+
+
+def _predictor_v2_chance(intervals: list[int], predicted_ts: int, now_ts: int, currently_in_stock: bool) -> int:
+    if currently_in_stock:
+        return 100
+    if not intervals:
+        return 0
+
+    avg_interval = max(1, int(sum(intervals) / len(intervals)))
+    spread = max(intervals) - min(intervals)
+    consistency = max(0.05, 1.0 - min(0.9, spread / avg_interval))
+    time_gap = abs(now_ts - predicted_ts)
+    time_score = max(0.05, 1.0 - min(0.95, time_gap / max(300, avg_interval)))
+    chance = int(round(((consistency * 0.6) + (time_score * 0.4)) * 100))
+    return max(5, min(99, chance))
+
+
+def _apply_predictor_v2_embed_style(embed: discord.Embed, guild: discord.Guild | None) -> discord.Embed:
+    embed.color = discord.Color(PREDICTOR_V2_EMBED_COLOR)
+    if guild is not None and guild.icon:
+        embed.set_thumbnail(url=guild.icon.url)
+    embed.set_footer(text=PREDICTOR_V2_FOOTER)
+    return embed
+
+
+async def _build_predictor_v2_response(query: str, guild: discord.Guild | None) -> tuple[discord.Embed | None, str | None]:
+    cleaned_query = query.strip()
+    if not cleaned_query:
+        return None, "Usage: -predict <Fruit_Name/Fruit_abbreviation>"
+
+    try:
+        await _fetch_stock_lines_and_next_restock()
+    except Exception as exc:
+        return None, f"Could not fetch prediction data right now: {exc}"
+
+    matches = _resolve_predictor_seed(cleaned_query)
+    if not matches:
+        return None, f"I could not find a fruit matching `{cleaned_query}`."
+
+    if len(matches) > 1:
+        match_names = ", ".join(entry["name"] for entry in matches[:8])
+        suffix = "" if len(matches) <= 8 else f" and {len(matches) - 8} more"
+        return None, f"That abbreviation is ambiguous. Try one of: {match_names}{suffix}."
+
+    entry = matches[0]
+    key = str(entry.get("key", ""))
+    name = str(entry.get("name", key.title()))
+    data = _load_predictor_v2_data()
+    seed_state = (data.get("seeds", {}) or {}).get(key, {})
+    sightings = [int(value) for value in (seed_state.get("sightings", []) or []) if str(value).isdigit()]
+    currently_in_stock = bool(seed_state.get("currently_in_stock", False))
+
+    if len(sightings) < PREDICTOR_V2_MIN_SIGHTINGS:
+        embed = discord.Embed(
+            description=(
+                "# ⏰ Not Enough Data\n"
+                "> We have not collected enough data to give you the prediction for this seed please wait 5-20 minutes so I can get more data!"
+            ),
+            timestamp=datetime.now(timezone.utc),
+        )
+        return _apply_predictor_v2_embed_style(embed, guild), None
+
+    recent_sightings = sightings[-PREDICTOR_V2_MIN_SIGHTINGS:]
+    intervals = [recent_sightings[idx] - recent_sightings[idx - 1] for idx in range(1, len(recent_sightings))]
+    last_seen = recent_sightings[-1]
+    avg_interval = max(1, int(round(sum(intervals) / len(intervals)))) if intervals else 0
+    now_ts = int(datetime.now(timezone.utc).timestamp())
+    predicted_ts = now_ts if currently_in_stock else last_seen + avg_interval
+    chance = _predictor_v2_chance(intervals, predicted_ts, now_ts, currently_in_stock)
+
+    embed = discord.Embed(
+        description=(
+            f"# 🤩 We Predict {name} Will be in-stock in <t:{predicted_ts}:R>\n"
+            f"> The Last time this fruit was in-stock was <t:{last_seen}:R> and we predict there is a `{chance}%` ammount chance its in stock right now."
+        ),
+        timestamp=datetime.now(timezone.utc),
+    )
+    return _apply_predictor_v2_embed_style(embed, guild), None
+
+
 def _normalize_sell_query(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", text.lower()).strip()
 
@@ -1575,6 +1762,8 @@ async def _fetch_stock_lines_and_next_restock() -> tuple[list[str], list[str], s
         key = _normalize_seed_name(name)
         gear_in_stock[key] = qty
 
+    _record_predictor_v2_sightings(in_stock, now_unix)
+
     lines: list[str] = []
     gear_lines: list[str] = []
     best_rarity: str | None = None
@@ -1777,8 +1966,16 @@ async def on_message(message: discord.Message):
     if message.author.bot:
         return
 
+    content = (message.content or "").strip()
+
+    if message.guild is not None and message.channel.id == PREDICTOR_V2_CHANNEL_ID and content and not content.startswith("-"):
+        embed, error_message = await _build_predictor_v2_response(content, message.guild)
+        if embed is not None:
+            await message.channel.send(embed=embed)
+        elif error_message is not None:
+            await message.channel.send(error_message)
+
     if BOT_MODE == "seed" and message.guild is not None:
-        content = (message.content or "").strip()
         if content and not content.startswith("-"):
             words = content.split()
             if len(words) >= MESSAGE_MIN_WORDS:
@@ -2439,47 +2636,11 @@ async def sellprice(ctx: commands.Context, *, fruit_name: str):
 
 @bot.command(name="predict")
 async def predict(ctx: commands.Context, *, fruit_name: str):
-    query = fruit_name.strip()
-    if not query:
-        await ctx.send("Usage: -predict <Fruit_Name/Fruit_abbreviation>")
+    embed, error_message = await _build_predictor_v2_response(fruit_name, ctx.guild)
+    if embed is not None:
+        await ctx.send(embed=embed)
         return
-
-    try:
-        rows = await _fetch_seed_prediction_rows()
-    except Exception as exc:
-        await ctx.send(f"Could not fetch prediction data right now: {exc}")
-        return
-
-    matches = _resolve_sell_query(query, rows)
-    if not matches:
-        await ctx.send(f"I could not find a fruit matching `{query}`.")
-        return
-
-    if len(matches) > 1:
-        match_names = ", ".join(entry["name"] for entry in matches[:8])
-        suffix = "" if len(matches) <= 8 else f" and {len(matches) - 8} more"
-        await ctx.send(f"That abbreviation is ambiguous. Try one of: {match_names}{suffix}.")
-        return
-
-    selected_row = matches[0]
-    next_boundary = int(selected_row.get("next_boundary", 0) or 0)
-    chance = _get_seed_prediction_chance(str(selected_row.get("name", "")), str(selected_row.get("key", "")))
-
-    if next_boundary <= 0:
-        await ctx.send(f"I could not find a valid next stock time for {selected_row.get('name', 'that fruit')}.")
-        return
-
-    embed = discord.Embed(
-        title=f"{selected_row['name']} Next Stock.",
-        description=(
-            f"{selected_row['name']} Will be in stock in <t:{next_boundary}:R>. "
-            f"There is a {chance} chance to get it this stock."
-        ),
-        color=discord.Color.orange(),
-        timestamp=datetime.now(timezone.utc),
-    )
-    embed.set_footer(text="This prediction is generated by a random API which could be 100% in-correct.")
-    await ctx.send(embed=embed)
+    await ctx.send(error_message or "Could not build a prediction right now.")
 
 
 @bot.command(name="vouch")
