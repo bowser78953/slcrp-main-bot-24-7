@@ -1762,8 +1762,6 @@ async def _fetch_stock_lines_and_next_restock() -> tuple[list[str], list[str], s
         key = _normalize_seed_name(name)
         gear_in_stock[key] = qty
 
-    _record_predictor_v2_sightings(in_stock, now_unix)
-
     lines: list[str] = []
     gear_lines: list[str] = []
     best_rarity: str | None = None
@@ -1967,13 +1965,6 @@ async def on_message(message: discord.Message):
         return
 
     content = (message.content or "").strip()
-
-    if message.guild is not None and message.channel.id == PREDICTOR_V2_CHANNEL_ID and content and not content.startswith("-"):
-        embed, error_message = await _build_predictor_v2_response(content, message.guild)
-        if embed is not None:
-            await message.channel.send(embed=embed)
-        elif error_message is not None:
-            await message.channel.send(error_message)
 
     if BOT_MODE == "seed" and message.guild is not None:
         if content and not content.startswith("-"):
