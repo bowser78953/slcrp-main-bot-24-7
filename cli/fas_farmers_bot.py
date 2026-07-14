@@ -340,6 +340,9 @@ STOCK_COMMAND_NAMES = {
     "seedshoplive",
     "seedshopstop",
     "sellprice",
+}
+
+PREDICTOR_COMMAND_NAMES = {
     "predict",
 }
 
@@ -363,11 +366,11 @@ def _configure_commands_for_mode() -> None:
         return
 
     if BOT_MODE == "farmers":
-        # First bot: keep seed shop + non-seed commands; remove XP and stock commands.
+        # First bot: keep seed shop, non-seed commands, and predictor; remove XP and stock commands.
         to_remove = XP_COMMAND_NAMES | STOCK_COMMAND_NAMES
     else:
         # Second bot: XP-only command surface.
-        to_remove = NON_SEED_COMMAND_NAMES | SEED_SHOP_COMMAND_NAMES | STOCK_COMMAND_NAMES
+        to_remove = NON_SEED_COMMAND_NAMES | SEED_SHOP_COMMAND_NAMES | STOCK_COMMAND_NAMES | PREDICTOR_COMMAND_NAMES
     for name in to_remove:
         try:
             bot.remove_command(name)
@@ -1320,7 +1323,7 @@ async def _build_predictor_v2_response(query: str, guild: discord.Guild | None) 
     if len(sightings) < PREDICTOR_V2_MIN_SIGHTINGS:
         embed = discord.Embed(
             description=(
-                "# ⏰ Not Enough Data\n"
+                f"# ⏰I don't have enough data on {name}\n"
                 "> We have not collected enough data to give you the prediction for this seed please wait 5-20 minutes so I can get more data!"
             ),
             timestamp=datetime.now(timezone.utc),
@@ -1762,6 +1765,9 @@ async def _fetch_stock_lines_and_next_restock() -> tuple[list[str], list[str], s
         key = _normalize_seed_name(name)
         gear_in_stock[key] = qty
 
+    if BOT_MODE == "farmers":
+        _record_predictor_v2_sightings(in_stock, now_unix)
+
     lines: list[str] = []
     gear_lines: list[str] = []
     best_rarity: str | None = None
@@ -1965,6 +1971,13 @@ async def on_message(message: discord.Message):
         return
 
     content = (message.content or "").strip()
+
+    if message.guild is not None and BOT_MODE == "farmers" and message.channel.id == PREDICTOR_V2_CHANNEL_ID and content and not content.startswith("-"):
+        embed, error_message = await _build_predictor_v2_response(content, message.guild)
+        if embed is not None:
+            await message.channel.send(embed=embed)
+        elif error_message is not None:
+            await message.channel.send(error_message)
 
     if BOT_MODE == "seed" and message.guild is not None:
         if content and not content.startswith("-"):
