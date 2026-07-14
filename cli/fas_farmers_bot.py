@@ -113,14 +113,12 @@ MESSAGE_BONUS_TRIGGER_MESSAGES = 20
 MESSAGE_BONUS_MESSAGES = 5
 MESSAGE_BONUS_MULTIPLIER = 2
 MESSAGE_SEED_ROLE_SYNC_INTERVAL = 30
-GUESS_THE_SEED_TIMEOUT_SECONDS = 20
 PREDICTOR_V2_MIN_SIGHTINGS = 4
 PREDICTOR_V2_HISTORY_LIMIT = 12
 PREDICTOR_V2_EMBED_COLOR = 0xF6B26B
 PREDICTOR_V2_FOOTER = "Sported by Predictor V2 which could be very wrong. Do not trust this tell fully complete."
 
 last_message_seed_role_sync = 0
-guess_the_seed_active_channels: set[int] = set()
 
 RARITY_EMOJIS = {
     "common": "<:common:1525708045450084473>",
@@ -351,7 +349,6 @@ PREDICTOR_COMMAND_NAMES = {
 
 NON_SEED_COMMAND_NAMES = {
     "ping",
-    "guesstheseed",
     "greroll",
     "genterlist",
     "forceend",
@@ -1111,9 +1108,27 @@ def _get_user_bucket(data: dict, user_id: int) -> dict:
     key = str(user_id)
     if key not in users:
         users[key] = {"vouches": [], "scams": []}
-    users[key].setdefault("vouches", [])
-    users[key].setdefault("scams", [])
-    return users[key]
+    bucket = users[key]
+    bucket.setdefault("vouches", [])
+    bucket.setdefault("scams", [])
+    bucket.setdefault("trust_level", "positive")
+    bucket.setdefault("trust_role_id", NO_VOUCH_ROLE_ID)
+    _update_bucket_trust_level(bucket)
+    return bucket
+
+
+def _update_bucket_trust_level(bucket: dict) -> None:
+    vouch_count = len(bucket.get("vouches", []))
+    scam_count = len(bucket.get("scams", []))
+    negative_role_id = _highest_negative_trust_role_id(scam_count)
+    if negative_role_id is not None:
+        bucket["trust_level"] = "negative"
+        bucket["trust_role_id"] = int(negative_role_id)
+    else:
+        bucket["trust_level"] = "positive"
+        bucket["trust_role_id"] = int(_highest_positive_trust_role_id(vouch_count))
+    bucket["vouch_count"] = int(vouch_count)
+    bucket["scam_count"] = int(scam_count)
 
 
 def _mention_for_user(guild: discord.Guild | None, user_id: int) -> str:
@@ -2412,69 +2427,6 @@ async def seedleaderboard(ctx: commands.Context):
     await ctx.send(embed=embed, view=view)
 
 
-@bot.command(name="guesstheseed")
-async def guesstheseed(ctx: commands.Context, action: str | None = None):
-    if (action or "").strip().lower() != "start":
-        await ctx.send("Usage: -guesstheseed start")
-        return
-
-    channel_id = getattr(ctx.channel, "id", None)
-    if isinstance(channel_id, int) and channel_id in guess_the_seed_active_channels:
-        await ctx.send("A guess game is already running in this channel.")
-        return
-
-    entries = [entry for entry in SEED_CONFIG if str(entry.get("name", "")).strip()]
-    if not entries:
-        await ctx.send("I could not start the game because no seed data is loaded.")
-        return
-
-    selected = random.choice(entries)
-    seed_name = str(selected.get("name", "Unknown Seed")).strip() or "Unknown Seed"
-    seed_emoji = str(selected.get("emoji", "🌱")).strip() or "🌱"
-    answer_key = _normalize_seed_name(seed_name)
-
-    if isinstance(channel_id, int):
-        guess_the_seed_active_channels.add(channel_id)
-
-    try:
-        embed = discord.Embed(
-            description=(
-                "# Guess The Seed\n"
-                f"Guess the GAG2 seed from this emoji:\n\n{seed_emoji}\n\n"
-                f"You have `{GUESS_THE_SEED_TIMEOUT_SECONDS}` seconds. Type your guess in chat."
-            ),
-            color=discord.Color.gold(),
-            timestamp=datetime.now(timezone.utc),
-        )
-        await ctx.send(embed=embed)
-
-        loop = asyncio.get_running_loop()
-        end_at = loop.time() + GUESS_THE_SEED_TIMEOUT_SECONDS
-
-        while True:
-            remaining = end_at - loop.time()
-            if remaining <= 0:
-                await ctx.send(f"Time is up. The seed was **{seed_name}**.")
-                return
-
-            try:
-                guess_msg = await bot.wait_for(
-                    "message",
-                    timeout=remaining,
-                    check=lambda m: bool(m.channel and m.channel.id == ctx.channel.id and not m.author.bot),
-                )
-            except asyncio.TimeoutError:
-                await ctx.send(f"Time is up. The seed was **{seed_name}**.")
-                return
-
-            if _normalize_seed_name(guess_msg.content or "") == answer_key:
-                await ctx.send(f"{guess_msg.author.mention} got it right. It was **{seed_name}**.")
-                return
-    finally:
-        if isinstance(channel_id, int):
-            guess_the_seed_active_channels.discard(channel_id)
-
-
 @bot.command(name="register")
 async def register(ctx: commands.Context, *, roblox_user: str):
     username = roblox_user.strip()
@@ -2728,6 +2680,7 @@ async def vouch(ctx: commands.Context, user: discord.Member, *, reason: str):
     entry_id = int(data.get("next_vouch_id", 1))
     data["next_vouch_id"] = entry_id + 1
     bucket["vouches"].append({"id": entry_id, "by": ctx.author.id, "reason": reason.strip(), "created_at": datetime.now(timezone.utc).isoformat()})
+    _update_bucket_trust_level(bucket)
     _save_data(data)
     await _sync_vouch_scam_roles(ctx.guild, user.id, bucket)
     await ctx.send(f"Added vouch for {user.mention}. Vouch ID: {entry_id}")
@@ -2749,6 +2702,7 @@ async def addvouch(ctx: commands.Context, user: discord.Member, voucher: discord
         "reason": reason.strip(),
         "created_at": datetime.now(timezone.utc).isoformat(),
     })
+    _update_bucket_trust_level(bucket)
     _save_data(data)
     await _sync_vouch_scam_roles(ctx.guild, user.id, bucket)
     await ctx.send(f"Added vouch for {user.mention} from {voucher.mention}. Vouch ID: {entry_id}")
@@ -2765,6 +2719,7 @@ async def sreport(ctx: commands.Context, user: discord.Member, *, reason: str):
     entry_id = int(data.get("next_scam_id", 1))
     data["next_scam_id"] = entry_id + 1
     bucket["scams"].append({"id": entry_id, "reported_by": ctx.author.id, "reason": reason.strip(), "created_at": datetime.now(timezone.utc).isoformat()})
+    _update_bucket_trust_level(bucket)
     _save_data(data)
     await _sync_vouch_scam_roles(ctx.guild, user.id, bucket)
 
@@ -2783,6 +2738,7 @@ async def sreport(ctx: commands.Context, user: discord.Member, *, reason: str):
 async def vouchlist(ctx: commands.Context, user: discord.Member):
     data = _load_data()
     bucket = _get_user_bucket(data, user.id)
+    _update_bucket_trust_level(bucket)
     vouches = bucket.get("vouches", [])
     scams = bucket.get("scams", [])
 
@@ -2805,13 +2761,14 @@ async def vouchlist(ctx: commands.Context, user: discord.Member):
     vouch_text = "\n".join(vouch_lines) if vouch_lines else "None"
     scam_text = "\n".join(scam_lines) if scam_lines else "None"
 
-    negative_role_id = _highest_negative_trust_role_id(len(scams))
-    if negative_role_id is not None:
+    saved_level = str(bucket.get("trust_level", "")).strip().lower()
+    saved_role_id = int(bucket.get("trust_role_id", 0) or 0)
+    if saved_level == "negative" and saved_role_id > 0:
         trust_level_text = (
-            f"<:Lowest:1526219034876579930> This users highest trusted role is in the negatives and is: <@&{negative_role_id}>"
+            f"<:Lowest:1526219034876579930> This users highest trusted role is in the negatives and is: <@&{saved_role_id}>"
         )
     else:
-        positive_role_id = _highest_positive_trust_role_id(len(vouches))
+        positive_role_id = saved_role_id if saved_role_id > 0 else _highest_positive_trust_role_id(len(vouches))
         trust_level_text = (
             f"<:Highest:1526219072541556746> This users highest trust level is: <@&{positive_role_id}>"
         )
@@ -2858,8 +2815,9 @@ async def vouchremove(ctx: commands.Context, vouch_id: int):
         await ctx.send(f"No vouch found with ID {vouch_id}.")
         return
 
-    _save_data(data)
     updated_bucket = _get_user_bucket(data, removed_for_user)
+    _update_bucket_trust_level(updated_bucket)
+    _save_data(data)
     await _sync_vouch_scam_roles(ctx.guild, removed_for_user, updated_bucket)
     await ctx.send(f"Removed vouch ID {vouch_id} for {_mention_for_user(ctx.guild, removed_for_user)}.")
 
@@ -2884,8 +2842,9 @@ async def sreportremove(ctx: commands.Context, scam_id: int):
         await ctx.send(f"No scam report found with ID {scam_id}.")
         return
 
-    _save_data(data)
     updated_bucket = _get_user_bucket(data, removed_for_user)
+    _update_bucket_trust_level(updated_bucket)
+    _save_data(data)
     await _sync_vouch_scam_roles(ctx.guild, removed_for_user, updated_bucket)
     await ctx.send(f"Removed scam report ID {scam_id} for {_mention_for_user(ctx.guild, removed_for_user)}.")
 
