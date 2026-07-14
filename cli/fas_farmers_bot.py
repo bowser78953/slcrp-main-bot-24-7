@@ -86,6 +86,7 @@ SEED_BALANCE_ADMIN_ROLE_ID = 1526236532980318462
 GIVEAWAY_PING_ROLE_ID = 1526304210910449765
 SEED_CLAIMWIPE_PING_ROLE_ID = 1526309075372085459
 PREDICTOR_V2_CHANNEL_ID = 1526381177127043263
+PREDICTOR_BETA_TESTER_ROLE_ID = 1526731999321264209
 WATCHED_VOICE_CHANNEL_ID = 1521774457537167383
 KICK_ALERT_CHANNEL_ID = 1521777234258432100
 VOICE_KICK_AUDIT_LOOKBACK_SECONDS = 90
@@ -853,6 +854,12 @@ def _has_seed_balance_admin_role(member: discord.Member | None) -> bool:
     if member is None:
         return False
     return any(role.id == SEED_BALANCE_ADMIN_ROLE_ID for role in member.roles)
+
+
+def _has_predictor_beta_tester_role(member: discord.Member | None) -> bool:
+    if member is None:
+        return False
+    return any(role.id == PREDICTOR_BETA_TESTER_ROLE_ID for role in member.roles)
 
 
 def _highest_seed_balances(bank_data: dict, top_n: int = 3) -> list[int]:
@@ -3119,6 +3126,10 @@ async def sellprice(ctx: commands.Context, *, fruit_name: str):
 
 @bot.command(name="predict")
 async def predict(ctx: commands.Context, *, fruit_name: str):
+    if not _has_predictor_beta_tester_role(ctx.author if isinstance(ctx.author, discord.Member) else None):
+        await ctx.send("```🔒 Command locked ```\n-# You are missing the required rank/role to use this command has it is still in bata testing!")
+        return
+
     embed, error_message = await _build_predictor_v2_response(fruit_name, ctx.guild)
     if embed is not None:
         await ctx.send(embed=embed)
