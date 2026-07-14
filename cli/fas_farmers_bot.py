@@ -113,12 +113,14 @@ MESSAGE_BONUS_TRIGGER_MESSAGES = 20
 MESSAGE_BONUS_MESSAGES = 5
 MESSAGE_BONUS_MULTIPLIER = 2
 MESSAGE_SEED_ROLE_SYNC_INTERVAL = 30
+GUESS_THE_SEED_TIMEOUT_SECONDS = 20
 PREDICTOR_V2_MIN_SIGHTINGS = 4
 PREDICTOR_V2_HISTORY_LIMIT = 12
 PREDICTOR_V2_EMBED_COLOR = 0xF6B26B
 PREDICTOR_V2_FOOTER = "Sported by Predictor V2 which could be very wrong. Do not trust this tell fully complete."
 
 last_message_seed_role_sync = 0
+guess_the_seed_active_channels: set[int] = set()
 
 RARITY_EMOJIS = {
     "common": "<:common:1525708045450084473>",
@@ -320,6 +322,7 @@ XP_COMMAND_NAMES = {
     "seedbalance",
     "seedleaderboard",
     "seedlb",
+    "guesstheseed",
     "seeddebug",
     "seedclaimwipe",
     "addseeds",
@@ -2407,6 +2410,65 @@ async def seedleaderboard(ctx: commands.Context):
     view = SeedLeaderboardPagesView(ctx.guild, pages, total_rows=len(rows))
     embed = _build_seed_leaderboard_embed(ctx.guild, pages[0], 0, len(pages), len(rows))
     await ctx.send(embed=embed, view=view)
+
+
+@bot.command(name="guesstheseed")
+async def guesstheseed(ctx: commands.Context):
+    channel_id = getattr(ctx.channel, "id", None)
+    if isinstance(channel_id, int) and channel_id in guess_the_seed_active_channels:
+        await ctx.send("A guess game is already running in this channel.")
+        return
+
+    entries = [entry for entry in SEED_CONFIG if str(entry.get("name", "")).strip()]
+    if not entries:
+        await ctx.send("I could not start the game because no seed data is loaded.")
+        return
+
+    selected = random.choice(entries)
+    seed_name = str(selected.get("name", "Unknown Seed")).strip() or "Unknown Seed"
+    seed_emoji = str(selected.get("emoji", "🌱")).strip() or "🌱"
+    answer_key = _normalize_seed_name(seed_name)
+
+    if isinstance(channel_id, int):
+        guess_the_seed_active_channels.add(channel_id)
+
+    try:
+        embed = discord.Embed(
+            description=(
+                "# Guess The Seed\n"
+                f"Guess the GAG2 seed from this emoji:\n\n{seed_emoji}\n\n"
+                f"You have `{GUESS_THE_SEED_TIMEOUT_SECONDS}` seconds. Type your guess in chat."
+            ),
+            color=discord.Color.gold(),
+            timestamp=datetime.now(timezone.utc),
+        )
+        await ctx.send(embed=embed)
+
+        loop = asyncio.get_running_loop()
+        end_at = loop.time() + GUESS_THE_SEED_TIMEOUT_SECONDS
+
+        while True:
+            remaining = end_at - loop.time()
+            if remaining <= 0:
+                await ctx.send(f"Time is up. The seed was **{seed_name}**.")
+                return
+
+            try:
+                guess_msg = await bot.wait_for(
+                    "message",
+                    timeout=remaining,
+                    check=lambda m: bool(m.channel and m.channel.id == ctx.channel.id and not m.author.bot),
+                )
+            except asyncio.TimeoutError:
+                await ctx.send(f"Time is up. The seed was **{seed_name}**.")
+                return
+
+            if _normalize_seed_name(guess_msg.content or "") == answer_key:
+                await ctx.send(f"{guess_msg.author.mention} got it right. It was **{seed_name}**.")
+                return
+    finally:
+        if isinstance(channel_id, int):
+            guess_the_seed_active_channels.discard(channel_id)
 
 
 @bot.command(name="register")
