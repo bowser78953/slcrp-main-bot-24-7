@@ -322,7 +322,6 @@ XP_COMMAND_NAMES = {
     "seedbalance",
     "seedleaderboard",
     "seedlb",
-    "guesstheseed",
     "seeddebug",
     "seedclaimwipe",
     "addseeds",
@@ -352,6 +351,7 @@ PREDICTOR_COMMAND_NAMES = {
 
 NON_SEED_COMMAND_NAMES = {
     "ping",
+    "guesstheseed",
     "greroll",
     "genterlist",
     "forceend",
@@ -2413,7 +2413,11 @@ async def seedleaderboard(ctx: commands.Context):
 
 
 @bot.command(name="guesstheseed")
-async def guesstheseed(ctx: commands.Context):
+async def guesstheseed(ctx: commands.Context, action: str | None = None):
+    if (action or "").strip().lower() != "start":
+        await ctx.send("Usage: -guesstheseed start")
+        return
+
     channel_id = getattr(ctx.channel, "id", None)
     if isinstance(channel_id, int) and channel_id in guess_the_seed_active_channels:
         await ctx.send("A guess game is already running in this channel.")
