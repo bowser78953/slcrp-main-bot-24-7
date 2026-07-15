@@ -91,6 +91,7 @@ SEED_CLAIMWIPE_PING_ROLE_ID = 1526309075372085459
 PREDICTOR_V2_CHANNEL_ID = 1526381177127043263
 PREDICTOR_BETA_TESTER_ROLE_ID = 1526731999321264209
 MOD_COMMAND_ROLE_ID = 1527032753483284570
+QUARANTINE_REMOVE_ROLE_ID = 1521774580480479343
 WATCHED_VOICE_CHANNEL_ID = 1521774457537167383
 KICK_ALERT_CHANNEL_ID = 1521777234258432100
 MOD_LOG_CHANNEL_ID = 1526953977848266872
@@ -3886,6 +3887,9 @@ async def quarantine(ctx: commands.Context, user: discord.Member, *, raw_args: s
 
     expires_unix = int(datetime.now(timezone.utc).timestamp()) + int(duration_seconds)
     try:
+        removable_role = ctx.guild.get_role(QUARANTINE_REMOVE_ROLE_ID)
+        if removable_role is not None and removable_role in user.roles:
+            await user.remove_roles(removable_role, reason=f"Removed due to quarantine by {ctx.author}")
         await user.add_roles(quarantine_role, reason=f"Quarantine by {ctx.author} | {clean_reason}")
     except Exception:
         await ctx.send("I could not assign the quarantine role. Check role hierarchy and permissions.")
@@ -4467,3 +4471,4 @@ async def sreportremove(ctx: commands.Context, scam_id: int):
 
 if __name__ == "__main__":
     bot.run(TOKEN)
+
