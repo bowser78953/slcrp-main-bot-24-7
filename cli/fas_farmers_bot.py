@@ -3207,9 +3207,20 @@ if app_commands is None and hasattr(bot, "slash_command"):
 
     @bot.slash_command(name="quarantinesetup", description="Configure quarantine role/channel lockdown", guild_ids=[TARGET_GUILD_ID])
     async def quarantine_setup_slash_fallback(ctx, quarantined_role: discord.Role, quarantined_channel: discord.TextChannel):
+        deferred = False
+        if hasattr(ctx, "defer"):
+            try:
+                await ctx.defer(ephemeral=True)
+                deferred = True
+            except Exception:
+                deferred = False
+
         guild = getattr(ctx, "guild", None)
         if guild is None:
-            await ctx.respond("This command can only be used in a server.", ephemeral=True)
+            if deferred and hasattr(ctx, "followup"):
+                await ctx.followup.send("This command can only be used in a server.", ephemeral=True)
+            else:
+                await ctx.respond("This command can only be used in a server.", ephemeral=True)
             return
 
         author = getattr(ctx, "author", None)
@@ -3217,27 +3228,40 @@ if app_commands is None and hasattr(bot, "slash_command"):
         can_manage_roles = bool(perms and getattr(perms, "manage_roles", False))
         can_manage_channels = bool(perms and getattr(perms, "manage_channels", False))
         if not can_manage_roles or not can_manage_channels:
-            await ctx.respond("You need Manage Roles and Manage Channels for this setup.", ephemeral=True)
+            if deferred and hasattr(ctx, "followup"):
+                await ctx.followup.send("You need Manage Roles and Manage Channels for this setup.", ephemeral=True)
+            else:
+                await ctx.respond("You need Manage Roles and Manage Channels for this setup.", ephemeral=True)
             return
 
-        updated_count = await _apply_quarantine_lockdown_permissions(guild, quarantined_role, quarantined_channel)
-        _set_quarantine_config(guild.id, quarantined_role.id, quarantined_channel.id)
-        _record_mod_action(
-            {
-                "action": "quarantine_setup",
-                "guild_id": guild.id,
-                "target_id": int(quarantined_role.id),
-                "moderator_id": int(getattr(author, "id", 0) or 0),
-                "reason": f"Role {quarantined_role.id} locked to channel {quarantined_channel.id}",
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            }
-        )
-        await ctx.respond(
-            f"Quarantine setup saved. Updated `{updated_count}` channels.\n"
-            f"Role: {quarantined_role.mention}\n"
-            f"Channel: {quarantined_channel.mention} (view only, no sending)",
-            ephemeral=True,
-        )
+        try:
+            updated_count = await _apply_quarantine_lockdown_permissions(guild, quarantined_role, quarantined_channel)
+            _set_quarantine_config(guild.id, quarantined_role.id, quarantined_channel.id)
+            _record_mod_action(
+                {
+                    "action": "quarantine_setup",
+                    "guild_id": guild.id,
+                    "target_id": int(quarantined_role.id),
+                    "moderator_id": int(getattr(author, "id", 0) or 0),
+                    "reason": f"Role {quarantined_role.id} locked to channel {quarantined_channel.id}",
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+            msg = (
+                f"Quarantine setup saved. Updated `{updated_count}` channels.\n"
+                f"Role: {quarantined_role.mention}\n"
+                f"Channel: {quarantined_channel.mention} (view only, no sending)"
+            )
+            if deferred and hasattr(ctx, "followup"):
+                await ctx.followup.send(msg, ephemeral=True)
+            else:
+                await ctx.respond(msg, ephemeral=True)
+        except Exception as exc:
+            err = f"Quarantine setup failed: {exc}"
+            if deferred and hasattr(ctx, "followup"):
+                await ctx.followup.send(err, ephemeral=True)
+            else:
+                await ctx.respond(err, ephemeral=True)
 
 
 @bot.command(name="greroll")
