@@ -1481,6 +1481,25 @@ def _predictor_aliases_for_seed(entry: dict) -> set[str]:
     return {_normalize_sell_query(alias) for alias in aliases if alias}
 
 
+def _predictor_key_from_stock_item(raw_name: str, raw_key: str | None = None) -> str:
+    normalized_candidates = {
+        _normalize_sell_query(raw_name),
+        _normalize_sell_query(raw_key or ""),
+        _normalize_sell_query((raw_key or "").replace("_", " ")),
+        _normalize_sell_query((raw_key or "").replace("_", "")),
+    }
+    normalized_candidates = {value for value in normalized_candidates if value}
+
+    for entry in _predictor_catalog_entries():
+        key = str(entry.get("key", ""))
+        aliases = _predictor_aliases_for_seed(entry)
+        if any(candidate in aliases for candidate in normalized_candidates):
+            return key
+
+    # Fallback to normalized display name if we cannot map to known catalog keys.
+    return _normalize_seed_name(raw_name)
+
+
 def _resolve_predictor_seed(query: str) -> list[dict]:
     normalized_query = _normalize_sell_query(query)
     if not normalized_query:
@@ -2207,22 +2226,39 @@ async def _fetch_stock_lines_and_next_restock() -> tuple[list[str], list[str], s
         if not isinstance(item, dict):
             continue
         name = str(item.get("name", "")).strip()
+        api_key = str(item.get("key", "")).strip()
         qty = int(item.get("quantity", 0) or 0)
         if not name or qty <= 0:
             continue
-        key = _normalize_seed_name(name)
-        in_stock[key] = qty
+        canonical_key = _predictor_key_from_stock_item(name, api_key)
+        in_stock[canonical_key] = qty
+
+        # Keep normalized raw variants too for defensive lookups.
+        normalized_name = _normalize_seed_name(name)
+        if normalized_name and normalized_name not in in_stock:
+            in_stock[normalized_name] = qty
+        normalized_api_key = _normalize_seed_name(api_key.replace("_", " ")) if api_key else ""
+        if normalized_api_key and normalized_api_key not in in_stock:
+            in_stock[normalized_api_key] = qty
 
     gear_in_stock: dict[str, int] = {}
     for item in raw_gear:
         if not isinstance(item, dict):
             continue
         name = str(item.get("name", "")).strip()
+        api_key = str(item.get("key", "")).strip()
         qty = int(item.get("quantity", 0) or 0)
         if not name or qty <= 0:
             continue
-        key = _normalize_seed_name(name)
-        gear_in_stock[key] = qty
+        canonical_key = _predictor_key_from_stock_item(name, api_key)
+        gear_in_stock[canonical_key] = qty
+
+        normalized_name = _normalize_seed_name(name)
+        if normalized_name and normalized_name not in gear_in_stock:
+            gear_in_stock[normalized_name] = qty
+        normalized_api_key = _normalize_seed_name(api_key.replace("_", " ")) if api_key else ""
+        if normalized_api_key and normalized_api_key not in gear_in_stock:
+            gear_in_stock[normalized_api_key] = qty
 
     predictor_stock = dict(in_stock)
     predictor_stock.update(gear_in_stock)
