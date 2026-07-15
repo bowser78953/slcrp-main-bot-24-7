@@ -1681,7 +1681,7 @@ async def _build_predictor_v2_response(query: str, guild: discord.Guild | None) 
         return None, "Usage: -predict <item_name/item_abbreviation>"
 
     try:
-        _lines, _gear_lines, _next_restock_text, next_restock_unix, _best_rarity, _role_ping_keys = await _fetch_stock_lines_and_next_restock()
+        _lines, _gear_lines, _next_restock_text, next_restock_unix, _best_rarity, _role_ping_keys, live_stock = await _fetch_stock_lines_and_next_restock()
     except Exception as exc:
         return None, f"Could not fetch prediction data right now: {exc}"
 
@@ -1700,11 +1700,11 @@ async def _build_predictor_v2_response(query: str, guild: discord.Guild | None) 
     data = _load_predictor_v2_data()
     seed_state = (data.get("seeds", {}) or {}).get(key, {})
     sightings = [int(value) for value in (seed_state.get("sightings", []) or []) if str(value).isdigit()]
-    currently_in_stock = bool(seed_state.get("currently_in_stock", False))
+    currently_in_stock = bool(seed_state.get("currently_in_stock", False)) or bool(live_stock.get(key, 0) > 0)
 
     if currently_in_stock:
         now_ts = int(datetime.now(timezone.utc).timestamp())
-        last_seen = sightings[-1] if sightings else now_ts
+        last_seen = now_ts
         interval_count = max(0, len(sightings) - 1)
         embed = discord.Embed(
             description=(
@@ -2140,7 +2140,7 @@ async def _create_giveaway_from_args(*, giveaway_key: int, channel: discord.abc.
     return None
 
 
-async def _fetch_stock_lines_and_next_restock() -> tuple[list[str], list[str], str | None, int | None, str | None, list[str]]:
+async def _fetch_stock_lines_and_next_restock() -> tuple[list[str], list[str], str | None, int | None, str | None, list[str], dict[str, int]]:
     session = await _get_http_session()
     now_unix = int(datetime.now(timezone.utc).timestamp())
     headers = {
@@ -2180,9 +2180,10 @@ async def _fetch_stock_lines_and_next_restock() -> tuple[list[str], list[str], s
         key = _normalize_seed_name(name)
         gear_in_stock[key] = qty
 
+    predictor_stock = dict(in_stock)
+    predictor_stock.update(gear_in_stock)
+
     if BOT_MODE == "farmers":
-        predictor_stock = dict(in_stock)
-        predictor_stock.update(gear_in_stock)
         _record_predictor_v2_sightings(predictor_stock, now_unix)
 
     lines: list[str] = []
@@ -2246,7 +2247,7 @@ async def _fetch_stock_lines_and_next_restock() -> tuple[list[str], list[str], s
         next_restock_text = None
         next_restock_unix = None
 
-    return lines, gear_lines, next_restock_text, next_restock_unix, best_rarity, role_ping_keys
+    return lines, gear_lines, next_restock_text, next_restock_unix, best_rarity, role_ping_keys, predictor_stock
 
 
 def _compose_seed_shop_embed(lines: list[str], gear_lines: list[str], next_restock_text: str | None, best_rarity: str | None) -> discord.Embed:
@@ -2269,7 +2270,7 @@ def _compose_seed_shop_embed(lines: list[str], gear_lines: list[str], next_resto
 
 
 async def _build_seed_shop_embed() -> discord.Embed:
-    lines, gear_lines, next_restock_text, _, best_rarity, _ = await _fetch_stock_lines_and_next_restock()
+    lines, gear_lines, next_restock_text, _, best_rarity, _, _ = await _fetch_stock_lines_and_next_restock()
     return _compose_seed_shop_embed(lines, gear_lines, next_restock_text, best_rarity)
 
 
@@ -2367,7 +2368,7 @@ async def _ensure_seed_shop_live_message_exists() -> None:
         _save_live_config(config)
         return
 
-    lines, gear_lines, next_restock_text, _next_restock_unix, best_rarity, role_mentions = await _fetch_stock_lines_and_next_restock()
+    lines, gear_lines, next_restock_text, _next_restock_unix, best_rarity, role_mentions, _ = await _fetch_stock_lines_and_next_restock()
     embed = _compose_seed_shop_embed(lines, gear_lines, next_restock_text, best_rarity)
     message = await channel.send(embed=embed, content=_build_stock_ping_content(role_mentions))
     config["message_id"] = message.id
@@ -2394,7 +2395,7 @@ async def _update_seed_shop_live_message() -> None:
         return
 
     try:
-        lines, gear_lines, next_restock_text, _next_restock_unix, best_rarity, role_mentions = await _fetch_stock_lines_and_next_restock()
+        lines, gear_lines, next_restock_text, _next_restock_unix, best_rarity, role_mentions, _ = await _fetch_stock_lines_and_next_restock()
         now_unix = int(datetime.now(timezone.utc).timestamp())
 
         stock_signature = "\n".join(lines + ["---"] + gear_lines)
