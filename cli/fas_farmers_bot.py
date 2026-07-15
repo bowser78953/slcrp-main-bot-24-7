@@ -3270,6 +3270,41 @@ if app_commands is None and hasattr(bot, "slash_command"):
             else:
                 await ctx.respond(err, ephemeral=True)
 
+@bot.command(name="help")
+async def help_command(ctx: commands.Context):
+    help_text = (
+        "Available commands:\n"
+        "-ping - Check if the bot is responsive.\n"
+        "## Prediction Commands:\n"
+        "-predict <seed name> - Predict the next time the seed will be in stock.\n"
+        "## Vouch Commands:\n"
+        "-vouch <user id/user mention> <reason> - Vouch for a user.\n"
+        "-vouchremove <user id/user mention> <id> - Remove a vouch for a user.\n"
+        "-addvouch <Person being vouched> <Person vouching> <reason> - Add a vouch for a user.\n"
+        "-sreport <user id/user mention> <reason> - Report a user.\n"
+        "-sreportremove <user id/user mention> <ID>- Remove a report for a user.\n"
+        "-vouchlist <user id/user mention> - Show vouches and reports for a user.\n"
+        "## Moderation Commands:\n"
+        "-permban <user id/user mention> <reason> - Permantly bans a user.\n"
+        "-tempban <user id/user mention> <duration> <reason> - Temporarily bans a user.\n"
+        "-timeout <user id/user mention> <duration> <reason> - Temporarily timeouts a user.\n"
+        "-untimeout <user id/user mention> - Removes a timeout from a user.\n" \"
+        "-unban <user id/user mention> - Unbans a user.\n"
+        "-baninfo <user id/user mention> - Shows ban information for a user.\n"
+        "-kick <user id/user mention> <reason> - Kicks a user.\n"
+        "-quarantine <user id/user mention> <duration> <reason> - Quarantines a user.\n"
+        "## Giveaway Commands:\n"
+        "-greroll <giveaway_id> - Reroll a giveaway.\n"
+        "-genterlist <giveaway_id> - List entries for a giveaway.\n"
+        "-forceend <giveaway_id> - Force end a giveaway.\n"
+        "## Help Commands:\n"
+        "-seedcmds - Shows a list of seed commands.\n"
+        "-help - Show a list of active commands."
+        "## Slash Commands:\n"
+        "/giveaway - Create a giveaway.\n"
+        "/quarantinesetup - Configure quarantine role/channel lockdown."
+    )
+    await ctx.send(help_text)
 
 @bot.command(name="greroll")
 async def greroll(ctx: commands.Context, giveaway_id: int):
@@ -3652,7 +3687,7 @@ async def buy(ctx: commands.Context, *, raw_args: str):
 @bot.command(name="seedclaimwipe")
 async def seedclaimwipe(ctx: commands.Context, target: str):
     if ctx.author.id not in SEED_CLAIM_WIPE_ADMINS:
-        await ctx.send("You are not allowed to use this command.")
+        await ctx.send(f"```🔒 Command locked ```\n-# This command is only able to be used by ITT, Co-Owner and Owner.")
         return
 
     bank_data = _load_seed_bank()
@@ -3660,7 +3695,7 @@ async def seedclaimwipe(ctx: commands.Context, target: str):
     if target_clean == "all":
         bank_data["claim_cooldowns"] = {}
         _save_seed_bank(bank_data)
-        await ctx.send(f"<@&{SEED_CLAIMWIPE_PING_ROLE_ID}> Wiped claim cooldowns for all users.")
+        await ctx.send(f"<:tick:1527079807261741176> Seed-claim cooldown wipe completed!.\n -# <@&{SEED_CLAIMWIPE_PING_ROLE_ID}> ")
         return
 
     target_id = None
@@ -3676,16 +3711,16 @@ async def seedclaimwipe(ctx: commands.Context, target: str):
 
     _clear_claim_cooldown(bank_data, target_id)
     _save_seed_bank(bank_data)
-    await ctx.send(f"Wiped claim cooldown for <@{target_id}>.")
+    await ctx.send(f"<:tick:1527079807261741176> Seed-claim cooldown wipe completed!.\n -# <@{target_id}>.")
 
 
 @bot.command(name="addseeds")
 async def addseeds(ctx: commands.Context, user: discord.Member, amount: int):
     if not _has_seed_balance_admin_role(ctx.author):
-        await ctx.send("You are not allowed to use this command.")
+        await ctx.send("```🔒 Command locked ```\n-# This command is only able to be used by The [FAS] Head Seed Shop Sellers")
         return
     if amount <= 0:
-        await ctx.send("Amount must be greater than 0.")
+        await ctx.send(f"```⚠️ Command Failed ```\n-# Amount must be greater than 0.")
         return
 
     bank_data = _load_seed_bank()
@@ -3700,10 +3735,10 @@ async def addseeds(ctx: commands.Context, user: discord.Member, amount: int):
 @bot.command(name="removeseeds", aliases=["remove_seeds"])
 async def remove_seeds(ctx: commands.Context, user: discord.Member, amount: int):
     if not _has_seed_balance_admin_role(ctx.author):
-        await ctx.send("You are not allowed to use this command.")
+        await ctx.send("```🔒 Command locked ```\n-# This command is only able to be used by The [FAS] Head Seed Shop Sellers")
         return
     if amount <= 0:
-        await ctx.send("Amount must be greater than 0.")
+        await ctx.send("```⚠️ Command Failed ```\n-# Amount must be greater than 0.")
         return
 
     bank_data = _load_seed_bank()
@@ -3721,20 +3756,20 @@ async def seedstock(ctx: commands.Context):
         embed = await _build_seed_shop_embed()
         await ctx.send(embed=embed)
     except Exception as exc:
-        await ctx.send(f"Could not fetch live seed stock right now: {exc}")
+        await ctx.send(f"```⚠️ Command Failed ```\n-# Could not fetch live seed stock right now: {exc}")
 
 
 @bot.command(name="seedshoplive")
 async def seedshoplive(ctx: commands.Context):
     channel = await _resolve_seed_shop_channel()
     if channel is None:
-        await ctx.send(f"I could not access <#{SEED_SHOP_CHANNEL_ID}>.")
+        await ctx.send(f"```⚠️ Command Failed ```\n-# I could not access <#{SEED_SHOP_CHANNEL_ID}>.")
         return
 
     try:
         embed = await _build_seed_shop_embed()
     except Exception as exc:
-        await ctx.send(f"Could not start live seed shop: {exc}")
+        await ctx.send(f"```⚠️ Command Failed ```\n-# Could not start live seed shop: {exc}")
         return
 
     message = await channel.send(embed=embed)
@@ -3764,20 +3799,20 @@ async def sellprice(ctx: commands.Context, *, fruit_name: str):
 
     if _normalize_sell_query(query) == "allfruits":
         if not rows:
-            await ctx.send("I could not load the live sell price list right now.")
+            await ctx.send("```⚠️ Command Failed ```\n-# I could not load the live sell price list right now.")
             return
         await ctx.send(embed=_build_sellprice_embed(rows, title="Grow A Garden 2 Sell Prices - All Fruits"))
         return
 
     matches = _resolve_sell_query(query, rows)
     if not matches:
-        await ctx.send(f"I could not find a fruit matching `{query}`.")
+        await ctx.send(f"```⚠️ Command Failed ```\n-# I could not find a fruit matching `{query}`.")
         return
 
     if len(matches) > 1:
         match_names = ", ".join(entry["name"] for entry in matches[:8])
         suffix = "" if len(matches) <= 8 else f" and {len(matches) - 8} more"
-        await ctx.send(f"That abbreviation is ambiguous. Try one of: {match_names}{suffix}.")
+        await ctx.send(f"```⚠️ Command Failed ```\n-# That abbreviation is ambiguous. Try one of: {match_names}{suffix}.")
         return
 
     selected_row = matches[0]
@@ -3789,14 +3824,14 @@ async def sellprice(ctx: commands.Context, *, fruit_name: str):
 @bot.command(name="predict")
 async def predict(ctx: commands.Context, *, fruit_name: str):
     if not _has_predictor_beta_tester_role(ctx.author if isinstance(ctx.author, discord.Member) else None):
-        await ctx.send("```🔒 Command locked ```\n-# You are missing the required rank/role to use this command has it is still in bata testing!")
+        await ctx.send("```🔒 Command locked ```\n-# You are missing the required rank/role to use this command as it is still in bata testing!")
         return
 
     embed, error_message = await _build_predictor_v2_response(fruit_name, ctx.guild)
     if embed is not None:
         await ctx.send(embed=embed)
         return
-    await ctx.send(error_message or "Could not build a prediction right now.")
+    await ctx.send(error_message or "```⚠️ Command Failed ```\n-# Could not build a prediction right now.")
 
 
 @bot.command(name="tempban")
@@ -3805,16 +3840,16 @@ async def tempban(ctx: commands.Context, user: discord.Member, *, reason: str):
         await ctx.send("This command can only be used in a server.")
         return
     if not _has_mod_command_role(ctx.author if isinstance(ctx.author, discord.Member) else None):
-        await ctx.send(f"You must have <@&{MOD_COMMAND_ROLE_ID}> to use this command.")
+        await ctx.send(f"```🔒 Command locked ```\n-# You are missing the required rank/role to use this command.")
         return
     if user.id == ctx.author.id:
-        await ctx.send("You cannot tempban yourself.")
+        await ctx.send("```⚠️ Command Failed ```\n-# You cannot tempban yourself.")
         return
     if user.id == bot.user.id:
-        await ctx.send("You cannot tempban the bot.")
+        await ctx.send("```⚠️ Command Failed ```\n-# You cannot tempban the bot.")
         return
     if not _can_moderate_target(ctx.author, user):
-        await ctx.send("You cannot moderate a member with an equal or higher role.")
+        await ctx.send("```⚠️ Command Failed ```\n-# You cannot moderate a member with an equal or higher role.")
         return
 
     clean_reason = reason.strip()
@@ -3855,16 +3890,16 @@ async def quarantine(ctx: commands.Context, user: discord.Member, *, raw_args: s
         await ctx.send("This command can only be used in a server.")
         return
     if not _has_mod_command_role(ctx.author if isinstance(ctx.author, discord.Member) else None):
-        await ctx.send(f"You must have <@&{MOD_COMMAND_ROLE_ID}> to use this command.")
+        await ctx.send(f"```🔒 Command locked ```\n-# You are missing the required rank/role to use this command.")
         return
     if user.id == ctx.author.id:
         await ctx.send("You cannot quarantine yourself.")
         return
     if user.id == bot.user.id:
-        await ctx.send("You cannot quarantine the bot.")
+        await ctx.send("```⚠️ Command Failed ```\n-# You cannot quarantine the bot.")
         return
     if not _can_moderate_target(ctx.author, user):
-        await ctx.send("You cannot moderate a member with an equal or higher role.")
+        await ctx.send("```⚠️ Command Failed ```\n-# You cannot moderate a member with an equal or higher role.")
         return
 
     parsed = _extract_reason_and_duration(raw_args)
@@ -3875,14 +3910,14 @@ async def quarantine(ctx: commands.Context, user: discord.Member, *, raw_args: s
 
     config = _get_quarantine_config(ctx.guild.id)
     if not isinstance(config, dict):
-        await ctx.send("Quarantine is not configured yet. Use `/quarantine setup <Quarantined Role> <Quarantined Channel>` first.")
+        await ctx.send("```⚠️ Command Failed ```\n-# Quarantine is not configured yet. Use `/quarantine setup <Quarantined Role> <Quarantined Channel>` first.")
         return
 
     role_id = int(config.get("role_id", 0) or 0)
     channel_id = int(config.get("channel_id", 0) or 0)
     quarantine_role = ctx.guild.get_role(role_id)
     if quarantine_role is None:
-        await ctx.send("Configured quarantine role no longer exists. Re-run `/quarantine setup`.")
+        await ctx.send("```⚠️ Command Failed ```\n-# Configured quarantine role no longer exists. Re-run `/quarantine setup`.")
         return
 
     expires_unix = int(datetime.now(timezone.utc).timestamp()) + int(duration_seconds)
@@ -3937,16 +3972,16 @@ async def permban(ctx: commands.Context, user: discord.Member, *, reason: str):
         await ctx.send("This command can only be used in a server.")
         return
     if not _has_mod_command_role(ctx.author if isinstance(ctx.author, discord.Member) else None):
-        await ctx.send(f"You must have <@&{MOD_COMMAND_ROLE_ID}> to use this command.")
+        await ctx.send(f"```🔒 Command locked ```\n-# You are missing the required rank/role to use this command.")
         return
     if user.id == ctx.author.id:
-        await ctx.send("You cannot permban yourself.")
+        await ctx.send("```⚠️ Command Failed ```\n-# You cannot permban yourself.")
         return
     if user.id == bot.user.id:
-        await ctx.send("You cannot permban the bot.")
+        await ctx.send("```⚠️ Command Failed ```\n-# You cannot permban the bot.")
         return
     if not _can_moderate_target(ctx.author, user):
-        await ctx.send("You cannot moderate a member with an equal or higher role.")
+        await ctx.send("```⚠️ Command Failed ```\n-# You cannot moderate a member with an equal or higher role.")
         return
 
     clean_reason = reason.strip()
@@ -3975,73 +4010,22 @@ async def permban(ctx: commands.Context, user: discord.Member, *, reason: str):
     await ctx.send(f"Permanently banned {user.mention}. Their messages from the last 7 days were removed.")
 
 
-@bot.command(name="ban")
-async def ban(ctx: commands.Context, user: discord.Member, *, raw_args: str):
-    if ctx.guild is None:
-        await ctx.send("This command can only be used in a server.")
-        return
-    if not _has_mod_command_role(ctx.author if isinstance(ctx.author, discord.Member) else None):
-        await ctx.send(f"You must have <@&{MOD_COMMAND_ROLE_ID}> to use this command.")
-        return
-    if user.id == ctx.author.id:
-        await ctx.send("You cannot ban yourself.")
-        return
-    if user.id == bot.user.id:
-        await ctx.send("You cannot ban the bot.")
-        return
-    if not _can_moderate_target(ctx.author, user):
-        await ctx.send("You cannot moderate a member with an equal or higher role.")
-        return
-
-    parsed = _extract_reason_and_duration(raw_args)
-    if parsed is None:
-        await ctx.send("Usage: -ban <@user> <Reason> <Time_1d>")
-        return
-    clean_reason, duration_seconds = parsed
-
-    expires_unix = int(datetime.now(timezone.utc).timestamp()) + int(duration_seconds)
-    await _ban_with_message_cleanup(ctx.guild, user, reason=f"Timed ban by {ctx.author} | {clean_reason}")
-    _register_temp_ban(ctx.guild.id, user.id, ctx.author.id, clean_reason, expires_unix, "ban")
-    _record_mod_action(
-        {
-            "action": "ban",
-            "guild_id": ctx.guild.id,
-            "target_id": user.id,
-            "moderator_id": ctx.author.id,
-            "reason": clean_reason,
-            "duration_seconds": int(duration_seconds),
-            "expires_unix": expires_unix,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }
-    )
-    await _send_mod_log(
-        ctx.guild,
-        action_name="Timed Ban",
-        moderator_id=ctx.author.id,
-        target_id=user.id,
-        reason=clean_reason,
-        duration_seconds=int(duration_seconds),
-        expires_unix=expires_unix,
-    )
-    await ctx.send(f"Banned {user.mention} for `{duration_seconds}` seconds. Their messages from the last 7 days were removed.")
-
-
 @bot.command(name="timeout")
 async def timeout(ctx: commands.Context, user: discord.Member, *, raw_args: str):
     if ctx.guild is None:
         await ctx.send("This command can only be used in a server.")
         return
     if not _has_mod_command_role(ctx.author if isinstance(ctx.author, discord.Member) else None):
-        await ctx.send(f"You must have <@&{MOD_COMMAND_ROLE_ID}> to use this command.")
+        await ctx.send(f"```🔒 Command locked ```\n-# You are missing the required rank/role to use this command.")
         return
     if user.id == ctx.author.id:
-        await ctx.send("You cannot timeout yourself.")
+        await ctx.send("```⚠️ Command Failed ```\n-# You cannot timeout yourself.")
         return
     if user.id == bot.user.id:
-        await ctx.send("You cannot timeout the bot.")
+        await ctx.send("```⚠️ Command Failed ```\n-# You cannot timeout the bot.")
         return
     if not _can_moderate_target(ctx.author, user):
-        await ctx.send("You cannot moderate a member with an equal or higher role.")
+        await ctx.send("```⚠️ Command Failed ```\n-# You cannot moderate a member with an equal or higher role.")
         return
 
     parsed = _extract_reason_and_duration(raw_args)
@@ -4086,16 +4070,16 @@ async def kick(ctx: commands.Context, user: discord.Member, *, reason: str):
         await ctx.send("This command can only be used in a server.")
         return
     if not _has_mod_command_role(ctx.author if isinstance(ctx.author, discord.Member) else None):
-        await ctx.send(f"You must have <@&{MOD_COMMAND_ROLE_ID}> to use this command.")
+        await ctx.send(f"```🔒 Command locked ```\n-# You are missing the required rank/role to use this command.")
         return
     if user.id == ctx.author.id:
-        await ctx.send("You cannot kick yourself.")
+        await ctx.send("```⚠️ Command Failed ```\n-# You cannot kick yourself.")
         return
     if user.id == bot.user.id:
-        await ctx.send("You cannot kick the bot.")
+        await ctx.send("```⚠️ Command Failed ```\n-# You cannot kick the bot.")
         return
     if not _can_moderate_target(ctx.author, user):
-        await ctx.send("You cannot moderate a member with an equal or higher role.")
+        await ctx.send("```⚠️ Command Failed ```\n-# You cannot moderate a member with an equal or higher role.")
         return
 
     clean_reason = reason.strip()
@@ -4130,7 +4114,7 @@ async def baninfo(ctx: commands.Context, *, target: str):
         await ctx.send("This command can only be used in a server.")
         return
     if not _has_mod_command_role(ctx.author if isinstance(ctx.author, discord.Member) else None):
-        await ctx.send(f"You must have <@&{MOD_COMMAND_ROLE_ID}> to use this command.")
+        await ctx.send(f"```🔒 Command locked ```\n-# You are missing the required rank/role to use this command.")
         return
 
     target_id = _parse_target_user_id(target)
@@ -4198,7 +4182,7 @@ async def unban(ctx: commands.Context, *, target: str):
         await ctx.send("This command can only be used in a server.")
         return
     if not _has_mod_command_role(ctx.author if isinstance(ctx.author, discord.Member) else None):
-        await ctx.send(f"You must have <@&{MOD_COMMAND_ROLE_ID}> to use this command.")
+        await ctx.send(f"```🔒 Command locked ```\n-# You are missing the required rank/role to use this command.")
         return
 
     target_id = _parse_target_user_id(target)
@@ -4248,13 +4232,13 @@ async def unban(ctx: commands.Context, *, target: str):
     await ctx.send(f"Unbanned <@{target_id}>.")
 
 
-@bot.command(name="untimrout", aliases=["untimeout"])
-async def untimrout(ctx: commands.Context, user: discord.Member):
+@bot.command(name="untimeout", aliases=["untimeout"])
+async def untimeout(ctx: commands.Context, user: discord.Member):
     if ctx.guild is None:
         await ctx.send("This command can only be used in a server.")
         return
     if not _has_mod_command_role(ctx.author if isinstance(ctx.author, discord.Member) else None):
-        await ctx.send(f"You must have <@&{MOD_COMMAND_ROLE_ID}> to use this command.")
+        await ctx.send(f"```🔒 Command locked ```\n-# You are missing the required rank/role to use this command.")
         return
     if not _can_moderate_target(ctx.author, user):
         await ctx.send("You cannot moderate a member with an equal or higher role.")
@@ -4292,7 +4276,7 @@ async def untimrout(ctx: commands.Context, user: discord.Member):
 @bot.command(name="vouch")
 async def vouch(ctx: commands.Context, user: discord.Member, *, reason: str):
     if not _in_allowed_channel(ctx, VOUCH_CHANNEL_ID):
-        await ctx.send(f"This command can only be used in <#{VOUCH_CHANNEL_ID}>.")
+        await ctx.send(f"```🔒 Command locked ```\n-# This command can only be used in <#{VOUCH_CHANNEL_ID}>.")
         return
 
     data = _load_data()
@@ -4309,7 +4293,7 @@ async def vouch(ctx: commands.Context, user: discord.Member, *, reason: str):
 @bot.command(name="addvouch")
 async def addvouch(ctx: commands.Context, user: discord.Member, voucher: discord.Member, *, reason: str):
     if not _in_allowed_channel(ctx, VOUCH_CHANNEL_ID):
-        await ctx.send(f"This command can only be used in <#{VOUCH_CHANNEL_ID}>.")
+        await ctx.send(f"```🔒 Command locked ```\n-# This command can only be used in <#{VOUCH_CHANNEL_ID}>.")
         return
 
     data = _load_data()
