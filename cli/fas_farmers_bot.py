@@ -400,6 +400,7 @@ NON_SEED_COMMAND_NAMES = {
     "untimrout",
     "untimeout",
     "quarantine",
+    "syncslash",
 }
 
 
@@ -3041,10 +3042,38 @@ async def ping(ctx: commands.Context):
     await ctx.send("Pong!")
 
 
+@bot.command(name="syncslash")
+async def syncslash(ctx: commands.Context):
+    if ctx.guild is None:
+        await ctx.send("This command can only be used in a server.")
+        return
+    if not ctx.author.guild_permissions.administrator:
+        await ctx.send("Only administrators can run this command.")
+        return
+
+    if app_commands is None:
+        await ctx.send("Slash command sync is not available in this runtime.")
+        return
+
+    guild_obj = discord.Object(id=TARGET_GUILD_ID)
+    try:
+        bot.tree.clear_commands(guild=guild_obj)
+        bot.tree.copy_global_to(guild=guild_obj)
+        synced_guild = await bot.tree.sync(guild=guild_obj)
+        synced_global = await bot.tree.sync()
+        await ctx.send(
+            f"Slash commands synced. Guild: `{len(synced_guild)}` | Global: `{len(synced_global)}`.\n"
+            "Try `Ctrl+R` in Discord if the command list is cached."
+        )
+    except Exception as exc:
+        await ctx.send(f"Slash sync failed: {exc}")
+
+
 if app_commands is not None:
     quarantine_group = app_commands.Group(name="quarantine", description="Quarantine setup and tools")
 
     @quarantine_group.command(name="setup", description="Configure quarantine role/channel lockdown")
+    @app_commands.guilds(discord.Object(id=TARGET_GUILD_ID))
     @app_commands.describe(
         quarantined_role="Role to use for quarantined users",
         quarantined_channel="Only channel quarantined users can see",
@@ -3083,6 +3112,7 @@ if app_commands is not None:
         )
 
     @bot.tree.command(name="quarantinesetup", description="Configure quarantine role/channel lockdown")
+    @app_commands.guilds(discord.Object(id=TARGET_GUILD_ID))
     @app_commands.describe(
         quarantined_role="Role to use for quarantined users",
         quarantined_channel="Only channel quarantined users can see",
@@ -3125,6 +3155,7 @@ if app_commands is not None:
 
 if app_commands is not None:
     @bot.tree.command(name="giveaway", description="Create a giveaway")
+    @app_commands.guilds(discord.Object(id=TARGET_GUILD_ID))
     @app_commands.describe(prize="Giveaway prize", description="Giveaway description", time="Duration like 1d_1h_1m_1s", amount_of_winners="How many winners")
     async def giveaway_slash(interaction: discord.Interaction, prize: str, description: str, time: str, amount_of_winners: int):
         await interaction.response.defer(ephemeral=True)
