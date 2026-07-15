@@ -396,6 +396,9 @@ NON_SEED_COMMAND_NAMES = {
     "timeout",
     "kick",
     "baninfo",
+    "unban",
+    "untimrout",
+    "untimeout",
 }
 
 
@@ -3774,6 +3777,103 @@ async def baninfo(ctx: commands.Context, *, target: str):
         inline=False,
     )
     await ctx.send(embed=embed)
+
+
+@bot.command(name="unban")
+async def unban(ctx: commands.Context, *, target: str):
+    if ctx.guild is None:
+        await ctx.send("This command can only be used in a server.")
+        return
+    if not ctx.author.guild_permissions.ban_members:
+        await ctx.send("You are missing permission: Ban Members.")
+        return
+
+    target_id = _parse_target_user_id(target)
+    if target_id is None:
+        await ctx.send("Usage: -unban <@user>")
+        return
+
+    try:
+        await ctx.guild.unban(discord.Object(id=target_id), reason=f"Unban by {ctx.author}")
+    except Exception:
+        await ctx.send("I could not unban that user. They may not be banned or I lack permissions.")
+        return
+
+    # Remove any scheduled temp-ban entries for this user in this guild.
+    mod_data = _load_mod_data()
+    temp_rows = mod_data.get("temp_bans", [])
+    if isinstance(temp_rows, list):
+        filtered = [
+            row for row in temp_rows
+            if not (
+                isinstance(row, dict)
+                and int(row.get("guild_id", 0) or 0) == int(ctx.guild.id)
+                and int(row.get("user_id", 0) or 0) == int(target_id)
+            )
+        ]
+        if len(filtered) != len(temp_rows):
+            mod_data["temp_bans"] = filtered
+            _save_mod_data(mod_data)
+
+    _record_mod_action(
+        {
+            "action": "unban",
+            "guild_id": ctx.guild.id,
+            "target_id": target_id,
+            "moderator_id": ctx.author.id,
+            "reason": "Manual unban",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    await _send_mod_log(
+        ctx.guild,
+        action_name="Unban",
+        moderator_id=ctx.author.id,
+        target_id=target_id,
+        reason="Manual unban",
+    )
+    await ctx.send(f"Unbanned <@{target_id}>.")
+
+
+@bot.command(name="untimrout", aliases=["untimeout"])
+async def untimrout(ctx: commands.Context, user: discord.Member):
+    if ctx.guild is None:
+        await ctx.send("This command can only be used in a server.")
+        return
+    if not ctx.author.guild_permissions.moderate_members:
+        await ctx.send("You are missing permission: Moderate Members.")
+        return
+    if not _can_moderate_target(ctx.author, user):
+        await ctx.send("You cannot moderate a member with an equal or higher role.")
+        return
+
+    try:
+        await user.timeout(None, reason=f"Timeout removed by {ctx.author}")
+    except Exception:
+        try:
+            await user.edit(timed_out_until=None, reason=f"Timeout removed by {ctx.author}")
+        except Exception:
+            await ctx.send("I could not remove timeout from that user.")
+            return
+
+    _record_mod_action(
+        {
+            "action": "untimeout",
+            "guild_id": ctx.guild.id,
+            "target_id": user.id,
+            "moderator_id": ctx.author.id,
+            "reason": "Manual timeout removal",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    await _send_mod_log(
+        ctx.guild,
+        action_name="Untimeout",
+        moderator_id=ctx.author.id,
+        target_id=user.id,
+        reason="Manual timeout removal",
+    )
+    await ctx.send(f"Removed timeout from {user.mention}.")
 
 
 @bot.command(name="vouch")
