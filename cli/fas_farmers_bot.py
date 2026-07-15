@@ -3051,22 +3051,32 @@ async def syncslash(ctx: commands.Context):
         await ctx.send("Only administrators can run this command.")
         return
 
-    if app_commands is None:
-        await ctx.send("Slash command sync is not available in this runtime.")
-        return
+    if app_commands is not None:
+        guild_obj = discord.Object(id=TARGET_GUILD_ID)
+        try:
+            bot.tree.clear_commands(guild=guild_obj)
+            bot.tree.copy_global_to(guild=guild_obj)
+            synced_guild = await bot.tree.sync(guild=guild_obj)
+            synced_global = await bot.tree.sync()
+            await ctx.send(
+                f"Slash commands synced. Guild: `{len(synced_guild)}` | Global: `{len(synced_global)}`.\n"
+                "Try Ctrl+R in Discord if the command list is cached."
+            )
+            return
+        except Exception as exc:
+            await ctx.send(f"Slash sync failed: {exc}")
+            return
 
-    guild_obj = discord.Object(id=TARGET_GUILD_ID)
-    try:
-        bot.tree.clear_commands(guild=guild_obj)
-        bot.tree.copy_global_to(guild=guild_obj)
-        synced_guild = await bot.tree.sync(guild=guild_obj)
-        synced_global = await bot.tree.sync()
-        await ctx.send(
-            f"Slash commands synced. Guild: `{len(synced_guild)}` | Global: `{len(synced_global)}`.\n"
-            "Try `Ctrl+R` in Discord if the command list is cached."
-        )
-    except Exception as exc:
-        await ctx.send(f"Slash sync failed: {exc}")
+    if hasattr(bot, "sync_commands"):
+        try:
+            await bot.sync_commands(guild_ids=[TARGET_GUILD_ID])
+            await ctx.send("Slash commands synced for this guild. Try Ctrl+R in Discord if commands are cached.")
+            return
+        except Exception as exc:
+            await ctx.send(f"Slash sync failed: {exc}")
+            return
+
+    await ctx.send("Slash command sync is not available in this runtime.")
 
 
 if app_commands is not None:
@@ -3194,6 +3204,40 @@ if app_commands is None and hasattr(bot, "slash_command"):
             await ctx.respond(error_message, ephemeral=True)
             return
         await ctx.respond("Giveaway created.", ephemeral=True)
+
+    @bot.slash_command(name="quarantinesetup", description="Configure quarantine role/channel lockdown", guild_ids=[TARGET_GUILD_ID])
+    async def quarantine_setup_slash_fallback(ctx, quarantined_role: discord.Role, quarantined_channel: discord.TextChannel):
+        guild = getattr(ctx, "guild", None)
+        if guild is None:
+            await ctx.respond("This command can only be used in a server.", ephemeral=True)
+            return
+
+        author = getattr(ctx, "author", None)
+        perms = getattr(author, "guild_permissions", None)
+        can_manage_roles = bool(perms and getattr(perms, "manage_roles", False))
+        can_manage_channels = bool(perms and getattr(perms, "manage_channels", False))
+        if not can_manage_roles or not can_manage_channels:
+            await ctx.respond("You need Manage Roles and Manage Channels for this setup.", ephemeral=True)
+            return
+
+        updated_count = await _apply_quarantine_lockdown_permissions(guild, quarantined_role, quarantined_channel)
+        _set_quarantine_config(guild.id, quarantined_role.id, quarantined_channel.id)
+        _record_mod_action(
+            {
+                "action": "quarantine_setup",
+                "guild_id": guild.id,
+                "target_id": int(quarantined_role.id),
+                "moderator_id": int(getattr(author, "id", 0) or 0),
+                "reason": f"Role {quarantined_role.id} locked to channel {quarantined_channel.id}",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        await ctx.respond(
+            f"Quarantine setup saved. Updated `{updated_count}` channels.\n"
+            f"Role: {quarantined_role.mention}\n"
+            f"Channel: {quarantined_channel.mention} (view only, no sending)",
+            ephemeral=True,
+        )
 
 
 @bot.command(name="greroll")
