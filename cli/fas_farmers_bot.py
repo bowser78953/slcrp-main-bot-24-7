@@ -1608,6 +1608,36 @@ def _predictor_v2_window_seconds(predicted_interval: int, q1: int, q3: int, samp
     return lower, upper
 
 
+def _predictor_v2_next_cycle_timestamps(
+    *,
+    last_seen: int,
+    predicted_interval: int,
+    window_low: int,
+    window_high: int,
+    now_ts: int,
+) -> tuple[int, int, int]:
+    predicted_ts = int(last_seen) + int(predicted_interval)
+    window_start_ts = int(last_seen) + int(window_low)
+    window_end_ts = int(last_seen) + int(window_high)
+
+    # If we are already past the current expected window, roll forward cycle-by-cycle.
+    safety_counter = 0
+    while window_end_ts <= int(now_ts) and safety_counter < 256:
+        predicted_ts += int(predicted_interval)
+        window_start_ts += int(predicted_interval)
+        window_end_ts += int(predicted_interval)
+        safety_counter += 1
+
+    if predicted_ts <= int(now_ts):
+        predicted_ts = int(now_ts) + 60
+    if window_start_ts <= int(now_ts):
+        window_start_ts = int(now_ts) + 60
+    if window_end_ts <= window_start_ts:
+        window_end_ts = window_start_ts + max(60, int(window_high) - int(window_low))
+
+    return predicted_ts, window_start_ts, window_end_ts
+
+
 def _predictor_v2_chance(intervals: list[int], last_seen: int, predicted_ts: int, now_ts: int, currently_in_stock: bool) -> int:
     if currently_in_stock:
         return 100
@@ -1712,9 +1742,13 @@ async def _build_predictor_v2_response(query: str, guild: discord.Guild | None) 
     window_low, window_high = _predictor_v2_window_seconds(predicted_interval, q1, q3, sample_count)
 
     now_ts = int(datetime.now(timezone.utc).timestamp())
-    predicted_ts = last_seen + predicted_interval
-    window_start_ts = last_seen + window_low
-    window_end_ts = last_seen + window_high
+    predicted_ts, window_start_ts, window_end_ts = _predictor_v2_next_cycle_timestamps(
+        last_seen=last_seen,
+        predicted_interval=predicted_interval,
+        window_low=window_low,
+        window_high=window_high,
+        now_ts=now_ts,
+    )
     chance = _predictor_v2_chance(recent_intervals, last_seen, predicted_ts, now_ts, False)
 
     embed = discord.Embed(
