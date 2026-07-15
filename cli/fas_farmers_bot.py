@@ -52,10 +52,12 @@ intents.voice_states = True
 bot = commands.Bot(command_prefix="-", intents=intents, help_command=None)
 
 DATA_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "data"))
-VOUCH_DATA_FILE = os.path.join(DATA_DIR, "fas_farmers_reports.json")
-VOUCH_DATA_BACKUP_FILE = os.path.join(DATA_DIR, "fas_farmers_reports.backup.json")
 SEED_SHOP_LIVE_FILE = os.path.join(DATA_DIR, "fas_seed_shop_live.json")
 SEED_DATA_DIR = os.path.abspath(os.getenv("SEED_DATA_DIR") or os.getenv("RENDER_DISK_PATH") or DATA_DIR)
+VOUCH_DATA_FILE = os.path.join(SEED_DATA_DIR, "fas_farmers_reports.json")
+VOUCH_DATA_BACKUP_FILE = os.path.join(SEED_DATA_DIR, "fas_farmers_reports.backup.json")
+LEGACY_VOUCH_DATA_FILE = os.path.join(DATA_DIR, "fas_farmers_reports.json")
+LEGACY_VOUCH_DATA_BACKUP_FILE = os.path.join(DATA_DIR, "fas_farmers_reports.backup.json")
 REDIS_URL = (os.getenv("REDIS_URL") or "").strip()
 REDIS_VOUCH_DATA_KEY = "fas:vouch_reports"
 REDIS_SEED_BANK_KEY = "fas:seed_bank"
@@ -427,7 +429,17 @@ RARITY_COLOR = {
 
 
 def _ensure_data_file() -> None:
-    os.makedirs(DATA_DIR, exist_ok=True)
+    os.makedirs(SEED_DATA_DIR, exist_ok=True)
+    if not os.path.exists(VOUCH_DATA_FILE) and os.path.exists(LEGACY_VOUCH_DATA_FILE):
+        try:
+            shutil.copy2(LEGACY_VOUCH_DATA_FILE, VOUCH_DATA_FILE)
+        except Exception:
+            pass
+    if not os.path.exists(VOUCH_DATA_BACKUP_FILE) and os.path.exists(LEGACY_VOUCH_DATA_BACKUP_FILE):
+        try:
+            shutil.copy2(LEGACY_VOUCH_DATA_BACKUP_FILE, VOUCH_DATA_BACKUP_FILE)
+        except Exception:
+            pass
     if not os.path.exists(VOUCH_DATA_FILE):
         with open(VOUCH_DATA_FILE, "w", encoding="utf-8") as f:
             json.dump({"next_vouch_id": 1, "next_scam_id": 1, "users": {}}, f, indent=2)
