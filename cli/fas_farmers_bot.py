@@ -399,6 +399,7 @@ NON_SEED_COMMAND_NAMES = {
     "unban",
     "untimrout",
     "untimeout",
+    "quarantine",
 }
 
 
@@ -2051,7 +2052,7 @@ def _ensure_mod_data_file() -> None:
     os.makedirs(SEED_DATA_DIR, exist_ok=True)
     if not os.path.exists(MOD_DATA_FILE):
         with open(MOD_DATA_FILE, "w", encoding="utf-8") as f:
-            json.dump({"actions": [], "temp_bans": []}, f, indent=2)
+            json.dump({"actions": [], "temp_bans": [], "quarantine_configs": {}, "quarantines": []}, f, indent=2)
 
 
 def _load_mod_data() -> dict:
@@ -2061,9 +2062,11 @@ def _load_mod_data() -> dict:
             with open(MOD_DATA_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
         except Exception:
-            data = {"actions": [], "temp_bans": []}
+            data = {"actions": [], "temp_bans": [], "quarantine_configs": {}, "quarantines": []}
     data.setdefault("actions", [])
     data.setdefault("temp_bans", [])
+    data.setdefault("quarantine_configs", {})
+    data.setdefault("quarantines", [])
     return data
 
 
@@ -2187,6 +2190,91 @@ def _register_temp_ban(guild_id: int, user_id: int, moderator_id: int, reason: s
         }
     )
     _save_mod_data(data)
+
+
+def _set_quarantine_config(guild_id: int, role_id: int, channel_id: int) -> None:
+    data = _load_mod_data()
+    configs = data.setdefault("quarantine_configs", {})
+    configs[str(guild_id)] = {
+        "role_id": int(role_id),
+        "channel_id": int(channel_id),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _save_mod_data(data)
+
+
+def _get_quarantine_config(guild_id: int) -> dict | None:
+    data = _load_mod_data()
+    configs = data.get("quarantine_configs", {})
+    if not isinstance(configs, dict):
+        return None
+    row = configs.get(str(guild_id))
+    return row if isinstance(row, dict) else None
+
+
+def _register_quarantine(guild_id: int, user_id: int, role_id: int, moderator_id: int, reason: str, expires_unix: int) -> None:
+    data = _load_mod_data()
+    quarantines = [
+        row for row in (data.setdefault("quarantines", []) or [])
+        if not (
+            isinstance(row, dict)
+            and int(row.get("guild_id", 0) or 0) == int(guild_id)
+            and int(row.get("user_id", 0) or 0) == int(user_id)
+        )
+    ]
+    quarantines.append(
+        {
+            "guild_id": int(guild_id),
+            "user_id": int(user_id),
+            "role_id": int(role_id),
+            "moderator_id": int(moderator_id),
+            "reason": reason,
+            "expires_unix": int(expires_unix),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    data["quarantines"] = quarantines
+    _save_mod_data(data)
+
+
+async def _apply_quarantine_lockdown_permissions(
+    guild: discord.Guild,
+    quarantined_role: discord.Role,
+    quarantined_channel: discord.TextChannel,
+) -> int:
+    updated = 0
+    for channel in guild.channels:
+        try:
+            overwrite = channel.overwrites_for(quarantined_role)
+            if int(channel.id) == int(quarantined_channel.id):
+                overwrite.view_channel = True
+                overwrite.read_message_history = True
+                overwrite.send_messages = False
+                overwrite.add_reactions = False
+                overwrite.send_messages_in_threads = False
+                overwrite.create_public_threads = False
+                overwrite.create_private_threads = False
+                overwrite.connect = False
+                overwrite.speak = False
+                overwrite.stream = False
+                overwrite.use_voice_activation = False
+            else:
+                overwrite.view_channel = False
+                overwrite.read_message_history = False
+                overwrite.send_messages = False
+                overwrite.add_reactions = False
+                overwrite.send_messages_in_threads = False
+                overwrite.create_public_threads = False
+                overwrite.create_private_threads = False
+                overwrite.connect = False
+                overwrite.speak = False
+                overwrite.stream = False
+                overwrite.use_voice_activation = False
+            await channel.set_permissions(quarantined_role, overwrite=overwrite, reason="Quarantine setup")
+            updated += 1
+        except Exception:
+            continue
+    return updated
 
 
 def _build_giveaway_embed(giveaway: dict) -> discord.Embed:
@@ -2701,6 +2789,59 @@ async def before_temp_ban_expiry_loop():
     await bot.wait_until_ready()
 
 
+@tasks.loop(seconds=30)
+async def quarantine_expiry_loop():
+    now_unix = int(datetime.now(timezone.utc).timestamp())
+    data = _load_mod_data()
+    rows = data.get("quarantines", [])
+    if not isinstance(rows, list) or not rows:
+        return
+
+    remaining: list[dict] = []
+    changed = False
+    for row in rows:
+        if not isinstance(row, dict):
+            changed = True
+            continue
+
+        guild_id = int(row.get("guild_id", 0) or 0)
+        user_id = int(row.get("user_id", 0) or 0)
+        role_id = int(row.get("role_id", 0) or 0)
+        expires_unix = int(row.get("expires_unix", 0) or 0)
+        if guild_id <= 0 or user_id <= 0 or role_id <= 0 or expires_unix <= 0:
+            changed = True
+            continue
+
+        if expires_unix > now_unix:
+            remaining.append(row)
+            continue
+
+        guild = bot.get_guild(guild_id)
+        if guild is not None:
+            member = guild.get_member(user_id)
+            if member is None:
+                try:
+                    member = await guild.fetch_member(user_id)
+                except Exception:
+                    member = None
+            role = guild.get_role(role_id)
+            if member is not None and role is not None and role in member.roles:
+                try:
+                    await member.remove_roles(role, reason="Quarantine expired")
+                except Exception:
+                    pass
+        changed = True
+
+    if changed:
+        data["quarantines"] = remaining
+        _save_mod_data(data)
+
+
+@quarantine_expiry_loop.before_loop
+async def before_quarantine_expiry_loop():
+    await bot.wait_until_ready()
+
+
 @bot.event
 async def on_message(message: discord.Message):
     global last_message_seed_role_sync
@@ -2874,6 +3015,8 @@ async def on_ready():
             seed_shop_live_loop.start()
     if not temp_ban_expiry_loop.is_running():
         temp_ban_expiry_loop.start()
+    if not quarantine_expiry_loop.is_running():
+        quarantine_expiry_loop.start()
 
 
 if app_commands is not None:
@@ -2896,6 +3039,50 @@ if app_commands is not None:
 @bot.command(name="ping")
 async def ping(ctx: commands.Context):
     await ctx.send("Pong!")
+
+
+if app_commands is not None:
+    quarantine_group = app_commands.Group(name="quarantine", description="Quarantine setup and tools")
+
+    @quarantine_group.command(name="setup", description="Configure quarantine role/channel lockdown")
+    @app_commands.describe(
+        quarantined_role="Role to use for quarantined users",
+        quarantined_channel="Only channel quarantined users can see",
+    )
+    async def quarantine_setup_slash(
+        interaction: discord.Interaction,
+        quarantined_role: discord.Role,
+        quarantined_channel: discord.TextChannel,
+    ):
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+            return
+        if not interaction.user.guild_permissions.manage_roles or not interaction.user.guild_permissions.manage_channels:
+            await interaction.response.send_message("You need Manage Roles and Manage Channels for this setup.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        updated_count = await _apply_quarantine_lockdown_permissions(guild, quarantined_role, quarantined_channel)
+        _set_quarantine_config(guild.id, quarantined_role.id, quarantined_channel.id)
+        _record_mod_action(
+            {
+                "action": "quarantine_setup",
+                "guild_id": guild.id,
+                "target_id": int(quarantined_role.id),
+                "moderator_id": interaction.user.id,
+                "reason": f"Role {quarantined_role.id} locked to channel {quarantined_channel.id}",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        await interaction.followup.send(
+            f"Quarantine setup saved. Updated `{updated_count}` channels.\n"
+            f"Role: {quarantined_role.mention}\n"
+            f"Channel: {quarantined_channel.mention} (view only, no sending)",
+            ephemeral=True,
+        )
+
+    bot.tree.add_command(quarantine_group)
 
 
 if app_commands is not None:
@@ -3516,6 +3703,85 @@ async def tempban(ctx: commands.Context, user: discord.Member, *, reason: str):
         expires_unix=expires_unix,
     )
     await ctx.send(f"Temporarily banned {user.mention} for `1d`. Their messages from the last 7 days were removed.")
+
+
+@bot.command(name="quarantine")
+async def quarantine(ctx: commands.Context, user: discord.Member, *, raw_args: str):
+    if ctx.guild is None:
+        await ctx.send("This command can only be used in a server.")
+        return
+    if not ctx.author.guild_permissions.manage_roles:
+        await ctx.send("You are missing permission: Manage Roles.")
+        return
+    if user.id == ctx.author.id:
+        await ctx.send("You cannot quarantine yourself.")
+        return
+    if user.id == bot.user.id:
+        await ctx.send("You cannot quarantine the bot.")
+        return
+    if not _can_moderate_target(ctx.author, user):
+        await ctx.send("You cannot moderate a member with an equal or higher role.")
+        return
+
+    parsed = _extract_reason_and_duration(raw_args)
+    if parsed is None:
+        await ctx.send("Usage: -quarantine <@user> <Reason> <time>")
+        return
+    clean_reason, duration_seconds = parsed
+
+    config = _get_quarantine_config(ctx.guild.id)
+    if not isinstance(config, dict):
+        await ctx.send("Quarantine is not configured yet. Use `/quarantine setup <Quarantined Role> <Quarantined Channel>` first.")
+        return
+
+    role_id = int(config.get("role_id", 0) or 0)
+    channel_id = int(config.get("channel_id", 0) or 0)
+    quarantine_role = ctx.guild.get_role(role_id)
+    if quarantine_role is None:
+        await ctx.send("Configured quarantine role no longer exists. Re-run `/quarantine setup`.")
+        return
+
+    expires_unix = int(datetime.now(timezone.utc).timestamp()) + int(duration_seconds)
+    try:
+        await user.add_roles(quarantine_role, reason=f"Quarantine by {ctx.author} | {clean_reason}")
+    except Exception:
+        await ctx.send("I could not assign the quarantine role. Check role hierarchy and permissions.")
+        return
+
+    _register_quarantine(
+        guild_id=ctx.guild.id,
+        user_id=user.id,
+        role_id=quarantine_role.id,
+        moderator_id=ctx.author.id,
+        reason=clean_reason,
+        expires_unix=expires_unix,
+    )
+    _record_mod_action(
+        {
+            "action": "quarantine",
+            "guild_id": ctx.guild.id,
+            "target_id": user.id,
+            "moderator_id": ctx.author.id,
+            "reason": clean_reason,
+            "duration_seconds": int(duration_seconds),
+            "expires_unix": expires_unix,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    await _send_mod_log(
+        ctx.guild,
+        action_name="Quarantine",
+        moderator_id=ctx.author.id,
+        target_id=user.id,
+        reason=clean_reason,
+        duration_seconds=int(duration_seconds),
+        expires_unix=expires_unix,
+    )
+    quarantine_channel_text = f"<#{channel_id}>" if channel_id > 0 else "configured quarantine channel"
+    await ctx.send(
+        f"Quarantined {user.mention} until <t:{expires_unix}:R>.\n"
+        f"They can only view {quarantine_channel_text} and cannot send messages."
+    )
 
 
 @bot.command(name="permban")
