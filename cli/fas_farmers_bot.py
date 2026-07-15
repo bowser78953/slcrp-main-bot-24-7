@@ -3082,6 +3082,44 @@ if app_commands is not None:
             ephemeral=True,
         )
 
+    @bot.tree.command(name="quarantinesetup", description="Configure quarantine role/channel lockdown")
+    @app_commands.describe(
+        quarantined_role="Role to use for quarantined users",
+        quarantined_channel="Only channel quarantined users can see",
+    )
+    async def quarantine_setup_alias_slash(
+        interaction: discord.Interaction,
+        quarantined_role: discord.Role,
+        quarantined_channel: discord.TextChannel,
+    ):
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+            return
+        if not interaction.user.guild_permissions.manage_roles or not interaction.user.guild_permissions.manage_channels:
+            await interaction.response.send_message("You need Manage Roles and Manage Channels for this setup.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        updated_count = await _apply_quarantine_lockdown_permissions(guild, quarantined_role, quarantined_channel)
+        _set_quarantine_config(guild.id, quarantined_role.id, quarantined_channel.id)
+        _record_mod_action(
+            {
+                "action": "quarantine_setup",
+                "guild_id": guild.id,
+                "target_id": int(quarantined_role.id),
+                "moderator_id": interaction.user.id,
+                "reason": f"Role {quarantined_role.id} locked to channel {quarantined_channel.id}",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        await interaction.followup.send(
+            f"Quarantine setup saved. Updated `{updated_count}` channels.\n"
+            f"Role: {quarantined_role.mention}\n"
+            f"Channel: {quarantined_channel.mention} (view only, no sending)",
+            ephemeral=True,
+        )
+
     bot.tree.add_command(quarantine_group)
 
 
