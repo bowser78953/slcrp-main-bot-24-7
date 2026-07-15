@@ -141,7 +141,7 @@ MESSAGE_SEED_ROLE_SYNC_INTERVAL = 30
 SPAM_WINDOW_SECONDS = 8
 SPAM_MESSAGE_THRESHOLD = 6
 SPAM_TRACKER_LIMIT = 12
-PREDICTOR_V2_MIN_SIGHTINGS = 4
+PREDICTOR_V2_MIN_SIGHTINGS = 2
 PREDICTOR_V2_HISTORY_LIMIT = 12
 PREDICTOR_V2_EMBED_COLOR = 0xF6B26B
 PREDICTOR_V2_FOOTER = "Sported by Predictor V2 which could be very wrong. Do not trust this tell fully complete."
@@ -1651,7 +1651,7 @@ async def _build_predictor_v2_response(query: str, guild: discord.Guild | None) 
         return None, "Usage: -predict <item_name/item_abbreviation>"
 
     try:
-        await _fetch_stock_lines_and_next_restock()
+        _lines, _gear_lines, _next_restock_text, next_restock_unix, _best_rarity, _role_ping_keys = await _fetch_stock_lines_and_next_restock()
     except Exception as exc:
         return None, f"Could not fetch prediction data right now: {exc}"
 
@@ -1687,10 +1687,15 @@ async def _build_predictor_v2_response(query: str, guild: discord.Guild | None) 
         return _apply_predictor_v2_embed_style(embed, guild), None
 
     if len(sightings) < PREDICTOR_V2_MIN_SIGHTINGS:
+        now_ts = int(datetime.now(timezone.utc).timestamp())
+        fallback_predicted_ts = int(next_restock_unix) if next_restock_unix and int(next_restock_unix) > now_ts else (now_ts + 300)
+        chance_hint = _get_seed_prediction_chance(name, key)
+        chance_display = chance_hint if chance_hint != "Unknown" else "~35%"
         embed = discord.Embed(
             description=(
-                f"# ⏰I don't have enough data on {name}\n"
-                "> We have not collected enough data to give you the prediction for this item please wait 5-20 minutes so I can get more data!"
+                f"# 🔮 We Predict {name} Will be in-stock in <t:{fallback_predicted_ts}:R>\n"
+                f"> Mode: `Fallback prediction` while data is still learning.\n"
+                f"> Estimated chance right now: `{chance_display}` (limited history)."
             ),
             timestamp=datetime.now(timezone.utc),
         )
