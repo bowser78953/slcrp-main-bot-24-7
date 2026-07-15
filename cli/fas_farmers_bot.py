@@ -90,6 +90,7 @@ GIVEAWAY_PING_ROLE_ID = 1526304210910449765
 SEED_CLAIMWIPE_PING_ROLE_ID = 1526309075372085459
 PREDICTOR_V2_CHANNEL_ID = 1526381177127043263
 PREDICTOR_BETA_TESTER_ROLE_ID = 1526731999321264209
+MOD_COMMAND_ROLE_ID = 1527032753483284570
 WATCHED_VOICE_CHANNEL_ID = 1521774457537167383
 KICK_ALERT_CHANNEL_ID = 1521777234258432100
 MOD_LOG_CHANNEL_ID = 1526953977848266872
@@ -887,6 +888,12 @@ def _has_predictor_beta_tester_role(member: discord.Member | None) -> bool:
     if member is None:
         return False
     return any(role.id == PREDICTOR_BETA_TESTER_ROLE_ID for role in member.roles)
+
+
+def _has_mod_command_role(member: discord.Member | None) -> bool:
+    if member is None:
+        return False
+    return any(role.id == MOD_COMMAND_ROLE_ID for role in member.roles)
 
 
 def _highest_seed_balances(bank_data: dict, top_n: int = 3) -> list[int]:
@@ -3047,8 +3054,8 @@ async def syncslash(ctx: commands.Context):
     if ctx.guild is None:
         await ctx.send("This command can only be used in a server.")
         return
-    if not ctx.author.guild_permissions.administrator:
-        await ctx.send("Only administrators can run this command.")
+    if not _has_mod_command_role(ctx.author if isinstance(ctx.author, discord.Member) else None):
+        await ctx.send(f"You must have <@&{MOD_COMMAND_ROLE_ID}> to use this command.")
         return
 
     if app_commands is not None:
@@ -3097,8 +3104,9 @@ if app_commands is not None:
         if guild is None:
             await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
             return
-        if not interaction.user.guild_permissions.manage_roles or not interaction.user.guild_permissions.manage_channels:
-            await interaction.response.send_message("You need Manage Roles and Manage Channels for this setup.", ephemeral=True)
+        requester = interaction.user if isinstance(interaction.user, discord.Member) else guild.get_member(interaction.user.id)
+        if not _has_mod_command_role(requester):
+            await interaction.response.send_message(f"You must have <@&{MOD_COMMAND_ROLE_ID}> to use this command.", ephemeral=True)
             return
 
         await interaction.response.defer(ephemeral=True)
@@ -3136,8 +3144,9 @@ if app_commands is not None:
         if guild is None:
             await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
             return
-        if not interaction.user.guild_permissions.manage_roles or not interaction.user.guild_permissions.manage_channels:
-            await interaction.response.send_message("You need Manage Roles and Manage Channels for this setup.", ephemeral=True)
+        requester = interaction.user if isinstance(interaction.user, discord.Member) else guild.get_member(interaction.user.id)
+        if not _has_mod_command_role(requester):
+            await interaction.response.send_message(f"You must have <@&{MOD_COMMAND_ROLE_ID}> to use this command.", ephemeral=True)
             return
 
         await interaction.response.defer(ephemeral=True)
@@ -3224,14 +3233,11 @@ if app_commands is None and hasattr(bot, "slash_command"):
             return
 
         author = getattr(ctx, "author", None)
-        perms = getattr(author, "guild_permissions", None)
-        can_manage_roles = bool(perms and getattr(perms, "manage_roles", False))
-        can_manage_channels = bool(perms and getattr(perms, "manage_channels", False))
-        if not can_manage_roles or not can_manage_channels:
+        if not _has_mod_command_role(author if isinstance(author, discord.Member) else None):
             if deferred and hasattr(ctx, "followup"):
-                await ctx.followup.send("You need Manage Roles and Manage Channels for this setup.", ephemeral=True)
+                await ctx.followup.send(f"You must have <@&{MOD_COMMAND_ROLE_ID}> to use this command.", ephemeral=True)
             else:
-                await ctx.respond("You need Manage Roles and Manage Channels for this setup.", ephemeral=True)
+                await ctx.respond(f"You must have <@&{MOD_COMMAND_ROLE_ID}> to use this command.", ephemeral=True)
             return
 
         try:
@@ -3797,8 +3803,8 @@ async def tempban(ctx: commands.Context, user: discord.Member, *, reason: str):
     if ctx.guild is None:
         await ctx.send("This command can only be used in a server.")
         return
-    if not ctx.author.guild_permissions.ban_members:
-        await ctx.send("You are missing permission: Ban Members.")
+    if not _has_mod_command_role(ctx.author if isinstance(ctx.author, discord.Member) else None):
+        await ctx.send(f"You must have <@&{MOD_COMMAND_ROLE_ID}> to use this command.")
         return
     if user.id == ctx.author.id:
         await ctx.send("You cannot tempban yourself.")
@@ -3847,8 +3853,8 @@ async def quarantine(ctx: commands.Context, user: discord.Member, *, raw_args: s
     if ctx.guild is None:
         await ctx.send("This command can only be used in a server.")
         return
-    if not ctx.author.guild_permissions.manage_roles:
-        await ctx.send("You are missing permission: Manage Roles.")
+    if not _has_mod_command_role(ctx.author if isinstance(ctx.author, discord.Member) else None):
+        await ctx.send(f"You must have <@&{MOD_COMMAND_ROLE_ID}> to use this command.")
         return
     if user.id == ctx.author.id:
         await ctx.send("You cannot quarantine yourself.")
@@ -3926,8 +3932,8 @@ async def permban(ctx: commands.Context, user: discord.Member, *, reason: str):
     if ctx.guild is None:
         await ctx.send("This command can only be used in a server.")
         return
-    if not ctx.author.guild_permissions.ban_members:
-        await ctx.send("You are missing permission: Ban Members.")
+    if not _has_mod_command_role(ctx.author if isinstance(ctx.author, discord.Member) else None):
+        await ctx.send(f"You must have <@&{MOD_COMMAND_ROLE_ID}> to use this command.")
         return
     if user.id == ctx.author.id:
         await ctx.send("You cannot permban yourself.")
@@ -3970,8 +3976,8 @@ async def ban(ctx: commands.Context, user: discord.Member, *, raw_args: str):
     if ctx.guild is None:
         await ctx.send("This command can only be used in a server.")
         return
-    if not ctx.author.guild_permissions.ban_members:
-        await ctx.send("You are missing permission: Ban Members.")
+    if not _has_mod_command_role(ctx.author if isinstance(ctx.author, discord.Member) else None):
+        await ctx.send(f"You must have <@&{MOD_COMMAND_ROLE_ID}> to use this command.")
         return
     if user.id == ctx.author.id:
         await ctx.send("You cannot ban yourself.")
@@ -4021,8 +4027,8 @@ async def timeout(ctx: commands.Context, user: discord.Member, *, raw_args: str)
     if ctx.guild is None:
         await ctx.send("This command can only be used in a server.")
         return
-    if not ctx.author.guild_permissions.moderate_members:
-        await ctx.send("You are missing permission: Moderate Members.")
+    if not _has_mod_command_role(ctx.author if isinstance(ctx.author, discord.Member) else None):
+        await ctx.send(f"You must have <@&{MOD_COMMAND_ROLE_ID}> to use this command.")
         return
     if user.id == ctx.author.id:
         await ctx.send("You cannot timeout yourself.")
@@ -4075,8 +4081,8 @@ async def kick(ctx: commands.Context, user: discord.Member, *, reason: str):
     if ctx.guild is None:
         await ctx.send("This command can only be used in a server.")
         return
-    if not ctx.author.guild_permissions.kick_members:
-        await ctx.send("You are missing permission: Kick Members.")
+    if not _has_mod_command_role(ctx.author if isinstance(ctx.author, discord.Member) else None):
+        await ctx.send(f"You must have <@&{MOD_COMMAND_ROLE_ID}> to use this command.")
         return
     if user.id == ctx.author.id:
         await ctx.send("You cannot kick yourself.")
@@ -4119,8 +4125,8 @@ async def baninfo(ctx: commands.Context, *, target: str):
     if ctx.guild is None:
         await ctx.send("This command can only be used in a server.")
         return
-    if not ctx.author.guild_permissions.ban_members:
-        await ctx.send("You are missing permission: Ban Members.")
+    if not _has_mod_command_role(ctx.author if isinstance(ctx.author, discord.Member) else None):
+        await ctx.send(f"You must have <@&{MOD_COMMAND_ROLE_ID}> to use this command.")
         return
 
     target_id = _parse_target_user_id(target)
@@ -4187,8 +4193,8 @@ async def unban(ctx: commands.Context, *, target: str):
     if ctx.guild is None:
         await ctx.send("This command can only be used in a server.")
         return
-    if not ctx.author.guild_permissions.ban_members:
-        await ctx.send("You are missing permission: Ban Members.")
+    if not _has_mod_command_role(ctx.author if isinstance(ctx.author, discord.Member) else None):
+        await ctx.send(f"You must have <@&{MOD_COMMAND_ROLE_ID}> to use this command.")
         return
 
     target_id = _parse_target_user_id(target)
@@ -4243,8 +4249,8 @@ async def untimrout(ctx: commands.Context, user: discord.Member):
     if ctx.guild is None:
         await ctx.send("This command can only be used in a server.")
         return
-    if not ctx.author.guild_permissions.moderate_members:
-        await ctx.send("You are missing permission: Moderate Members.")
+    if not _has_mod_command_role(ctx.author if isinstance(ctx.author, discord.Member) else None):
+        await ctx.send(f"You must have <@&{MOD_COMMAND_ROLE_ID}> to use this command.")
         return
     if not _can_moderate_target(ctx.author, user):
         await ctx.send("You cannot moderate a member with an equal or higher role.")
