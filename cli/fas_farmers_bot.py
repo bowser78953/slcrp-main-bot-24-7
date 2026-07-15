@@ -142,7 +142,7 @@ SPAM_WINDOW_SECONDS = 8
 SPAM_MESSAGE_THRESHOLD = 6
 SPAM_TRACKER_LIMIT = 12
 PREDICTOR_V2_MIN_SIGHTINGS = 2
-PREDICTOR_V2_HISTORY_LIMIT = 12
+PREDICTOR_V2_HISTORY_LIMIT = 36
 PREDICTOR_V2_EMBED_COLOR = 0xF6B26B
 PREDICTOR_V2_FOOTER = "Sported by Predictor V2 which could be very wrong. Do not trust this tell fully complete."
 
@@ -1573,6 +1573,10 @@ def _predictor_v2_interval_profile(intervals: list[int]) -> tuple[int, int, int,
     if not cleaned:
         return 1, 1, 1, 1, 1.0
 
+    # Align noisy measurements to the observed shop refresh cadence grid.
+    refresh = max(60, int(SHOP_REFRESH_SECONDS))
+    cleaned = [max(60, int(round(float(value) / float(refresh))) * refresh) for value in cleaned]
+
     sorted_values = sorted(cleaned)
     n = len(sorted_values)
     median = int(sorted_values[n // 2])
@@ -1634,6 +1638,39 @@ def _predictor_v2_next_cycle_timestamps(
         window_start_ts = int(now_ts) + 60
     if window_end_ts <= window_start_ts:
         window_end_ts = window_start_ts + max(60, int(window_high) - int(window_low))
+
+    return predicted_ts, window_start_ts, window_end_ts
+
+
+def _predictor_v2_align_to_restock_grid(
+    *,
+    predicted_ts: int,
+    window_start_ts: int,
+    window_end_ts: int,
+    next_restock_unix: int | None,
+    now_ts: int,
+) -> tuple[int, int, int]:
+    if not next_restock_unix:
+        return predicted_ts, window_start_ts, window_end_ts
+
+    base = int(next_restock_unix)
+    refresh = max(60, int(SHOP_REFRESH_SECONDS))
+
+    def _align_up(ts: int) -> int:
+        ts = int(ts)
+        if ts <= base:
+            return base
+        offset = ts - base
+        return base + int(math.ceil(float(offset) / float(refresh))) * refresh
+
+    predicted_ts = _align_up(max(predicted_ts, now_ts + 60))
+    window_start_ts = _align_up(max(window_start_ts, now_ts + 60))
+    window_end_ts = _align_up(max(window_end_ts, window_start_ts + refresh))
+
+    if predicted_ts < window_start_ts:
+        predicted_ts = window_start_ts
+    if predicted_ts > window_end_ts:
+        predicted_ts = window_start_ts
 
     return predicted_ts, window_start_ts, window_end_ts
 
@@ -1736,7 +1773,7 @@ async def _build_predictor_v2_response(query: str, guild: discord.Guild | None) 
         max(1, recent_sightings[idx] - recent_sightings[idx - 1])
         for idx in range(1, len(recent_sightings))
     ]
-    recent_intervals = intervals[-8:] if len(intervals) > 8 else intervals
+    recent_intervals = intervals[-24:] if len(intervals) > 24 else intervals
     last_seen = recent_sightings[-1]
     predicted_interval, q1, q3, sample_count, _variability = _predictor_v2_interval_profile(recent_intervals)
     window_low, window_high = _predictor_v2_window_seconds(predicted_interval, q1, q3, sample_count)
@@ -1747,6 +1784,13 @@ async def _build_predictor_v2_response(query: str, guild: discord.Guild | None) 
         predicted_interval=predicted_interval,
         window_low=window_low,
         window_high=window_high,
+        now_ts=now_ts,
+    )
+    predicted_ts, window_start_ts, window_end_ts = _predictor_v2_align_to_restock_grid(
+        predicted_ts=predicted_ts,
+        window_start_ts=window_start_ts,
+        window_end_ts=window_end_ts,
+        next_restock_unix=next_restock_unix,
         now_ts=now_ts,
     )
     chance = _predictor_v2_chance(recent_intervals, last_seen, predicted_ts, now_ts, False)
