@@ -8,7 +8,7 @@ import random
 import shutil
 import uuid
 import aiohttp
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from threading import Lock
 import discord
 from discord.ext import commands, tasks
@@ -65,6 +65,7 @@ REDIS_SEED_STORE_KEY = "fas:seed_store"
 REDIS_PREDICTOR_V2_KEY = "fas:predictor_v2"
 PREDICTOR_V2_FILE = os.path.join(SEED_DATA_DIR, "fas_predictor_v2.json")
 PREDICTOR_V2_BACKUP_FILE = os.path.join(SEED_DATA_DIR, "fas_predictor_v2.backup.json")
+MOD_DATA_FILE = os.path.join(SEED_DATA_DIR, "fas_mod_actions.json")
 SEED_BANK_FILE = os.path.join(SEED_DATA_DIR, "fas_seed_bank.json")
 SEED_STORE_FILE = os.path.join(SEED_DATA_DIR, "fas_seed_store.json")
 LEGACY_SEED_BANK_FILE = os.path.join(DATA_DIR, "fas_seed_bank.json")
@@ -91,6 +92,7 @@ PREDICTOR_V2_CHANNEL_ID = 1526381177127043263
 PREDICTOR_BETA_TESTER_ROLE_ID = 1526731999321264209
 WATCHED_VOICE_CHANNEL_ID = 1521774457537167383
 KICK_ALERT_CHANNEL_ID = 1521777234258432100
+MOD_LOG_CHANNEL_ID = 1526953977848266872
 VOICE_KICK_AUDIT_LOOKBACK_SECONDS = 90
 VOICE_KICK_AUDIT_RETRIES = 4
 VOICE_KICK_AUDIT_RETRY_DELAY_SECONDS = 1.0
@@ -145,6 +147,8 @@ PREDICTOR_V2_MIN_SIGHTINGS = 2
 PREDICTOR_V2_HISTORY_LIMIT = 36
 PREDICTOR_V2_EMBED_COLOR = 0xF6B26B
 PREDICTOR_V2_FOOTER = "Sported by Predictor V2 which could be very wrong. Do not trust this tell fully complete."
+DEFAULT_TEMPBAN_SECONDS = 86400
+BAN_DELETE_MESSAGE_SECONDS = 604800
 
 last_message_seed_role_sync = 0
 
@@ -386,6 +390,12 @@ NON_SEED_COMMAND_NAMES = {
     "vouchlist",
     "vouchremove",
     "sreportremove",
+    "tempban",
+    "permban",
+    "ban",
+    "timeout",
+    "kick",
+    "baninfo",
 }
 
 
@@ -2034,6 +2044,148 @@ def _parse_duration_to_seconds(duration_text: str) -> int:
     return total
 
 
+def _ensure_mod_data_file() -> None:
+    os.makedirs(SEED_DATA_DIR, exist_ok=True)
+    if not os.path.exists(MOD_DATA_FILE):
+        with open(MOD_DATA_FILE, "w", encoding="utf-8") as f:
+            json.dump({"actions": [], "temp_bans": []}, f, indent=2)
+
+
+def _load_mod_data() -> dict:
+    _ensure_mod_data_file()
+    with DATA_LOCK:
+        try:
+            with open(MOD_DATA_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            data = {"actions": [], "temp_bans": []}
+    data.setdefault("actions", [])
+    data.setdefault("temp_bans", [])
+    return data
+
+
+def _save_mod_data(data: dict) -> None:
+    _ensure_mod_data_file()
+    data["updated_at"] = int(datetime.now(timezone.utc).timestamp())
+    with DATA_LOCK:
+        tmp = MOD_DATA_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp, MOD_DATA_FILE)
+
+
+def _record_mod_action(action: dict) -> None:
+    data = _load_mod_data()
+    actions = data.setdefault("actions", [])
+    actions.append(action)
+    if len(actions) > 2000:
+        del actions[:-2000]
+    _save_mod_data(data)
+
+
+def _parse_target_user_id(raw: str) -> int | None:
+    token = str(raw or "").strip()
+    match = re.fullmatch(r"<@!?(\d+)>", token)
+    if match:
+        return int(match.group(1))
+    if token.isdigit():
+        return int(token)
+    return None
+
+
+def _extract_reason_and_duration(raw: str) -> tuple[str, int] | None:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    tokens = text.split()
+    if len(tokens) < 2:
+        return None
+
+    duration_token = tokens[-1].strip().lower()
+    if duration_token.startswith("time_"):
+        duration_token = duration_token[5:]
+
+    try:
+        seconds = _parse_duration_to_seconds(duration_token)
+    except ValueError:
+        return None
+
+    reason = " ".join(tokens[:-1]).strip()
+    if not reason:
+        return None
+    return reason, seconds
+
+
+def _can_moderate_target(actor: discord.Member, target: discord.Member) -> bool:
+    if actor.guild_permissions.administrator:
+        return True
+    if actor.guild.owner_id == actor.id:
+        return True
+    return actor.top_role > target.top_role
+
+
+async def _send_mod_log(
+    guild: discord.Guild | None,
+    *,
+    action_name: str,
+    moderator_id: int,
+    target_id: int,
+    reason: str,
+    duration_seconds: int | None = None,
+    expires_unix: int | None = None,
+) -> None:
+    if guild is None:
+        return
+
+    channel = guild.get_channel(MOD_LOG_CHANNEL_ID)
+    if channel is None:
+        try:
+            channel = await guild.fetch_channel(MOD_LOG_CHANNEL_ID)
+        except Exception:
+            return
+    if not isinstance(channel, discord.TextChannel):
+        return
+
+    embed = discord.Embed(
+        title=f"Moderation: {action_name}",
+        color=discord.Color.red(),
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.add_field(name="Moderator", value=f"<@{moderator_id}>", inline=True)
+    embed.add_field(name="Target", value=f"<@{target_id}>", inline=True)
+    embed.add_field(name="Reason", value=reason[:1024], inline=False)
+    if duration_seconds is not None:
+        embed.add_field(name="Duration", value=f"{duration_seconds}s", inline=True)
+    if expires_unix is not None:
+        embed.add_field(name="Expires", value=f"<t:{int(expires_unix)}:R>", inline=True)
+    await channel.send(embed=embed)
+
+
+async def _ban_with_message_cleanup(guild: discord.Guild, user_obj: discord.abc.Snowflake, *, reason: str) -> None:
+    try:
+        await guild.ban(user_obj, reason=reason, delete_message_seconds=BAN_DELETE_MESSAGE_SECONDS)
+    except TypeError:
+        # Older API fallback.
+        await guild.ban(user_obj, reason=reason, delete_message_days=7)
+
+
+def _register_temp_ban(guild_id: int, user_id: int, moderator_id: int, reason: str, expires_unix: int, kind: str) -> None:
+    data = _load_mod_data()
+    temp_bans = data.setdefault("temp_bans", [])
+    temp_bans.append(
+        {
+            "guild_id": int(guild_id),
+            "user_id": int(user_id),
+            "moderator_id": int(moderator_id),
+            "reason": reason,
+            "kind": kind,
+            "expires_unix": int(expires_unix),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    _save_mod_data(data)
+
+
 def _build_giveaway_embed(giveaway: dict) -> discord.Embed:
     entries_count = len(giveaway["entries"])
     ended = bool(giveaway.get("ended"))
@@ -2504,6 +2656,48 @@ async def before_seed_shop_live_loop():
     await bot.wait_until_ready()
 
 
+@tasks.loop(seconds=30)
+async def temp_ban_expiry_loop():
+    now_unix = int(datetime.now(timezone.utc).timestamp())
+    data = _load_mod_data()
+    temp_bans = data.get("temp_bans", [])
+    if not isinstance(temp_bans, list) or not temp_bans:
+        return
+
+    remaining: list[dict] = []
+    changed = False
+    for row in temp_bans:
+        if not isinstance(row, dict):
+            continue
+        guild_id = int(row.get("guild_id", 0) or 0)
+        user_id = int(row.get("user_id", 0) or 0)
+        expires_unix = int(row.get("expires_unix", 0) or 0)
+        if guild_id <= 0 or user_id <= 0 or expires_unix <= 0:
+            changed = True
+            continue
+
+        if expires_unix > now_unix:
+            remaining.append(row)
+            continue
+
+        guild = bot.get_guild(guild_id)
+        if guild is not None:
+            try:
+                await guild.unban(discord.Object(id=user_id), reason="Temporary ban expired")
+            except Exception:
+                pass
+        changed = True
+
+    if changed:
+        data["temp_bans"] = remaining
+        _save_mod_data(data)
+
+
+@temp_ban_expiry_loop.before_loop
+async def before_temp_ban_expiry_loop():
+    await bot.wait_until_ready()
+
+
 @bot.event
 async def on_message(message: discord.Message):
     global last_message_seed_role_sync
@@ -2675,6 +2869,8 @@ async def on_ready():
             print(f"Failed to initialize live seed shop message: {exc}")
         if not seed_shop_live_loop.is_running():
             seed_shop_live_loop.start()
+    if not temp_ban_expiry_loop.is_running():
+        temp_ban_expiry_loop.start()
 
 
 if app_commands is not None:
@@ -3267,6 +3463,317 @@ async def predict(ctx: commands.Context, *, fruit_name: str):
         await ctx.send(embed=embed)
         return
     await ctx.send(error_message or "Could not build a prediction right now.")
+
+
+@bot.command(name="tempban")
+async def tempban(ctx: commands.Context, user: discord.Member, *, reason: str):
+    if ctx.guild is None:
+        await ctx.send("This command can only be used in a server.")
+        return
+    if not ctx.author.guild_permissions.ban_members:
+        await ctx.send("You are missing permission: Ban Members.")
+        return
+    if user.id == ctx.author.id:
+        await ctx.send("You cannot tempban yourself.")
+        return
+    if user.id == bot.user.id:
+        await ctx.send("You cannot tempban the bot.")
+        return
+    if not _can_moderate_target(ctx.author, user):
+        await ctx.send("You cannot moderate a member with an equal or higher role.")
+        return
+
+    clean_reason = reason.strip()
+    if not clean_reason:
+        await ctx.send("Usage: -tempban <@user> <Reason>")
+        return
+
+    expires_unix = int(datetime.now(timezone.utc).timestamp()) + DEFAULT_TEMPBAN_SECONDS
+    await _ban_with_message_cleanup(ctx.guild, user, reason=f"Tempban by {ctx.author} | {clean_reason}")
+    _register_temp_ban(ctx.guild.id, user.id, ctx.author.id, clean_reason, expires_unix, "tempban")
+    _record_mod_action(
+        {
+            "action": "tempban",
+            "guild_id": ctx.guild.id,
+            "target_id": user.id,
+            "moderator_id": ctx.author.id,
+            "reason": clean_reason,
+            "duration_seconds": DEFAULT_TEMPBAN_SECONDS,
+            "expires_unix": expires_unix,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    await _send_mod_log(
+        ctx.guild,
+        action_name="Temp Ban",
+        moderator_id=ctx.author.id,
+        target_id=user.id,
+        reason=clean_reason,
+        duration_seconds=DEFAULT_TEMPBAN_SECONDS,
+        expires_unix=expires_unix,
+    )
+    await ctx.send(f"Temporarily banned {user.mention} for `1d`. Their messages from the last 7 days were removed.")
+
+
+@bot.command(name="permban")
+async def permban(ctx: commands.Context, user: discord.Member, *, reason: str):
+    if ctx.guild is None:
+        await ctx.send("This command can only be used in a server.")
+        return
+    if not ctx.author.guild_permissions.ban_members:
+        await ctx.send("You are missing permission: Ban Members.")
+        return
+    if user.id == ctx.author.id:
+        await ctx.send("You cannot permban yourself.")
+        return
+    if user.id == bot.user.id:
+        await ctx.send("You cannot permban the bot.")
+        return
+    if not _can_moderate_target(ctx.author, user):
+        await ctx.send("You cannot moderate a member with an equal or higher role.")
+        return
+
+    clean_reason = reason.strip()
+    if not clean_reason:
+        await ctx.send("Usage: -permban <@user> <Reason>")
+        return
+
+    await _ban_with_message_cleanup(ctx.guild, user, reason=f"Permban by {ctx.author} | {clean_reason}")
+    _record_mod_action(
+        {
+            "action": "permban",
+            "guild_id": ctx.guild.id,
+            "target_id": user.id,
+            "moderator_id": ctx.author.id,
+            "reason": clean_reason,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    await _send_mod_log(
+        ctx.guild,
+        action_name="Permanent Ban",
+        moderator_id=ctx.author.id,
+        target_id=user.id,
+        reason=clean_reason,
+    )
+    await ctx.send(f"Permanently banned {user.mention}. Their messages from the last 7 days were removed.")
+
+
+@bot.command(name="ban")
+async def ban(ctx: commands.Context, user: discord.Member, *, raw_args: str):
+    if ctx.guild is None:
+        await ctx.send("This command can only be used in a server.")
+        return
+    if not ctx.author.guild_permissions.ban_members:
+        await ctx.send("You are missing permission: Ban Members.")
+        return
+    if user.id == ctx.author.id:
+        await ctx.send("You cannot ban yourself.")
+        return
+    if user.id == bot.user.id:
+        await ctx.send("You cannot ban the bot.")
+        return
+    if not _can_moderate_target(ctx.author, user):
+        await ctx.send("You cannot moderate a member with an equal or higher role.")
+        return
+
+    parsed = _extract_reason_and_duration(raw_args)
+    if parsed is None:
+        await ctx.send("Usage: -ban <@user> <Reason> <Time_1d>")
+        return
+    clean_reason, duration_seconds = parsed
+
+    expires_unix = int(datetime.now(timezone.utc).timestamp()) + int(duration_seconds)
+    await _ban_with_message_cleanup(ctx.guild, user, reason=f"Timed ban by {ctx.author} | {clean_reason}")
+    _register_temp_ban(ctx.guild.id, user.id, ctx.author.id, clean_reason, expires_unix, "ban")
+    _record_mod_action(
+        {
+            "action": "ban",
+            "guild_id": ctx.guild.id,
+            "target_id": user.id,
+            "moderator_id": ctx.author.id,
+            "reason": clean_reason,
+            "duration_seconds": int(duration_seconds),
+            "expires_unix": expires_unix,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    await _send_mod_log(
+        ctx.guild,
+        action_name="Timed Ban",
+        moderator_id=ctx.author.id,
+        target_id=user.id,
+        reason=clean_reason,
+        duration_seconds=int(duration_seconds),
+        expires_unix=expires_unix,
+    )
+    await ctx.send(f"Banned {user.mention} for `{duration_seconds}` seconds. Their messages from the last 7 days were removed.")
+
+
+@bot.command(name="timeout")
+async def timeout(ctx: commands.Context, user: discord.Member, *, raw_args: str):
+    if ctx.guild is None:
+        await ctx.send("This command can only be used in a server.")
+        return
+    if not ctx.author.guild_permissions.moderate_members:
+        await ctx.send("You are missing permission: Moderate Members.")
+        return
+    if user.id == ctx.author.id:
+        await ctx.send("You cannot timeout yourself.")
+        return
+    if user.id == bot.user.id:
+        await ctx.send("You cannot timeout the bot.")
+        return
+    if not _can_moderate_target(ctx.author, user):
+        await ctx.send("You cannot moderate a member with an equal or higher role.")
+        return
+
+    parsed = _extract_reason_and_duration(raw_args)
+    if parsed is None:
+        await ctx.send("Usage: -timeout <@user> <Reason> <Time_1m_1s_1h_1d>")
+        return
+    clean_reason, duration_seconds = parsed
+    until_dt = datetime.now(timezone.utc) + timedelta(seconds=int(duration_seconds))
+
+    try:
+        await user.timeout(until_dt, reason=clean_reason)
+    except Exception:
+        await user.edit(timed_out_until=until_dt, reason=clean_reason)
+
+    _record_mod_action(
+        {
+            "action": "timeout",
+            "guild_id": ctx.guild.id,
+            "target_id": user.id,
+            "moderator_id": ctx.author.id,
+            "reason": clean_reason,
+            "duration_seconds": int(duration_seconds),
+            "expires_unix": int(until_dt.timestamp()),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    await _send_mod_log(
+        ctx.guild,
+        action_name="Timeout",
+        moderator_id=ctx.author.id,
+        target_id=user.id,
+        reason=clean_reason,
+        duration_seconds=int(duration_seconds),
+        expires_unix=int(until_dt.timestamp()),
+    )
+    await ctx.send(f"Timed out {user.mention} until <t:{int(until_dt.timestamp())}:R>.")
+
+
+@bot.command(name="kick")
+async def kick(ctx: commands.Context, user: discord.Member, *, reason: str):
+    if ctx.guild is None:
+        await ctx.send("This command can only be used in a server.")
+        return
+    if not ctx.author.guild_permissions.kick_members:
+        await ctx.send("You are missing permission: Kick Members.")
+        return
+    if user.id == ctx.author.id:
+        await ctx.send("You cannot kick yourself.")
+        return
+    if user.id == bot.user.id:
+        await ctx.send("You cannot kick the bot.")
+        return
+    if not _can_moderate_target(ctx.author, user):
+        await ctx.send("You cannot moderate a member with an equal or higher role.")
+        return
+
+    clean_reason = reason.strip()
+    if not clean_reason:
+        await ctx.send("Usage: -kick <@user> <Reason>")
+        return
+
+    await user.kick(reason=clean_reason)
+    _record_mod_action(
+        {
+            "action": "kick",
+            "guild_id": ctx.guild.id,
+            "target_id": user.id,
+            "moderator_id": ctx.author.id,
+            "reason": clean_reason,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    await _send_mod_log(
+        ctx.guild,
+        action_name="Kick",
+        moderator_id=ctx.author.id,
+        target_id=user.id,
+        reason=clean_reason,
+    )
+    await ctx.send(f"Kicked {user.mention}.")
+
+
+@bot.command(name="baninfo")
+async def baninfo(ctx: commands.Context, *, target: str):
+    if ctx.guild is None:
+        await ctx.send("This command can only be used in a server.")
+        return
+    if not ctx.author.guild_permissions.ban_members:
+        await ctx.send("You are missing permission: Ban Members.")
+        return
+
+    target_id = _parse_target_user_id(target)
+    if target_id is None:
+        await ctx.send("Usage: -baninfo <@user>")
+        return
+
+    member = ctx.guild.get_member(target_id)
+    if member is None:
+        try:
+            member = await ctx.guild.fetch_member(target_id)
+        except Exception:
+            member = None
+
+    banned = False
+    ban_reason = None
+    try:
+        ban_entry = await ctx.guild.fetch_ban(discord.Object(id=target_id))
+        banned = True
+        ban_reason = str(getattr(ban_entry, "reason", "") or "No reason provided")
+    except Exception:
+        banned = False
+
+    data = _load_mod_data()
+    actions = [
+        row for row in (data.get("actions", []) or [])
+        if isinstance(row, dict) and int(row.get("guild_id", 0) or 0) == ctx.guild.id and int(row.get("target_id", 0) or 0) == target_id
+    ]
+    recent_actions = actions[-6:]
+
+    timeout_text = "No"
+    if member is not None:
+        timeout_until = getattr(member, "timed_out_until", None)
+        if timeout_until is not None and timeout_until > datetime.now(timezone.utc):
+            timeout_text = f"Yes, until <t:{int(timeout_until.timestamp())}:R>"
+
+    lines = []
+    for row in reversed(recent_actions):
+        action = str(row.get("action", "unknown"))
+        reason = str(row.get("reason", "No reason provided"))
+        created_at = str(row.get("created_at", ""))
+        lines.append(f"- `{action}`: {reason} ({created_at})")
+
+    embed = discord.Embed(
+        title=f"Ban Info - {target_id}",
+        color=discord.Color.orange(),
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.add_field(name="User", value=f"<@{target_id}>", inline=False)
+    embed.add_field(name="Currently Banned", value="Yes" if banned else "No", inline=True)
+    embed.add_field(name="Currently Timed Out", value=timeout_text, inline=True)
+    if ban_reason:
+        embed.add_field(name="Ban Reason", value=ban_reason[:1024], inline=False)
+    embed.add_field(
+        name="Recent Mod Actions",
+        value="\n".join(lines)[:1024] if lines else "No stored moderation actions for this user.",
+        inline=False,
+    )
+    await ctx.send(embed=embed)
 
 
 @bot.command(name="vouch")
