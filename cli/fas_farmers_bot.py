@@ -3274,7 +3274,6 @@ if app_commands is None and hasattr(bot, "slash_command"):
 
 @bot.command(name="help")
 async def help_command(ctx: commands.Context):
-    BOT_MODE = BOT_MODE.lower() if isinstance(BOT_MODE, str) else "farmers"
     embed = discord.Embed(
         title="[FAS]Farmers Bot Commands",
         description=(
@@ -3313,7 +3312,6 @@ async def help_command(ctx: commands.Context):
 
     @bot.command(name="seedcmds")
     async def seedcmds(ctx: commands.Context):
-        BOT_MODE = BOT_MODE.lower() if isinstance(BOT_MODE, str) else "seed"
         embed = discord.Embed(
          title="[FAS]Farmers seed shop Commands",
          description=(
