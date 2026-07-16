@@ -4232,7 +4232,7 @@ async def unban(ctx: commands.Context, *, target: str):
     await ctx.send(f"Unbanned <@{target_id}>.")
 
 
-@bot.command(name="untimeout", aliases=["untimeout"])
+@bot.command(name="untimrout", aliases=["untimeout"])
 async def untimeout(ctx: commands.Context, user: discord.Member):
     if ctx.guild is None:
         await ctx.send("This command can only be used in a server.")
