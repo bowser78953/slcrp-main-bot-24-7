@@ -3288,7 +3288,7 @@ async def help_command(ctx: commands.Context):
         "-permban <user id/user mention> <reason> - Permantly bans a user.\n"
         "-tempban <user id/user mention> <duration> <reason> - Temporarily bans a user.\n"
         "-timeout <user id/user mention> <duration> <reason> - Temporarily timeouts a user.\n"
-        "-untimeout <user id/user mention> - Removes a timeout from a user.\n" 
+        "-untimeout <user id/user mention> - Removes a timeout from a user.\n"
         "-unban <user id/user mention> - Unbans a user.\n"
         "-baninfo <user id/user mention> - Shows ban information for a user.\n"
         "-kick <user id/user mention> <reason> - Kicks a user.\n"
