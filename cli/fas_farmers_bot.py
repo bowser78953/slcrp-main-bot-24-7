@@ -3272,39 +3272,64 @@ if app_commands is None and hasattr(bot, "slash_command"):
 
 @bot.command(name="help")
 async def help_command(ctx: commands.Context):
-    help_text = (
-        "Available commands:\n"
-        "-ping - Check if the bot is responsive.\n"
-        "## Prediction Commands:\n"
-        "-predict <seed name> - Predict the next time the seed will be in stock.\n"
-        "## Vouch Commands:\n"
-        "-vouch <user id/user mention> <reason> - Vouch for a user.\n"
-        "-vouchremove <user id/user mention> <id> - Remove a vouch for a user.\n"
-        "-addvouch <Person being vouched> <Person vouching> <reason> - Add a vouch for a user.\n"
-        "-sreport <user id/user mention> <reason> - Report a user.\n"
-        "-sreportremove <user id/user mention> <ID>- Remove a report for a user.\n"
-        "-vouchlist <user id/user mention> - Show vouches and reports for a user.\n"
-        "## Moderation Commands:\n"
-        "-permban <user id/user mention> <reason> - Permantly bans a user.\n"
-        "-tempban <user id/user mention> <duration> <reason> - Temporarily bans a user.\n"
-        "-timeout <user id/user mention> <duration> <reason> - Temporarily timeouts a user.\n"
-        "-untimeout <user id/user mention> - Removes a timeout from a user.\n"
-        "-unban <user id/user mention> - Unbans a user.\n"
-        "-baninfo <user id/user mention> - Shows ban information for a user.\n"
-        "-kick <user id/user mention> <reason> - Kicks a user.\n"
-        "-quarantine <user id/user mention> <duration> <reason> - Quarantines a user.\n"
-        "## Giveaway Commands:\n"
-        "-greroll <giveaway_id> - Reroll a giveaway.\n"
-        "-genterlist <giveaway_id> - List entries for a giveaway.\n"
-        "-forceend <giveaway_id> - Force end a giveaway.\n"
-        "## Help Commands:\n"
-        "-seedcmds - Shows a list of seed commands.\n"
-        "-help - Show a list of active commands."
-        "## Slash Commands:\n"
-        "/giveaway - Create a giveaway.\n"
-        "/quarantinesetup - Configure quarantine role/channel lockdown."
-    )
-    await ctx.send(help_text)
+    embed = discord.Embed(
+        title="[FAS]Farmers Bot Commands",
+        description=(
+            "> Available commands:\n"
+                "> *Prediction Commands:*\n"
+                "> -predict <seed name> - Predict the next time the seed will be in stock.\n"
+             "> *Vouch Commands:*\n"
+             "> -vouch <user id/user mention> <reason> - Vouch for a user.\n"
+             "> -vouchremove <user id/user mention> <id> - Remove a vouch for a user.\n"
+             "> -addvouch <Person being vouched> <Person vouching> <reason> - Add a vouch for a user.\n"
+             "> -sreport <user id/user mention> <reason> - Report a user.\n"
+             "> -sreportremove <user id/user mention> <ID>- Remove a report for a user.\n"
+             "> -vouchlist <user id/user mention> - Show vouches and reports for a user.\n"
+             "> *Moderation Commands:*\n"
+             "> -permban <user id/user mention> <reason> - Permantly bans a user.\n"
+             "> -tempban <user id/user mention> <duration> <reason> - Temporarily bans a user.\n"
+             "> -timeout <user id/user mention> <duration> <reason> - Temporarily timeouts a user.\n"
+             "> -untimeout <user id/user mention> - Removes a timeout from a user.\n"
+             "> -unban <user id/user mention> - Unbans a user.\n"
+             "> -baninfo <user id/user mention> - Shows ban information for a user.\n"
+             "> -kick <user id/user mention> <reason> - Kicks a user.\n"
+             "> -quarantine <user id/user mention> <duration> <reason> - Quarantines a user.\n"
+             "> *Giveaway Commands:*\n"
+             "> -greroll <giveaway_id> - Reroll a giveaway.\n"
+             "> -genterlist <giveaway_id> - List entries for a giveaway.\n"
+             "> -forceend <giveaway_id> - Force end a giveaway.\n"
+             "> *Help Commands:*\n"
+             "> -seedcmds - Shows a list of seed commands.\n"
+             "> -help - Show a list of active commands.\n"
+             "> *Slash Commands:*\n"
+             "> /giveaway - Create a giveaway.\n"
+             "> /quarantinesetup - Configure quarantine role/channel lockdown."
+        )
+        )
+    await ctx.send(embed=embed)
+
+    @bot.command(name="seedcmds")
+    async def seedcmds(ctx: commands.Context):
+        embed = discord.Embed(
+         title="[FAS]Farmers seed shop Commands",
+         description=(
+            "Seed commands:\n"
+            "-seedclaim - Claim your daily seed.\n"
+            "-seedbalance - Check your seed balance.\n"
+            "-seedleaderboard - Show the seed leaderboard.\n"
+            "-seedshop - Show the seed shop.\n"
+            "-buy <item ID> - Buy an item from the seed shop.\n"
+            "-sellprice <Fruit Name> - Check the sell price of a fruit.\n"
+            "-register - Register to buy something from a shop.\n"
+            "-supershop - Show the supershop which is Booster/Premium Only.\n"
+            "-addtosshop <Item> <Price> - Add an item to the supershop (Booster/Premium Only) Sellers Only Command.\n"
+            "-addtoshop <Item> <Price> - Add an item to the shop (Sellers Only Command).\n"
+            "-removeseeds <User> <Number> - Remove seeds from a user (Head Sellers Only Command).\n"
+            "-addseeds <User> <Number> - Add seeds to a user (Head Sellers Only Command).\n"
+            "-seedclaimwipe all/user - Wipe all seed claims or a specific user (Owner, Co-owner ITT only command).\n"
+            )
+        )
+        await ctx.send(embed=embed)
 
 @bot.command(name="greroll")
 async def greroll(ctx: commands.Context, giveaway_id: int):
