@@ -369,6 +369,7 @@ SEED_SHOP_COMMAND_NAMES = {
     "register",
     "buy",
     "seedcmds",
+    "seedinfo",
 }
 
 STOCK_COMMAND_NAMES = {
@@ -3332,6 +3333,17 @@ async def help_command(ctx: commands.Context):
             )
         )
         await ctx.send(embed=embed)
+
+@bot.command(name="seedinfo")
+async def seedinfo(ctx: commands.Context):
+    embed = discord.Embed(
+        title="[FAS]Farmers seed shop Info",
+        description=(
+            "The FAS Farmers Seed Shop Bot is a bot that allows a user to buy items from the seed shop for there server activity. The bot has a daily seed claim system and a message system that allows you to collect seeds by simple talking to others in the server. The way you get seeds by talking to others is - 1 message must contain 2 words - if a message contains 2 words it will give you 2 seeds. If you spam your seeds will be reset to 0.\n"
+            "Watch out for the seed claim cooldown wipes! You can get the ping role here https://discord.com/channels/1521774456274686044/1526303913706262528"
+        )
+    )
+    await ctx.send(embed=embed)
 
 @bot.command(name="greroll")
 async def greroll(ctx: commands.Context, giveaway_id: int):
