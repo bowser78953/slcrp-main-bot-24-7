@@ -368,6 +368,7 @@ SEED_SHOP_COMMAND_NAMES = {
     "supershop",
     "register",
     "buy",
+    "seedcmds",
 }
 
 STOCK_COMMAND_NAMES = {
@@ -403,6 +404,7 @@ NON_SEED_COMMAND_NAMES = {
     "untimeout",
     "quarantine",
     "syncslash",
+    "help",
 }
 
 
