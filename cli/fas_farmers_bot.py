@@ -3734,7 +3734,7 @@ async def seedclaimwipe(ctx: commands.Context, target: str):
     if target_clean == "all":
         bank_data["claim_cooldowns"] = {}
         _save_seed_bank(bank_data)
-        await ctx.send(f"<:tick:1527464229387370698> Seed-claim cooldown wipe completed!.\n #- <@&{SEED_CLAIMWIPE_PING_ROLE_ID}> ")
+        await ctx.send(f"<:tick:1527464229387370698> Seed-claim cooldown wipe completed!.\n-# <@&{SEED_CLAIMWIPE_PING_ROLE_ID}> ")
         return
 
     target_id = None
@@ -3750,7 +3750,7 @@ async def seedclaimwipe(ctx: commands.Context, target: str):
 
     _clear_claim_cooldown(bank_data, target_id)
     _save_seed_bank(bank_data)
-    await ctx.send(f"<:tick:1527464229387370698> Seed-claim cooldown wipe completed!.\n #- <@{target_id}>.")
+    await ctx.send(f"<:tick:1527464229387370698> Seed-claim cooldown wipe completed!.\n-# <@{target_id}>.")
 
 
 @bot.command(name="addseeds")
