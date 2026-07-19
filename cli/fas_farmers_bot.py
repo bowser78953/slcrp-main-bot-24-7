@@ -68,15 +68,22 @@ PREDICTOR_V2_BACKUP_FILE = os.path.join(SEED_DATA_DIR, "fas_predictor_v2.backup.
 MOD_DATA_FILE = os.path.join(SEED_DATA_DIR, "fas_mod_actions.json")
 SEED_BANK_FILE = os.path.join(SEED_DATA_DIR, "fas_seed_bank.json")
 SEED_STORE_FILE = os.path.join(SEED_DATA_DIR, "fas_seed_store.json")
+AUCTION_DATA_FILE = os.path.join(SEED_DATA_DIR, "fas_auctions.json")
 LEGACY_SEED_BANK_FILE = os.path.join(DATA_DIR, "fas_seed_bank.json")
 LEGACY_SEED_STORE_FILE = os.path.join(DATA_DIR, "fas_seed_store.json")
 DATA_LOCK = Lock()
 SEED_REDIS_CLIENT = None
 SEED_REDIS_DISABLED = False
 BOT_INSTANCE_ID = uuid.uuid4().hex[:8]
+ACTIVE_AUCTIONS: dict[int, dict] = {}
+AUCTION_TASKS: dict[int, asyncio.Task] = {}
+AUCTION_VIEW_REGISTERED = False
 
 VOUCH_CHANNEL_ID = 1524283822512799824
 SCAM_REPORT_CHANNEL_ID = 1525702427263631411
+RECRUITMENT_AD_CHANNEL_ID = 1525257278939205804
+AUCTION_CHANNEL_ID = 1526641481086140618
+AUCTION_ROLE_PING_ID = 1528497373741842452
 SEED_SHOP_CHANNEL_ID = 1525702441608282113
 TARGET_GUILD_ID = 1521774456274686044
 SEED_SHOP_MANAGER_ROLE_ID = 1526225610022719589
@@ -130,7 +137,7 @@ BOOSTER_SEED_CLAIM_MIN = 100
 BOOSTER_SEED_CLAIM_MAX = 2000
 SEED_CLAIM_COOLDOWN_SECONDS = 86400
 BOOSTER_CLAIM_MULTIPLIER = 2.5
-BOOSTER_CLAIM_MULTIPLIER_CHANCE = 0.10
+BOOSTER_CLAIM_MULTIPLIER_CHANCE = 0.40
 TOP1_CLAIM_MULTIPLIER = 1.75
 TOP2_CLAIM_MULTIPLIER = 1.5
 TOP3_CLAIM_MULTIPLIER = 1.25
@@ -2060,6 +2067,289 @@ def _parse_duration_to_seconds(duration_text: str) -> int:
     return total
 
 
+def _ensure_auction_data_file() -> None:
+    os.makedirs(SEED_DATA_DIR, exist_ok=True)
+    if not os.path.exists(AUCTION_DATA_FILE):
+        with open(AUCTION_DATA_FILE, "w", encoding="utf-8") as f:
+            json.dump({"auctions": {}}, f, indent=2)
+
+
+def _load_auction_data() -> dict:
+    _ensure_auction_data_file()
+    with DATA_LOCK:
+        try:
+            with open(AUCTION_DATA_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            data = {"auctions": {}}
+    if not isinstance(data.get("auctions"), dict):
+        data["auctions"] = {}
+    return data
+
+
+def _save_auction_data(data: dict) -> None:
+    data["updated_at"] = int(datetime.now(timezone.utc).timestamp())
+    _ensure_auction_data_file()
+    with DATA_LOCK:
+        tmp = AUCTION_DATA_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp, AUCTION_DATA_FILE)
+
+
+def _build_auction_embed(auction: dict) -> discord.Embed:
+    host_id = int(auction.get("host_user_id", 0) or 0)
+    item_name = str(auction.get("item_name", "Unknown Item"))
+    current_winner_id = int(auction.get("current_winner_id", 0) or 0)
+    current_highest_bid = int(auction.get("current_highest_bid", 0) or 0)
+    end_ts = int(auction.get("end_ts", 0) or 0)
+    ended = bool(auction.get("ended"))
+
+    current_winner = f"<@{current_winner_id}>" if current_winner_id > 0 else "No bids yet"
+    description = (
+        "# <:Auction:1528502578109747290> New Acution Started!\n\n"
+        f"*<:host:1525990871777017906> Host: <@{host_id}>*\n\n"
+        f"## Item up for auction is {item_name}\n\n"
+        f"*<:Winners:1525734637383450634> Current Winner: {current_winner}*\n\n"
+        f"*<:Seeds:1528502611580555364> Current Highest Bid: {current_highest_bid}*\n\n"
+        "*How to bid: Click the button below and then fill the format out!*"
+    )
+
+    embed = discord.Embed(
+        description=description,
+        color=discord.Color.dark_gold() if not ended else discord.Color.dark_gray(),
+    )
+    if end_ts > 0:
+        embed.set_footer(text=f"Ends <t:{end_ts}:F> | <t:{end_ts}:R>")
+    return embed
+
+
+def _build_disabled_auction_view() -> discord.ui.View:
+    view = discord.ui.View(timeout=None)
+    button = discord.ui.Button(label="💰Bid!", style=discord.ButtonStyle.primary, custom_id="fas_auction_bid")
+
+    async def _disabled_callback(interaction: discord.Interaction):
+        await interaction.response.send_message("This auction has ended.", ephemeral=True)
+
+    button.callback = _disabled_callback  # type: ignore[assignment]
+    button.disabled = True
+    view.add_item(button)
+    return view
+
+
+def _build_auction_view() -> discord.ui.View:
+    view = discord.ui.View(timeout=None)
+    button = discord.ui.Button(label="💰Bid!", style=discord.ButtonStyle.primary, custom_id="fas_auction_bid")
+
+    async def _auction_callback(interaction: discord.Interaction):
+        if interaction.message is None:
+            await interaction.response.send_message("This auction is unavailable right now.", ephemeral=True)
+            return
+        auction = ACTIVE_AUCTIONS.get(interaction.message.id)
+        if auction is None or auction.get("ended"):
+            await interaction.response.send_message("This auction has ended.", ephemeral=True)
+            return
+        await interaction.response.send_modal(AuctionBidModal(int(interaction.message.id)))
+
+    button.callback = _auction_callback  # type: ignore[assignment]
+    view.add_item(button)
+    return view
+
+
+class AuctionBidModal(discord.ui.Modal):
+    def __init__(self, auction_message_id: int):
+        super().__init__(title="Auction Bid")
+        self.auction_message_id = auction_message_id
+        self.discord_user_input = discord.ui.TextInput(
+            label="Discord User:",
+            placeholder="Your Discord username or mention",
+            required=True,
+            max_length=100,
+        )
+        self.amount_input = discord.ui.TextInput(
+            label="Ammount of Seeds Bidding:",
+            placeholder="Enter your bid amount",
+            required=True,
+            max_length=20,
+        )
+        self.add_item(self.discord_user_input)
+        self.add_item(self.amount_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        auction = ACTIVE_AUCTIONS.get(self.auction_message_id)
+        if auction is None or auction.get("ended"):
+            await interaction.response.send_message("This auction has ended.", ephemeral=True)
+            return
+
+        discord_user_text = str(self.discord_user_input.value).strip()
+        amount_text = str(self.amount_input.value).strip().replace(",", "")
+        if not discord_user_text:
+            await interaction.response.send_message("```⚠️ Command Failed ```\n-# Discord User is required.", ephemeral=True)
+            return
+
+        try:
+            bid_amount = int(amount_text)
+        except Exception:
+            await interaction.response.send_message("```⚠️ Command Failed ```\n-# Amount of seeds bidding must be a whole number.", ephemeral=True)
+            return
+
+        if bid_amount <= 0:
+            await interaction.response.send_message("```⚠️ Command Failed ```\n-# Bid amount must be greater than 0.", ephemeral=True)
+            return
+
+        bank_data = _load_seed_bank()
+        balance = _get_seed_balance(bank_data, interaction.user.id)
+        if bid_amount > balance:
+            await interaction.response.send_message(
+                f"```⚠️ Command Failed ```\n-# You cannot bid more seeds than you have. Your balance is `{balance}`.",
+                ephemeral=True,
+            )
+            return
+
+        current_highest = int(auction.get("current_highest_bid", 0) or 0)
+        current_winner_id = int(auction.get("current_winner_id", 0) or 0)
+        if current_winner_id > 0:
+            if bid_amount <= current_highest:
+                await interaction.response.send_message(
+                    f"```⚠️ Command Failed ```\n-# Your bid must be higher than the current highest bid of `{current_highest}`.",
+                    ephemeral=True,
+                )
+                return
+        elif bid_amount < current_highest:
+            await interaction.response.send_message(
+                f"```⚠️ Command Failed ```\n-# Your bid must be at least the starting price of `{current_highest}`.",
+                ephemeral=True,
+            )
+            return
+
+        auction["current_winner_id"] = interaction.user.id
+        auction["current_winner_name"] = discord_user_text
+        auction["current_highest_bid"] = bid_amount
+        auction["updated_at"] = int(datetime.now(timezone.utc).timestamp())
+        _save_auction_data({"auctions": {str(key): value for key, value in ACTIVE_AUCTIONS.items()}})
+
+        try:
+            auction_channel = interaction.channel
+            if isinstance(auction_channel, discord.abc.Messageable):
+                message = await auction_channel.fetch_message(self.auction_message_id)
+                await message.edit(embed=_build_auction_embed(auction), view=_build_auction_view())
+        except Exception:
+            pass
+
+        await interaction.response.send_message(
+            f"Your bid of `{bid_amount}` seeds has been placed. Current balance: `{balance}`.",
+            ephemeral=True,
+        )
+
+
+async def _end_auction_later(message_id: int) -> None:
+    auction = ACTIVE_AUCTIONS.get(message_id)
+    if auction is None:
+        return
+
+    wait_for = max(0, int(auction.get("end_ts", 0) or 0) - int(datetime.now(timezone.utc).timestamp()))
+    if wait_for > 0:
+        await asyncio.sleep(wait_for)
+
+    auction = ACTIVE_AUCTIONS.get(message_id)
+    if auction is None or bool(auction.get("ended")):
+        return
+
+    auction["ended"] = True
+    auction["updated_at"] = int(datetime.now(timezone.utc).timestamp())
+    _save_auction_data({"auctions": {str(key): value for key, value in ACTIVE_AUCTIONS.items()}})
+
+    channel_id = int(auction.get("channel_id", 0) or 0)
+    channel = bot.get_channel(channel_id)
+    if channel is None:
+        try:
+            channel = await bot.fetch_channel(channel_id)
+        except Exception:
+            channel = None
+
+    if isinstance(channel, discord.TextChannel):
+        try:
+            message = await channel.fetch_message(message_id)
+            await message.edit(embed=_build_auction_embed(auction), view=_build_disabled_auction_view())
+            winner_id = int(auction.get("current_winner_id", 0) or 0)
+            current_highest_bid = int(auction.get("current_highest_bid", 0) or 0)
+            if winner_id > 0:
+                await channel.send(
+                    f"<@{winner_id}> won the auction for **{auction.get('item_name', 'Unknown Item')}** with `{current_highest_bid}` seeds."
+                )
+            else:
+                await channel.send(f"The auction for **{auction.get('item_name', 'Unknown Item')}** ended with no bids.")
+        except Exception:
+            pass
+
+
+def _restore_auction_task(message_id: int) -> None:
+    existing = AUCTION_TASKS.get(message_id)
+    if existing is not None and not existing.done():
+        existing.cancel()
+    AUCTION_TASKS[message_id] = asyncio.create_task(_end_auction_later(message_id))
+
+
+async def _restore_active_auctions() -> None:
+    data = _load_auction_data()
+    auctions = data.get("auctions", {})
+    if not isinstance(auctions, dict):
+        return
+
+    ACTIVE_AUCTIONS.clear()
+    now_ts = int(datetime.now(timezone.utc).timestamp())
+    for message_id_text, auction in auctions.items():
+        if not isinstance(auction, dict):
+            continue
+        try:
+            message_id = int(message_id_text)
+        except Exception:
+            continue
+        ACTIVE_AUCTIONS[message_id] = auction
+        if bool(auction.get("ended")):
+            channel_id = int(auction.get("channel_id", 0) or 0)
+            channel = bot.get_channel(channel_id)
+            if channel is None:
+                try:
+                    channel = await bot.fetch_channel(channel_id)
+                except Exception:
+                    channel = None
+            if isinstance(channel, discord.TextChannel):
+                try:
+                    message = await channel.fetch_message(message_id)
+                    await message.edit(embed=_build_auction_embed(auction), view=_build_disabled_auction_view())
+                except Exception:
+                    pass
+        else:
+            if int(auction.get("end_ts", 0) or 0) <= now_ts:
+                _restore_auction_task(message_id)
+            else:
+                _restore_auction_task(message_id)
+
+    if ACTIVE_AUCTIONS:
+        _save_auction_data({"auctions": {str(key): value for key, value in ACTIVE_AUCTIONS.items()}})
+
+
+def _parse_auction_args(raw_args: str) -> tuple[str, int, int]:
+    cleaned = raw_args.strip()
+    if not cleaned:
+        raise ValueError("Missing auction arguments")
+    parts = cleaned.rsplit(" ", 2)
+    if len(parts) != 3:
+        raise ValueError("Missing auction arguments")
+
+    item_name = parts[0].strip()
+    if not item_name:
+        raise ValueError("Missing item name")
+
+    starting_price = int(parts[1].replace(",", ""))
+    if starting_price <= 0:
+        raise ValueError("Starting price must be greater than 0")
+
+    duration_seconds = _parse_duration_to_seconds(parts[2])
+    return item_name, starting_price, duration_seconds
+
+
 def _ensure_mod_data_file() -> None:
     os.makedirs(SEED_DATA_DIR, exist_ok=True)
     if not os.path.exists(MOD_DATA_FILE):
@@ -2987,10 +3277,14 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
 
 @bot.event
 async def on_ready():
-    global TREE_SYNCED
+    global TREE_SYNCED, AUCTION_VIEW_REGISTERED
     _configure_commands_for_mode()
     if bot.user:
         print(f"{bot.user} is online. mode={BOT_MODE}")
+    if not AUCTION_VIEW_REGISTERED:
+        bot.add_view(_build_auction_view())
+        AUCTION_VIEW_REGISTERED = True
+    await _restore_active_auctions()
     if app_commands is not None and not TREE_SYNCED:
         guild_obj = discord.Object(id=TARGET_GUILD_ID)
         bot.tree.clear_commands(guild=guild_obj)
@@ -3273,6 +3567,8 @@ if app_commands is None and hasattr(bot, "slash_command"):
             else:
                 await ctx.respond(err, ephemeral=True)
 
+
+
 @bot.command(name="help")
 async def help_command(ctx: commands.Context):
     embed = discord.Embed(
@@ -3329,6 +3625,7 @@ async def help_command(ctx: commands.Context):
             "-addtoshop <Item> <Price> - Add an item to the shop (Sellers Only Command).\n"
             "-removeseeds <User> <Number> - Remove seeds from a user (Head Sellers Only Command).\n"
             "-addseeds <User> <Number> - Add seeds to a user (Head Sellers Only Command).\n"
+            "-auction <Item> <Starting Price> <Time_1d_1m_1s> - Start an auction in the auction channel.\n"
             "-seedclaimwipe all/user - Wipe all seed claims or a specific user (Owner, Co-owner ITT only command).\n"
             )
         )
@@ -3606,7 +3903,7 @@ async def seedshop(ctx: commands.Context):
 @bot.command(name="supershop")
 async def supershop(ctx: commands.Context):
     if not _is_server_booster(ctx.author):
-        await ctx.send("Only server boosters can use -supershop.")
+        await ctx.send("Only server boosters and Premium members can use -supershop.")
         return
 
     store_data = _load_seed_store()
@@ -3726,7 +4023,7 @@ async def buy(ctx: commands.Context, *, raw_args: str):
 @bot.command(name="seedclaimwipe")
 async def seedclaimwipe(ctx: commands.Context, target: str):
     if ctx.author.id not in SEED_CLAIM_WIPE_ADMINS:
-        await ctx.send(f"```🔒 Command locked ```\n-# This command is only able to be used by ITT, Co-Owner and Owner.")
+        await ctx.send(f"```🔒 Command locked ```\n -# This command is only able to be used by ITT, Co-Owner and Owner.")
         return
 
     bank_data = _load_seed_bank()
@@ -3734,7 +4031,7 @@ async def seedclaimwipe(ctx: commands.Context, target: str):
     if target_clean == "all":
         bank_data["claim_cooldowns"] = {}
         _save_seed_bank(bank_data)
-        await ctx.send(f"<:tick:1527464229387370698> Seed-claim cooldown wipe completed!.\n-# <@&{SEED_CLAIMWIPE_PING_ROLE_ID}> ")
+        await ctx.send(f"<:tick:1527464229387370698> Seed-claim cooldown wipe completed!.\n -# <@&{SEED_CLAIMWIPE_PING_ROLE_ID}> ")
         return
 
     target_id = None
@@ -3750,7 +4047,7 @@ async def seedclaimwipe(ctx: commands.Context, target: str):
 
     _clear_claim_cooldown(bank_data, target_id)
     _save_seed_bank(bank_data)
-    await ctx.send(f"<:tick:1527464229387370698> Seed-claim cooldown wipe completed!.\n-# <@{target_id}>.")
+    await ctx.send(f"<:tick:1527464229387370698> Seed-claim cooldown wipe completed!.\n #- <@{target_id}>.")
 
 
 @bot.command(name="addseeds")
@@ -3821,6 +4118,72 @@ async def seedshoplive(ctx: commands.Context):
 async def seedshopstop(ctx: commands.Context):
     _save_live_config({"channel_id": None, "message_id": None})
     await ctx.send("Live seed shop updates stopped.")
+
+
+@bot.command(name="auction")
+async def auction(ctx: commands.Context, *, raw_args: str):
+    if ctx.guild is None:
+        await ctx.send("This command can only be used in a server.")
+        return
+    if not _has_seed_shop_seller_role(ctx.author if isinstance(ctx.author, discord.Member) else None):
+        await ctx.send("```🔒 Command locked ```\n-# This command is only able to be used by The [FAS] Head Seed Shop Sellers")
+        return
+
+    try:
+        item_name, starting_price, duration_seconds = _parse_auction_args(raw_args)
+    except Exception:
+        await ctx.send("Usage: -auction <Item> <Starting Price> <Time_1d_1m_1s>")
+        return
+
+    channel = bot.get_channel(AUCTION_CHANNEL_ID)
+    if channel is None:
+        try:
+            channel = await bot.fetch_channel(AUCTION_CHANNEL_ID)
+        except Exception as exc:
+            await ctx.send(f"```⚠️ Command Failed ```\n-# I could not access <#{AUCTION_CHANNEL_ID}>: {exc}")
+            return
+
+    if not isinstance(channel, discord.TextChannel):
+        await ctx.send(f"```⚠️ Command Failed ```\n-# <#{AUCTION_CHANNEL_ID}> is not a text channel.")
+        return
+
+    end_ts = int((datetime.now(timezone.utc) + timedelta(seconds=duration_seconds)).timestamp())
+    auction_state = {
+        "message_id": None,
+        "channel_id": AUCTION_CHANNEL_ID,
+        "guild_id": ctx.guild.id,
+        "host_user_id": ctx.author.id,
+        "item_name": item_name,
+        "starting_price": starting_price,
+        "current_highest_bid": starting_price,
+        "current_winner_id": 0,
+        "current_winner_name": "",
+        "end_ts": end_ts,
+        "ended": False,
+        "created_at": int(datetime.now(timezone.utc).timestamp()),
+        "updated_at": int(datetime.now(timezone.utc).timestamp()),
+    }
+
+    ACTIVE_AUCTIONS_TEMP_KEY = -int(datetime.now(timezone.utc).timestamp())
+    ACTIVE_AUCTIONS[ACTIVE_AUCTIONS_TEMP_KEY] = auction_state
+    try:
+        message = await channel.send(
+            content=f"<@&{AUCTION_ROLE_PING_ID}>",
+            embed=_build_auction_embed(auction_state),
+            view=_build_auction_view(),
+            allowed_mentions=discord.AllowedMentions(roles=True, users=True),
+        )
+        auction_state["message_id"] = message.id
+        ACTIVE_AUCTIONS.pop(ACTIVE_AUCTIONS_TEMP_KEY, None)
+        ACTIVE_AUCTIONS[message.id] = auction_state
+        _save_auction_data({"auctions": {str(key): value for key, value in ACTIVE_AUCTIONS.items()}})
+        _restore_auction_task(message.id)
+    except Exception as exc:
+        ACTIVE_AUCTIONS.pop(ACTIVE_AUCTIONS_TEMP_KEY, None)
+        await ctx.send(f"```⚠️ Command Failed ```\n-# Could not start the auction: {exc}")
+        return
+
+    await ctx.send(f"Auction started in <#{AUCTION_CHANNEL_ID}> for **{item_name}**.")
 
 
 @bot.command(name="sellprice")
@@ -4494,4 +4857,5 @@ async def sreportremove(ctx: commands.Context, scam_id: int):
 
 if __name__ == "__main__":
     bot.run(TOKEN)
+
 
