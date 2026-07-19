@@ -2126,31 +2126,11 @@ def _build_auction_embed(auction: dict) -> discord.Embed:
     return embed
 
 
-class AuctionView(discord.ui.View):
-    def __init__(self, *, ended: bool = False):
-        super().__init__(timeout=None)
-        self.ended = ended
-        if ended:
-            for child in self.children:
-                if isinstance(child, discord.ui.Button):
-                    child.disabled = True
+class AuctionBidButton(discord.ui.Button):
+    def __init__(self, *, disabled: bool = False):
+        super().__init__(label="💰Bid!", style=discord.ButtonStyle.primary, custom_id="fas_auction_bid", disabled=disabled)
 
-    @discord.ui.button(label="💰Bid!", style=discord.ButtonStyle.primary, custom_id="fas_auction_bid")
-    async def bid(self, first, second):
-        if isinstance(first, discord.ui.Button):
-            button = first
-            interaction = second
-        else:
-            interaction = first
-            button = second
-
-        if not isinstance(interaction, discord.Interaction):
-            return
-
-        if self.ended:
-            await interaction.response.send_message("This auction has ended.", ephemeral=True)
-            return
-
+    async def callback(self, interaction: discord.Interaction):
         if interaction.message is None:
             await interaction.response.send_message("This auction is unavailable right now.", ephemeral=True)
             return
@@ -2161,6 +2141,12 @@ class AuctionView(discord.ui.View):
             return
 
         await interaction.response.send_modal(AuctionBidModal(int(interaction.message.id)))
+
+
+class AuctionView(discord.ui.View):
+    def __init__(self, *, ended: bool = False):
+        super().__init__(timeout=None)
+        self.add_item(AuctionBidButton(disabled=ended))
 
 
 def _build_disabled_auction_view() -> discord.ui.View:
@@ -2244,9 +2230,13 @@ class AuctionBidModal(discord.ui.Modal):
         _save_auction_data({"auctions": {str(key): value for key, value in ACTIVE_AUCTIONS.items()}})
 
         try:
-            auction_channel = interaction.channel
-            if isinstance(auction_channel, discord.abc.Messageable):
-                message = await auction_channel.fetch_message(self.auction_message_id)
+            channel_id = int(auction.get("channel_id", 0) or 0)
+            auction_channel = bot.get_channel(channel_id)
+            if auction_channel is None:
+                auction_channel = await bot.fetch_channel(channel_id)
+            fetch_message = getattr(auction_channel, "fetch_message", None)
+            if callable(fetch_message):
+                message = await fetch_message(self.auction_message_id)
                 await message.edit(embed=_build_auction_embed(auction), view=_build_auction_view())
         except Exception:
             pass
@@ -5165,4 +5155,5 @@ async def sreportremove(ctx: commands.Context, scam_id: int):
 
 if __name__ == "__main__":
     bot.run(TOKEN)
+
 
