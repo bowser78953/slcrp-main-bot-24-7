@@ -158,6 +158,8 @@ PREDICTOR_V2_EMBED_COLOR = 0xF6B26B
 PREDICTOR_V2_FOOTER = "Sported by Predictor V2 which could be very wrong. Do not trust this tell fully complete."
 DEFAULT_TEMPBAN_SECONDS = 86400
 BAN_DELETE_MESSAGE_SECONDS = 604800
+WARN_TIMEOUT_SECONDS = 86400
+WARN_TEMPBAN_SECONDS = 3 * 86400
 
 last_message_seed_role_sync = 0
 
@@ -2124,36 +2126,49 @@ def _build_auction_embed(auction: dict) -> discord.Embed:
     return embed
 
 
-def _build_disabled_auction_view() -> discord.ui.View:
-    view = discord.ui.View(timeout=None)
-    button = discord.ui.Button(label="💰Bid!", style=discord.ButtonStyle.primary, custom_id="fas_auction_bid")
+class AuctionView(discord.ui.View):
+    def __init__(self, *, ended: bool = False):
+        super().__init__(timeout=None)
+        self.ended = ended
+        if ended:
+            for child in self.children:
+                if isinstance(child, discord.ui.Button):
+                    child.disabled = True
 
-    async def _disabled_callback(interaction: discord.Interaction):
-        await interaction.response.send_message("This auction has ended.", ephemeral=True)
+    @discord.ui.button(label="💰Bid!", style=discord.ButtonStyle.primary, custom_id="fas_auction_bid")
+    async def bid(self, first, second):
+        if isinstance(first, discord.ui.Button):
+            button = first
+            interaction = second
+        else:
+            interaction = first
+            button = second
 
-    button.callback = _disabled_callback  # type: ignore[assignment]
-    button.disabled = True
-    view.add_item(button)
-    return view
+        if not isinstance(interaction, discord.Interaction):
+            return
 
+        if self.ended:
+            await interaction.response.send_message("This auction has ended.", ephemeral=True)
+            return
 
-def _build_auction_view() -> discord.ui.View:
-    view = discord.ui.View(timeout=None)
-    button = discord.ui.Button(label="💰Bid!", style=discord.ButtonStyle.primary, custom_id="fas_auction_bid")
-
-    async def _auction_callback(interaction: discord.Interaction):
         if interaction.message is None:
             await interaction.response.send_message("This auction is unavailable right now.", ephemeral=True)
             return
+
         auction = ACTIVE_AUCTIONS.get(interaction.message.id)
         if auction is None or auction.get("ended"):
             await interaction.response.send_message("This auction has ended.", ephemeral=True)
             return
+
         await interaction.response.send_modal(AuctionBidModal(int(interaction.message.id)))
 
-    button.callback = _auction_callback  # type: ignore[assignment]
-    view.add_item(button)
-    return view
+
+def _build_disabled_auction_view() -> discord.ui.View:
+    return AuctionView(ended=True)
+
+
+def _build_auction_view() -> discord.ui.View:
+    return AuctionView()
 
 
 class AuctionBidModal(discord.ui.Modal):
@@ -2354,7 +2369,7 @@ def _ensure_mod_data_file() -> None:
     os.makedirs(SEED_DATA_DIR, exist_ok=True)
     if not os.path.exists(MOD_DATA_FILE):
         with open(MOD_DATA_FILE, "w", encoding="utf-8") as f:
-            json.dump({"actions": [], "temp_bans": [], "quarantine_configs": {}, "quarantines": []}, f, indent=2)
+            json.dump({"actions": [], "temp_bans": [], "warnings": [], "quarantine_configs": {}, "quarantines": []}, f, indent=2)
 
 
 def _load_mod_data() -> dict:
@@ -2364,9 +2379,10 @@ def _load_mod_data() -> dict:
             with open(MOD_DATA_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
         except Exception:
-            data = {"actions": [], "temp_bans": [], "quarantine_configs": {}, "quarantines": []}
+            data = {"actions": [], "temp_bans": [], "warnings": [], "quarantine_configs": {}, "quarantines": []}
     data.setdefault("actions", [])
     data.setdefault("temp_bans", [])
+    data.setdefault("warnings", [])
     data.setdefault("quarantine_configs", {})
     data.setdefault("quarantines", [])
     return data
@@ -2389,6 +2405,87 @@ def _record_mod_action(action: dict) -> None:
     if len(actions) > 2000:
         del actions[:-2000]
     _save_mod_data(data)
+
+
+def _get_active_warning_rows(data: dict, guild_id: int, user_id: int) -> list[dict]:
+    warnings = data.get("warnings", [])
+    if not isinstance(warnings, list):
+        return []
+    rows: list[dict] = []
+    for row in warnings:
+        if not isinstance(row, dict):
+            continue
+        if int(row.get("guild_id", 0) or 0) != int(guild_id):
+            continue
+        if int(row.get("user_id", 0) or 0) != int(user_id):
+            continue
+        if not bool(row.get("active", True)):
+            continue
+        rows.append(row)
+    rows.sort(key=lambda row: int(row.get("warn_id", 0) or 0))
+    return rows
+
+
+def _next_warn_id(data: dict) -> int:
+    warnings = data.get("warnings", [])
+    if not isinstance(warnings, list):
+        return 1
+    max_id = 0
+    for row in warnings:
+        if not isinstance(row, dict):
+            continue
+        try:
+            max_id = max(max_id, int(row.get("warn_id", 0) or 0))
+        except Exception:
+            continue
+    return max_id + 1
+
+
+def _register_warning(guild_id: int, user_id: int, moderator_id: int, reason: str) -> dict:
+    data = _load_mod_data()
+    warn_id = _next_warn_id(data)
+    row = {
+        "warn_id": int(warn_id),
+        "guild_id": int(guild_id),
+        "user_id": int(user_id),
+        "moderator_id": int(moderator_id),
+        "reason": reason,
+        "active": True,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    data.setdefault("warnings", []).append(row)
+    _save_mod_data(data)
+    return row
+
+
+def _resolve_warning_by_id(warn_id: int) -> dict | None:
+    data = _load_mod_data()
+    warnings = data.get("warnings", [])
+    if not isinstance(warnings, list):
+        return None
+    for row in warnings:
+        if not isinstance(row, dict):
+            continue
+        if int(row.get("warn_id", 0) or 0) == int(warn_id):
+            return row
+    return None
+
+
+def _deactivate_warning(warn_id: int) -> dict | None:
+    data = _load_mod_data()
+    warnings = data.get("warnings", [])
+    if not isinstance(warnings, list):
+        return None
+    for row in warnings:
+        if not isinstance(row, dict):
+            continue
+        if int(row.get("warn_id", 0) or 0) != int(warn_id):
+            continue
+        row["active"] = False
+        row["deactivated_at"] = datetime.now(timezone.utc).isoformat()
+        _save_mod_data(data)
+        return row
+    return None
 
 
 def _parse_target_user_id(raw: str) -> int | None:
@@ -2467,6 +2564,112 @@ async def _send_mod_log(
     if expires_unix is not None:
         embed.add_field(name="Expires", value=f"<t:{int(expires_unix)}:R>", inline=True)
     await channel.send(embed=embed)
+
+
+async def _apply_warn_ladder_action(ctx: commands.Context, user: discord.Member, reason: str, warn_count: int) -> str:
+    if warn_count == 1:
+        return "Warning 1: no further action."
+
+    if warn_count == 2:
+        until_dt = datetime.now(timezone.utc) + timedelta(seconds=WARN_TIMEOUT_SECONDS)
+        try:
+            await user.timeout(until_dt, reason=f"Warning 2 by {ctx.author} | {reason}")
+        except Exception:
+            await user.edit(timed_out_until=until_dt, reason=f"Warning 2 by {ctx.author} | {reason}")
+
+        _record_mod_action(
+            {
+                "action": "warn_timeout",
+                "guild_id": ctx.guild.id,
+                "target_id": user.id,
+                "moderator_id": ctx.author.id,
+                "reason": reason,
+                "duration_seconds": WARN_TIMEOUT_SECONDS,
+                "expires_unix": int(until_dt.timestamp()),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        await _send_mod_log(
+            ctx.guild,
+            action_name="Warning 2 - Timeout",
+            moderator_id=ctx.author.id,
+            target_id=user.id,
+            reason=reason,
+            duration_seconds=WARN_TIMEOUT_SECONDS,
+            expires_unix=int(until_dt.timestamp()),
+        )
+        return f"Warning 2: timeout applied until <t:{int(until_dt.timestamp())}:R>."
+
+    if warn_count == 3:
+        await user.kick(reason=f"Warning 3 by {ctx.author} | {reason}")
+        _record_mod_action(
+            {
+                "action": "warn_kick",
+                "guild_id": ctx.guild.id,
+                "target_id": user.id,
+                "moderator_id": ctx.author.id,
+                "reason": reason,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        await _send_mod_log(
+            ctx.guild,
+            action_name="Warning 3 - Kick",
+            moderator_id=ctx.author.id,
+            target_id=user.id,
+            reason=reason,
+        )
+        return "Warning 3: user kicked."
+
+    if warn_count == 4:
+        expires_unix = int(datetime.now(timezone.utc).timestamp()) + WARN_TEMPBAN_SECONDS
+        await _ban_with_message_cleanup(ctx.guild, user, reason=f"Warning 4 by {ctx.author} | {reason}")
+        _register_temp_ban(ctx.guild.id, user.id, ctx.author.id, reason, expires_unix, "warn_tempban")
+        _record_mod_action(
+            {
+                "action": "warn_tempban",
+                "guild_id": ctx.guild.id,
+                "target_id": user.id,
+                "moderator_id": ctx.author.id,
+                "reason": reason,
+                "duration_seconds": WARN_TEMPBAN_SECONDS,
+                "expires_unix": expires_unix,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        await _send_mod_log(
+            ctx.guild,
+            action_name="Warning 4 - 3 Day Temp Ban",
+            moderator_id=ctx.author.id,
+            target_id=user.id,
+            reason=reason,
+            duration_seconds=WARN_TEMPBAN_SECONDS,
+            expires_unix=expires_unix,
+        )
+        return f"Warning 4: 3 day temp ban applied until <t:{expires_unix}:R>."
+
+    if warn_count >= 5:
+        await _ban_with_message_cleanup(ctx.guild, user, reason=f"Warning 5 by {ctx.author} | {reason}")
+        _record_mod_action(
+            {
+                "action": "warn_ban",
+                "guild_id": ctx.guild.id,
+                "target_id": user.id,
+                "moderator_id": ctx.author.id,
+                "reason": reason,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        await _send_mod_log(
+            ctx.guild,
+            action_name="Warning 5 - Ban",
+            moderator_id=ctx.author.id,
+            target_id=user.id,
+            reason=reason,
+        )
+        return "Warning 5: user banned."
+
+    return "Warning applied."
 
 
 async def _ban_with_message_cleanup(guild: discord.Guild, user_obj: discord.abc.Snowflake, *, reason: str) -> None:
@@ -3585,6 +3788,8 @@ async def help_command(ctx: commands.Context):
              "> -sreportremove <user id/user mention> <ID>- Remove a report for a user.\n"
              "> -vouchlist <user id/user mention> - Show vouches and reports for a user.\n"
              "> *Moderation Commands:*\n"
+             "> -warn <user id/user mention> <reason> - Warns a user and applies the warning ladder.\n"
+             "> -unwarn <warning_id> - Removes a warning by ID.\n"
              "> -permban <user id/user mention> <reason> - Permantly bans a user.\n"
              "> -tempban <user id/user mention> <duration> <reason> - Temporarily bans a user.\n"
              "> -timeout <user id/user mention> <duration> <reason> - Temporarily timeouts a user.\n"
@@ -3623,9 +3828,9 @@ async def help_command(ctx: commands.Context):
             "-supershop - Show the supershop which is Booster/Premium Only.\n"
             "-addtosshop <Item> <Price> - Add an item to the supershop (Booster/Premium Only) Sellers Only Command.\n"
             "-addtoshop <Item> <Price> - Add an item to the shop (Sellers Only Command).\n"
+            "-auction <Item> <Starting Price> <Time_1d_1m_1s> - Start an auction in the auction channel.\n"
             "-removeseeds <User> <Number> - Remove seeds from a user (Head Sellers Only Command).\n"
             "-addseeds <User> <Number> - Add seeds to a user (Head Sellers Only Command).\n"
-            "-auction <Item> <Starting Price> <Time_1d_1m_1s> - Start an auction in the auction channel.\n"
             "-seedclaimwipe all/user - Wipe all seed claims or a specific user (Owner, Co-owner ITT only command).\n"
             )
         )
@@ -4234,6 +4439,109 @@ async def predict(ctx: commands.Context, *, fruit_name: str):
         await ctx.send(embed=embed)
         return
     await ctx.send(error_message or "```⚠️ Command Failed ```\n-# Could not build a prediction right now.")
+
+
+@bot.command(name="warn")
+async def warn(ctx: commands.Context, user: discord.Member, *, reason: str):
+    if ctx.guild is None:
+        await ctx.send("This command can only be used in a server.")
+        return
+    if not _has_mod_command_role(ctx.author if isinstance(ctx.author, discord.Member) else None):
+        await ctx.send(f"```🔒 Command locked ```\n-# You are missing the required rank/role to use this command.")
+        return
+    if user.id == ctx.author.id:
+        await ctx.send("```⚠️ Command Failed ```\n-# You cannot warn yourself.")
+        return
+    if user.id == bot.user.id:
+        await ctx.send("```⚠️ Command Failed ```\n-# You cannot warn the bot.")
+        return
+    if not _can_moderate_target(ctx.author, user):
+        await ctx.send("```⚠️ Command Failed ```\n-# You cannot moderate a member with an equal or higher role.")
+        return
+
+    clean_reason = reason.strip()
+    if not clean_reason:
+        await ctx.send("Usage: -warn <@user> <Reason>")
+        return
+
+    warning = _register_warning(ctx.guild.id, user.id, ctx.author.id, clean_reason)
+    warning_data = _load_mod_data()
+    active_warnings = _get_active_warning_rows(warning_data, ctx.guild.id, user.id)
+    warn_count = len(active_warnings)
+
+    try:
+        ladder_message = await _apply_warn_ladder_action(ctx, user, clean_reason, warn_count)
+    except Exception as exc:
+        ladder_message = f"Warning {warn_count}: escalation failed: {exc}"
+
+    _record_mod_action(
+        {
+            "action": "warn",
+            "warn_id": int(warning["warn_id"]),
+            "guild_id": ctx.guild.id,
+            "target_id": user.id,
+            "moderator_id": ctx.author.id,
+            "reason": clean_reason,
+            "warning_count": warn_count,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    await _send_mod_log(
+        ctx.guild,
+        action_name=f"Warning {warn_count}",
+        moderator_id=ctx.author.id,
+        target_id=user.id,
+        reason=clean_reason,
+    )
+    await ctx.send(
+        f"You were warned for {clean_reason}. Warning `{warn_count}`. {ladder_message} Warning ID: `{warning['warn_id']}`."
+    )
+
+
+@bot.command(name="unwarn")
+async def unwarn(ctx: commands.Context, warn_id: int):
+    if ctx.guild is None:
+        await ctx.send("This command can only be used in a server.")
+        return
+    if not _has_mod_command_role(ctx.author if isinstance(ctx.author, discord.Member) else None):
+        await ctx.send(f"```🔒 Command locked ```\n-# You are missing the required rank/role to use this command.")
+        return
+
+    warning = _resolve_warning_by_id(warn_id)
+    if warning is None or int(warning.get("guild_id", 0) or 0) != ctx.guild.id:
+        await ctx.send(f"```⚠️ Command Failed ```\n-# Could not find warning ID `{warn_id}`.")
+        return
+
+    if not bool(warning.get("active", True)):
+        await ctx.send(f"```⚠️ Command Failed ```\n-# Warning ID `{warn_id}` has already been removed.")
+        return
+
+    target_id = int(warning.get("user_id", 0) or 0)
+    removed = _deactivate_warning(warn_id)
+    if removed is None:
+        await ctx.send(f"```⚠️ Command Failed ```\n-# Could not remove warning ID `{warn_id}`.")
+        return
+
+    remaining = len(_get_active_warning_rows(_load_mod_data(), ctx.guild.id, target_id))
+    _record_mod_action(
+        {
+            "action": "unwarn",
+            "warn_id": int(warn_id),
+            "guild_id": ctx.guild.id,
+            "target_id": target_id,
+            "moderator_id": ctx.author.id,
+            "reason": str(warning.get("reason", "")),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    await _send_mod_log(
+        ctx.guild,
+        action_name="Remove Warning",
+        moderator_id=ctx.author.id,
+        target_id=target_id,
+        reason=f"Removed warning {warn_id}: {warning.get('reason', '')}",
+    )
+    await ctx.send(f"Removed warning ID `{warn_id}` from <@{target_id}>. Active warnings remaining: `{remaining}`.")
 
 
 @bot.command(name="tempban")
@@ -4857,5 +5165,4 @@ async def sreportremove(ctx: commands.Context, scam_id: int):
 
 if __name__ == "__main__":
     bot.run(TOKEN)
-
 
