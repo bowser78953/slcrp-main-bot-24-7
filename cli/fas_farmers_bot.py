@@ -3620,10 +3620,13 @@ async def syncslash(ctx: commands.Context):
 
 
 if app_commands is not None:
-    quarantine_group = app_commands.Group(name="quarantine", description="Quarantine setup and tools")
+    quarantine_group = app_commands.Group(
+        name="quarantine",
+        description="Quarantine setup and tools",
+        guild_ids=[TARGET_GUILD_ID],
+    )
 
     @quarantine_group.command(name="setup", description="Configure quarantine role/channel lockdown")
-    @app_commands.guilds(discord.Object(id=TARGET_GUILD_ID))
     @app_commands.describe(
         quarantined_role="Role to use for quarantined users",
         quarantined_channel="Only channel quarantined users can see",
