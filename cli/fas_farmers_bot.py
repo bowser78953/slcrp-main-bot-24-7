@@ -83,6 +83,7 @@ SCAM_REPORT_CHANNEL_ID = 1525702427263631411
 RECRUITMENT_AD_CHANNEL_ID = 1525257278939205804
 AUCTION_CHANNEL_ID = 1526641481086140618
 AUCTION_ROLE_PING_ID = 1528497373741842452
+AUCTION_SETTLEMENT_CHANNEL_ID = 1528828221028827317
 SEED_SHOP_CHANNEL_ID = 1525702441608282113
 TARGET_GUILD_ID = 1521774456274686044
 SEED_SHOP_MANAGER_ROLE_ID = 1526225610022719589
@@ -2176,14 +2177,13 @@ def _build_auction_embed(auction: dict) -> discord.Embed:
 
     current_winner = f"<@{current_winner_id}>" if current_winner_id > 0 else "No bids yet"
     description = (
-        "# <:Auction:1528502578109747290> New Acution Started!\n"
-        f"<:host:1525990871777017906> Host: <@{host_id}>\n\n"
-        f"<:ID:1528825276065124492> Auction ID: `{auction_id}`\n"
-        f"Item: **{item_name}**\n\n"
-        f"<:Winners:1525734637383450634> Current Winner: {current_winner}\n"
-        f"<:Seeds:1528502611580555364> Current Highest Bid: `{current_highest_bid}`\n\n"
-        "Action - In-complete.\n\n"
-        "💰Bid format: `-bid <Auction ID> <@User> <Ammount of Seeds>`"
+        "# <:Auction:1528502578109747290> New Acution Started!\n\n"
+        f"*<:host:1525990871777017906> Host: <@{host_id}>*\n\n"
+        f"<:ID:1528825276065124492> Auction ID: `{auction_id}`\n\n"
+        f"## Item up for auction is {item_name}\n\n"
+        f"*<:Winners:1525734637383450634> Current Winner: {current_winner}*\n\n"
+        f"*<:Seeds:1528502611580555364> Current Highest Bid: {current_highest_bid}*\n\n"
+        "*How to bid: Use -bid <Auction ID> <@User> <Ammount of Seeds>*"
     )
 
     embed = discord.Embed(
@@ -2226,10 +2226,48 @@ async def _end_auction_later(message_id: int) -> None:
             await message.edit(embed=_build_auction_embed(auction), view=None)
             winner_id = int(auction.get("current_winner_id", 0) or 0)
             current_highest_bid = int(auction.get("current_highest_bid", 0) or 0)
+            host_id = int(auction.get("host_user_id", 0) or 0)
+            auction_id = int(auction.get("auction_id", 0) or 0)
             if winner_id > 0:
+                bank_data = _load_seed_bank()
+                winner_balance = _get_seed_balance(bank_data, winner_id)
+                if winner_balance < current_highest_bid:
+                    await channel.send(
+                        f"Auction `{auction_id}` winner <@{winner_id}> no longer has enough seeds (`{winner_balance}`/`{current_highest_bid}`). No seed transfer was made."
+                    )
+                    return
+
+                _set_seed_balance(bank_data, winner_id, winner_balance - current_highest_bid)
+                host_balance = _get_seed_balance(bank_data, host_id)
+                _set_seed_balance(bank_data, host_id, host_balance + current_highest_bid)
+                _save_seed_bank(bank_data)
+                await _sync_seed_leader_roles(channel.guild, bank_data)
+
                 await channel.send(
-                    f"<@{winner_id}> won the auction for **{auction.get('item_name', 'Unknown Item')}** with `{current_highest_bid}` seeds."
+                    f"<@{winner_id}> won the auction for **{auction.get('item_name', 'Unknown Item')}** with `{current_highest_bid}` seeds. "
+                    f"Transferred `{current_highest_bid}` seeds to <@{host_id}>."
                 )
+
+                settlement_channel = bot.get_channel(AUCTION_SETTLEMENT_CHANNEL_ID)
+                if settlement_channel is None:
+                    try:
+                        settlement_channel = await bot.fetch_channel(AUCTION_SETTLEMENT_CHANNEL_ID)
+                    except Exception:
+                        settlement_channel = None
+
+                if isinstance(settlement_channel, discord.TextChannel):
+                    settlement_embed = discord.Embed(
+                        description=(
+                            "# Your Item has been bought!\n"
+                            f"<@{winner_id}> has bought your {auction.get('item_name', 'item')} (Auction ID `{auction_id}`) please send them the item!\n\n"
+                            f"Buyer Discord: <@{winner_id}>\n\n"
+                            "Action - In-complete.\n\n"
+                            f"💰Seeds transferred to host: `{current_highest_bid}`"
+                        ),
+                        color=discord.Color.green(),
+                    )
+                    host_ping = f"<@{host_id}>" if host_id > 0 else None
+                    await settlement_channel.send(content=host_ping, embed=settlement_embed)
             else:
                 await channel.send(f"The auction for **{auction.get('item_name', 'Unknown Item')}** ended with no bids.")
         except Exception:
@@ -5218,4 +5256,5 @@ async def sreportremove(ctx: commands.Context, scam_id: int):
 
 if __name__ == "__main__":
     bot.run(TOKEN)
+
 
