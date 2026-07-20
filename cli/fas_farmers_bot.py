@@ -2176,6 +2176,7 @@ def _build_auction_embed(auction: dict) -> discord.Embed:
     ended = bool(auction.get("ended"))
 
     current_winner = f"<@{current_winner_id}>" if current_winner_id > 0 else "No bids yet"
+    time_remaining = f"<t:{end_ts}:R>" if end_ts > 0 else "Unknown"
     description = (
         "# <:Auction:1528502578109747290> New Acution Started!\n\n"
         f"*<:host:1525990871777017906> Host: <@{host_id}>*\n\n"
@@ -2183,15 +2184,15 @@ def _build_auction_embed(auction: dict) -> discord.Embed:
         f"## Item up for auction is {item_name}\n\n"
         f"*<:Winners:1525734637383450634> Current Winner: {current_winner}*\n\n"
         f"*<:Seeds:1528502611580555364> Current Highest Bid: {current_highest_bid}*\n\n"
-        "*How to bid: Use -bid <Auction ID> <@User> <Ammount of Seeds>*"
+        "*How to bid: Use -bid <Auction ID> <@User> <Ammount of Seeds>*\n"
+        "*Bid in this channel: https://discord.com/channels/1521774456274686044/1528824723482476587*\n\n"
+        f"-# Time Remaining: {time_remaining}"
     )
 
     embed = discord.Embed(
         description=description,
         color=discord.Color.dark_gold() if not ended else discord.Color.dark_gray(),
     )
-    if end_ts > 0:
-        embed.set_footer(text=f"Ends <t:{end_ts}:F> | <t:{end_ts}:R>")
     return embed
 
 
@@ -5256,5 +5257,4 @@ async def sreportremove(ctx: commands.Context, scam_id: int):
 
 if __name__ == "__main__":
     bot.run(TOKEN)
-
 
