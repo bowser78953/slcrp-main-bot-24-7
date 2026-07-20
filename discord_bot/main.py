@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 
-try:
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from discord_bot.bot.client import ConfigError, FarmersDiscordBot, load_all_config
+else:
     from .bot.client import ConfigError, FarmersDiscordBot, load_all_config
-except ImportError:
-    from bot.client import ConfigError, FarmersDiscordBot, load_all_config
 
 
 def main() -> None:
