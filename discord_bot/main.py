@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from bot.client import ConfigError, FarmersDiscordBot, load_all_config
+try:
+    from .bot.client import ConfigError, FarmersDiscordBot, load_all_config
+except ImportError:
+    from bot.client import ConfigError, FarmersDiscordBot, load_all_config
 
 
 def main() -> None:
