@@ -1,0 +1,22 @@
+{
+  "help": {
+    "description": "Show all commands",
+    "response_key": "_help",
+    "aliases": ["h", "commands"]
+  },
+  "ping": {
+    "description": "Bot replies with pong",
+    "response_key": "pong_text",
+    "aliases": []
+  },
+  "rules": {
+    "description": "Show server rules message",
+    "response_key": "rules_text",
+    "aliases": ["rule"]
+  },
+  "farm": {
+    "description": "Show your farming checklist",
+    "response_key": "farm_checklist",
+    "aliases": ["checklist"]
+  }
+}

@@ -1,9 +1,0 @@
-py-cord==2.7.0
-python-dotenv==1.0.0
-PyNaCl==1.6.2
-aiohttp==3.9.1
-redis==5.0.8
-yt-dlp
-imageio-ffmpeg
-fastapi==0.115.0
-uvicorn==0.30.6

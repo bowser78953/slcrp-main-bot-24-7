@@ -1,0 +1,9 @@
+{
+  "token": "PUT_YOUR_DISCORD_BOT_TOKEN_HERE",
+  "prefix": "!",
+  "message_content_intent": true,
+  "sync_slash_on_startup": true,
+  "sync_slash_on_change": true,
+  "activity_type": "playing",
+  "activity_text": "Type !help"
+}

@@ -1,6 +1,0 @@
-# One trigger per line. Lines starting with # are ignored.
-# Add single words or full phrases below.
-
-fuck
-shit
-bitch
