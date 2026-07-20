@@ -1,1 +1,7 @@
 -r discord_bot/requirements.txt
+python-dotenv==1.0.0
+PyNaCl==1.6.2
+aiohttp==3.9.1
+redis==5.0.8
+yt-dlp
+imageio-ffmpeg
