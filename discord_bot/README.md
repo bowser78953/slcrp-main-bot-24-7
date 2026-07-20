@@ -10,8 +10,10 @@ It supports both prefix commands and slash commands generated from JSON, with au
 - `bot/handlers.py` - Message command handling.
 - `bot/json_store.py` - JSON load/save helper.
 - `config/settings.json` - Bot token, prefix, presence settings.
+- `config/catagorys.json` - Category names used by the `reload` command.
 - `config/commands.json` - Command names, aliases, and response mapping.
 - `data/responses.json` - Response text used by commands.
+- `commands/*.json` - Optional one-file-per-command JSON (example: `commands/giveaway.json`).
 - `requirements.txt` - Python package requirements.
 
 ## Setup
@@ -24,6 +26,16 @@ It supports both prefix commands and slash commands generated from JSON, with au
 4. In Discord Developer Portal, enable **Message Content Intent** for your bot.
 5. Run:
    - `python main.py`
+
+## Render
+
+Use a Render worker service for this bot.
+
+- Build command: `pip install -r discord_bot/requirements.txt`
+- Start command: `python discord_bot/main.py`
+- Secret env var: `DISCORD_BOT_TOKEN`
+
+The repo root includes `render.yaml`, so Render can import the service settings automatically.
 
 ## Slash Commands
 
@@ -54,4 +66,54 @@ Example response entry:
 
 ```json
 "hello_text": "Hello there!"
+```
+
+## One File Per Command (giveaway.json style)
+
+You can create command files inside `commands/`.
+Each file can define a single command and response.
+
+Example `commands/giveaway.json`:
+
+```json
+{
+   "name": "giveaway",
+   "description": "Show giveaway info",
+   "aliases": ["gaw", "give"],
+   "response": "Giveaway is active. Use #giveaway-entry to join."
+}
+```
+
+Notes:
+- The bot auto-loads all `commands/*.json` files.
+- These commands also become slash commands.
+- If a command name exists in both `config/commands.json` and `commands/*.json`, the file in `commands/` wins.
+
+## Reload By Catagory
+
+Use the prefix command `-reload <catagory>` to force the bot to reload JSON files.
+
+Example:
+
+```text
+-reload giveaway
+```
+
+The category names come from `config/catagorys.json`.
+
+Example `config/catagorys.json`:
+
+```json
+{
+   "commands": [
+      "config/commands.json",
+      "data/responses.json"
+   ],
+   "giveaway": [
+      "commands/giveaway.json"
+   ],
+   "settings": [
+      "config/settings.json"
+   ]
+}
 ```

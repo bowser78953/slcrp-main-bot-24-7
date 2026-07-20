@@ -9,7 +9,7 @@ def main() -> None:
     base_path = Path(__file__).resolve().parent
 
     try:
-        settings, commands, responses = load_all_config(base_path)
+        settings, _, _, _ = load_all_config(base_path)
     except FileNotFoundError as exc:
         missing = exc.filename or "Unknown file"
         raise SystemExit(f"Missing required JSON file: {missing}") from exc
