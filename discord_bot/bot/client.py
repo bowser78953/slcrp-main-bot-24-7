@@ -180,6 +180,7 @@ class FarmersDiscordBot(discord.Client):
         intents.message_content = bool(settings.get("message_content_intent", True))
         super().__init__(intents=intents)
 
+        self.tree = app_commands.CommandTree(self)
         self.settings = settings
         self.handler = MessageHandler(settings=settings, commands=commands, responses=responses)
         self.categories = self.config_reloader.categories
