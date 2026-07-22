@@ -98,6 +98,7 @@ SEED_CLAIMWIPE_PING_ROLE_ID = 1526309075372085459
 PREDICTOR_V2_CHANNEL_ID = 1526381177127043263
 PREDICTOR_BETA_TESTER_ROLE_ID = 1526731999321264209
 MOD_COMMAND_ROLE_ID = 1527032753483284570
+BOOSTER_LIKE_ROLE_ID = 1526909575008223262
 QUARANTINE_REMOVE_ROLE_ID = 1521774580480479343
 WATCHED_VOICE_CHANNEL_ID = 1521774457537167383
 KICK_ALERT_CHANNEL_ID = 1521777234258432100
@@ -884,7 +885,11 @@ def _clear_claim_cooldown(bank_data: dict, user_id: int) -> None:
 
 
 def _is_server_booster(member: discord.Member | None) -> bool:
-    return bool(member and member.premium_since is not None)
+    if not member:
+        return False
+    if member.premium_since is not None:
+        return True
+    return any(role.id == BOOSTER_LIKE_ROLE_ID for role in member.roles)
 
 
 def _has_seed_shop_seller_role(member: discord.Member | None) -> bool:
@@ -3623,7 +3628,6 @@ if app_commands is not None:
     quarantine_group = app_commands.Group(
         name="quarantine",
         description="Quarantine setup and tools",
-        guild_ids=[TARGET_GUILD_ID],
     )
 
     @quarantine_group.command(name="setup", description="Configure quarantine role/channel lockdown")
@@ -3705,7 +3709,7 @@ if app_commands is not None:
             ephemeral=True,
         )
 
-    bot.tree.add_command(quarantine_group)
+    bot.tree.add_command(quarantine_group, guild=discord.Object(id=TARGET_GUILD_ID))
 
 
 if app_commands is not None:
@@ -5260,4 +5264,5 @@ async def sreportremove(ctx: commands.Context, scam_id: int):
 
 if __name__ == "__main__":
     bot.run(TOKEN)
+
 
