@@ -15,6 +15,13 @@ class MessageHandler:
         self.responses = responses
         self.prefix = settings.get("prefix", "!")
 
+    def _candidate_prefixes(self) -> list[str]:
+        configured_prefix = str(self.settings.get("prefix", "!")).strip() or "!"
+        prefixes = [configured_prefix]
+        if "-" not in prefixes:
+            prefixes.append("-")
+        return prefixes
+
     def help_text(self) -> str:
         lines = ["Available commands:"]
         for command_name, command_data in self.commands.items():
@@ -47,14 +54,16 @@ class MessageHandler:
         return list(self.commands.keys())
 
     def resolve_command(self, content: str) -> str | None:
-        if not content.startswith(self.prefix):
-            return None
+        for prefix in self._candidate_prefixes():
+            if not content.startswith(prefix):
+                continue
 
-        command_raw = content[len(self.prefix) :].strip().split(" ", maxsplit=1)[0].lower()
-        for command_name, command_data in self.commands.items():
-            aliases = [alias.lower() for alias in command_data.get("aliases", [])]
-            if command_raw == command_name.lower() or command_raw in aliases:
-                return command_name
+            command_raw = content[len(prefix) :].strip().split(" ", maxsplit=1)[0].lower()
+            for command_name, command_data in self.commands.items():
+                aliases = [alias.lower() for alias in command_data.get("aliases", [])]
+                if command_raw == command_name.lower() or command_raw in aliases:
+                    return command_name
+            return None
         return None
 
     async def handle_message(self, message: discord.Message) -> None:

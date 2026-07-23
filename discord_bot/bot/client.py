@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import random
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -184,6 +187,140 @@ class FarmersDiscordBot(discord.Client):
         self.settings = settings
         self.handler = MessageHandler(settings=settings, commands=commands, responses=responses)
         self.categories = self.config_reloader.categories
+        self.giveaways: dict[int, dict[str, Any]] = {}
+        self.giveaway_ping_roles: dict[int, int] = {}
+
+    def _parse_duration_to_seconds(self, duration_text: str) -> int:
+        total = 0
+        for part in str(duration_text or "").split("_"):
+            part = part.strip().lower()
+            if not part:
+                continue
+            match = __import__("re").fullmatch(r"(\d+)([dhms])", part)
+            if not match:
+                raise ValueError("Invalid duration format")
+            value = int(match.group(1))
+            unit = match.group(2)
+            if unit == "d":
+                total += value * 86400
+            elif unit == "h":
+                total += value * 3600
+            elif unit == "m":
+                total += value * 60
+            elif unit == "s":
+                total += value
+        if total <= 0:
+            raise ValueError("Duration must be greater than 0")
+        return total
+
+    def _build_giveaway_embed(self, giveaway: dict[str, Any], guild: discord.Guild | None) -> discord.Embed:
+        prize = str(giveaway.get("prize", "Giveaway"))
+        description = str(giveaway.get("description", ""))
+        ended = bool(giveaway.get("ended"))
+        prize_display = f"{prize} - Ended" if ended else prize
+        entries = list(giveaway.get("entries", set()))
+        embed = discord.Embed(
+            description=f"## {prize_display}\n{description}",
+            color=discord.Color.red() if ended else discord.Color.green(),
+        )
+        embed.add_field(name="<:Winner:1529950654800334968> Winners", value=str(int(giveaway.get("winner_count", 1) or 1)), inline=True)
+        embed.add_field(name="<:Entrees:1529950712677797978> Entrees", value=str(len(entries)), inline=True)
+        embed.add_field(name="<:Time:1529950779203387523> Time", value=f"<t:{int(giveaway.get('end_ts', 0) or 0)}:R>", inline=True)
+
+        host_user_id = int(giveaway.get("host_user_id", 0) or 0)
+        if host_user_id > 0:
+            embed.add_field(name="<:Host:1529950982056710225> Host", value=f"<@{host_user_id}>", inline=False)
+        if guild and guild.icon:
+            embed.set_thumbnail(url=guild.icon.url)
+        embed.set_footer(text=f"ID: {int(giveaway.get('giveaway_id', 0) or 0)}")
+        return embed
+
+    def _build_giveaway_entry_embed(self, giveaway: dict[str, Any], guild: discord.Guild | None) -> discord.Embed:
+        entries = sorted(int(user_id) for user_id in giveaway.get("entries", set()))
+        lines = [f"{index}. <@{user_id}>" for index, user_id in enumerate(entries[:25], start=1)]
+        description = "\n".join(lines) if lines else "No entries yet."
+        embed = discord.Embed(
+            description=description,
+            color=discord.Color.green(),
+        )
+        embed.set_footer(text=f"This is the entree list from {int(giveaway.get('giveaway_id', 0) or 0)}")
+        if guild and guild.icon:
+            embed.set_thumbnail(url=guild.icon.url)
+        return embed
+
+    async def _finish_giveaway(self, giveaway_id: int) -> None:
+        giveaway = self.giveaways.get(giveaway_id)
+        if not giveaway or giveaway.get("ended"):
+            return
+
+        wait_for = max(0, int(giveaway.get("end_ts", 0) or 0) - int(datetime.now(timezone.utc).timestamp()))
+        await asyncio.sleep(wait_for)
+
+        giveaway = self.giveaways.get(giveaway_id)
+        if not giveaway or giveaway.get("ended"):
+            return
+
+        giveaway["ended"] = True
+        guild = self.get_guild(int(giveaway.get("guild_id", 0) or 0)) if self.get_guild(int(giveaway.get("guild_id", 0) or 0)) else None
+        channel = self.get_channel(int(giveaway.get("channel_id", 0) or 0))
+        if channel is None:
+            try:
+                channel = await self.fetch_channel(int(giveaway.get("channel_id", 0) or 0))
+            except Exception:
+                channel = None
+        if not isinstance(channel, discord.TextChannel):
+            return
+
+        message = None
+        if giveaway.get("message_id") is not None:
+            try:
+                message = await channel.fetch_message(int(giveaway.get("message_id", 0) or 0))
+            except Exception:
+                message = None
+        if message is not None:
+            try:
+                await message.edit(embed=self._build_giveaway_embed(giveaway, guild))
+            except Exception:
+                pass
+
+        entries = list(giveaway.get("entries", set()))
+        if not entries:
+            await channel.send(f"🎉 Giveaway ended for **{giveaway.get('prize', 'Giveaway')}** with no entries.")
+            return
+
+        winner_count = min(int(giveaway.get("winner_count", 1) or 1), len(entries))
+        winners = random.sample(entries, k=winner_count)
+        winner_mentions = ", ".join(f"<@{winner_id}>" for winner_id in winners)
+        await channel.send(f"<:Tada:1529950839479865394> {winner_mentions} has won **{giveaway.get('prize', 'Giveaway')}**!")
+
+    async def _create_giveaway(self, *, channel: discord.abc.Messageable, guild: discord.Guild | None, host_user_id: int, prize: str, description: str, time_text: str, winner_count: int, ping_role_id: int | None) -> int:
+        duration_seconds = self._parse_duration_to_seconds(time_text)
+        now_ts = int(datetime.now(timezone.utc).timestamp())
+        giveaway_id = int(now_ts * 1000)
+        giveaway = {
+            "giveaway_id": giveaway_id,
+            "prize": prize,
+            "description": description,
+            "end_ts": now_ts + duration_seconds,
+            "winner_count": int(winner_count),
+            "entries": set(),
+            "ended": False,
+            "channel_id": getattr(channel, "id", None),
+            "message_id": None,
+            "host_user_id": int(host_user_id),
+            "guild_id": getattr(guild, "id", None),
+            "ping_role_id": int(ping_role_id) if ping_role_id else None,
+        }
+        self.giveaways[giveaway_id] = giveaway
+        content = f"<@&{ping_role_id}>" if ping_role_id else None
+        message = await channel.send(
+            content=content,
+            embed=self._build_giveaway_embed(giveaway, guild),
+            allowed_mentions=discord.AllowedMentions(roles=True),
+        )
+        giveaway["message_id"] = message.id
+        asyncio.create_task(self._finish_giveaway(giveaway_id))
+        return giveaway_id
 
     async def setup_hook(self) -> None:
         await self._register_slash_commands()
@@ -201,6 +338,8 @@ class FarmersDiscordBot(discord.Client):
 
         used_names: set[str] = set()
         for command_name in self.handler.command_names():
+            if command_name in {"giveaway", "gwlist", "forceend"}:
+                continue
             slash_name = self._safe_slash_name(command_name)
             if not slash_name or slash_name in used_names:
                 continue
@@ -217,6 +356,74 @@ class FarmersDiscordBot(discord.Client):
                 await interaction.response.send_message("No response is configured for this command.", ephemeral=True)
 
             self.tree.add_command(app_commands.Command(name=slash_name, description=description, callback=callback))
+
+        await self._register_giveaway_slash_commands()
+
+    async def _register_giveaway_slash_commands(self) -> None:
+        @self.tree.command(name="giveaway", description="Create or configure a giveaway")
+        @app_commands.describe(
+            action="Choose ping or create",
+            prize="Prize to give away",
+            description="Giveaway description",
+            time="Duration like 1d_1h_1m_1s",
+            winners="How many winners",
+            role="Role to ping for the giveaway",
+        )
+        @app_commands.choices(action=[
+            app_commands.Choice(name="ping", value="ping"),
+            app_commands.Choice(name="create", value="create"),
+        ])
+        async def giveaway_command(
+            interaction: discord.Interaction,
+            action: str = "create",
+            prize: str | None = None,
+            description: str | None = None,
+            time: str | None = None,
+            winners: int | None = None,
+            role: discord.Role | None = None,
+        ) -> None:
+            if interaction.guild is None:
+                await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+                return
+            if action.lower() == "ping":
+                if role is None:
+                    await interaction.response.send_message("Please provide a role to ping.", ephemeral=True)
+                    return
+                self.giveaway_ping_roles[interaction.guild.id] = role.id
+                await interaction.response.send_message(f"Giveaway ping role set to {role.mention}.", ephemeral=True)
+                return
+
+            if not prize or not description or not time or winners is None:
+                await interaction.response.send_message("Usage: /giveaway create prize:... description:... time:... winners:...", ephemeral=True)
+                return
+
+            if winners <= 0:
+                await interaction.response.send_message("Winners must be at least 1.", ephemeral=True)
+                return
+
+            selected_role_id = None
+            if role is not None:
+                selected_role_id = role.id
+            else:
+                selected_role_id = self.giveaway_ping_roles.get(interaction.guild.id)
+
+            await interaction.response.defer(ephemeral=True)
+            try:
+                giveaway_id = await self._create_giveaway(
+                    channel=interaction.channel,
+                    guild=interaction.guild,
+                    host_user_id=interaction.user.id,
+                    prize=prize,
+                    description=description,
+                    time_text=time,
+                    winner_count=int(winners),
+                    ping_role_id=selected_role_id,
+                )
+            except Exception as exc:
+                await interaction.followup.send(f"Could not create giveaway: {exc}", ephemeral=True)
+                return
+
+            await interaction.followup.send(f"Giveaway created with ID `{giveaway_id}`.", ephemeral=True)
 
     async def reload_json_if_needed(self) -> None:
         try:
@@ -266,9 +473,15 @@ class FarmersDiscordBot(discord.Client):
         return True, command_schema_changed
 
     async def handle_reload_command(self, message: discord.Message) -> bool:
-        prefix = self.settings.get("prefix", "!")
         content = message.content.strip()
-        if not content.lower().startswith(f"{prefix}reload"):
+        normalized_content = content.lower()
+        prefix = None
+        for candidate_prefix in [str(self.settings.get("prefix", "!")).strip() or "!", "-"]:
+            if normalized_content.startswith(f"{candidate_prefix}reload"):
+                prefix = candidate_prefix
+                break
+
+        if prefix is None:
             return False
 
         parts = content.split(maxsplit=1)
@@ -294,8 +507,12 @@ class FarmersDiscordBot(discord.Client):
             await message.channel.send(f"Reload failed: {exc}")
             return True
 
+        await self._register_slash_commands()
+        if self.settings.get("sync_slash_on_change", True):
+            await self.tree.sync()
+
         file_list = ", ".join(category_files) if category_files else "no files listed"
-        slash_text = " and slash commands synced" if command_schema_changed else ""
+        slash_text = " and slash commands synced" if command_schema_changed or requested_category.lower() in {"commands", "giveaway", "settings"} else ""
         await message.channel.send(f"Reloaded catagory `{requested_category}`: {file_list}{slash_text}")
         return True
 
@@ -320,4 +537,45 @@ class FarmersDiscordBot(discord.Client):
             return
         if await self.handle_reload_command(message):
             return
+
+        content = message.content.strip()
+        prefixes = {self.settings.get("prefix", "!"), "-"}
+        matched_prefix = next((prefix for prefix in prefixes if content.lower().startswith(f"{prefix}gwlist")), None)
+        if matched_prefix is not None:
+            parts = content.split(maxsplit=1)
+            if len(parts) < 2:
+                await message.channel.send(f"Usage: {matched_prefix}gwlist <giveaway_id>")
+                return
+            try:
+                giveaway_id = int(parts[1].strip())
+            except ValueError:
+                await message.channel.send("Giveaway ID must be a number.")
+                return
+            giveaway = self.giveaways.get(giveaway_id)
+            if giveaway is None:
+                await message.channel.send(f"Could not find a giveaway with ID `{giveaway_id}`.")
+                return
+            embed = self._build_giveaway_entry_embed(giveaway, message.guild)
+            await message.channel.send(embed=embed)
+            return
+
+        matched_prefix = next((prefix for prefix in prefixes if content.lower().startswith(f"{prefix}forceend")), None)
+        if matched_prefix is not None:
+            parts = content.split(maxsplit=1)
+            if len(parts) < 2:
+                await message.channel.send(f"Usage: {matched_prefix}forceend <giveaway_id>")
+                return
+            try:
+                giveaway_id = int(parts[1].strip())
+            except ValueError:
+                await message.channel.send("Giveaway ID must be a number.")
+                return
+            giveaway = self.giveaways.get(giveaway_id)
+            if giveaway is None:
+                await message.channel.send(f"Could not find a giveaway with ID `{giveaway_id}`.")
+                return
+            await self._finish_giveaway(giveaway_id)
+            await message.channel.send(f"Force ended giveaway `{giveaway_id}`.")
+            return
+
         await self.handler.handle_message(message)
