@@ -107,6 +107,12 @@ TICKET_PANEL_CHANNEL_ID = 1529991811085500587
 TICKET_LOG_CHANNEL_ID = 1530006660238672174
 TICKET_GENERAL_STAFF_ROLE_ID = 1529987760356593784
 TICKET_ELDER_ROLE_ID = 1521774545835659338
+VOICE_LOG_CHANNEL_ID = 1530260787980144690
+MEMBER_LEAVE_LOG_CHANNEL_ID = 1530260828035748020
+MEMBER_JOIN_LOG_CHANNEL_ID = 1530260865754992691
+MESSAGE_LOG_CHANNEL_ID = 1530260865754992691
+ROLE_LOG_CHANNEL_ID = 1530264444544876544
+CHANNEL_LOG_CHANNEL_ID = 1530264365901807626
 VOICE_KICK_AUDIT_LOOKBACK_SECONDS = 90
 VOICE_KICK_AUDIT_RETRIES = 4
 VOICE_KICK_AUDIT_RETRY_DELAY_SECONDS = 1.0
@@ -3828,6 +3834,176 @@ async def _find_voice_kick_actor(guild: discord.Guild, target_user_id: int) -> i
     return None
 
 
+async def _resolve_log_text_channel(channel_id: int) -> discord.TextChannel | None:
+    channel = bot.get_channel(int(channel_id))
+    if channel is None:
+        try:
+            channel = await bot.fetch_channel(int(channel_id))
+        except Exception:
+            channel = None
+    return channel if isinstance(channel, discord.TextChannel) else None
+
+
+def _build_voice_log_embed(member: discord.Member, *, action: str, voice_name: str) -> discord.Embed:
+    now_unix = int(datetime.now(timezone.utc).timestamp())
+    title_action = "Join" if action == "join" else "Leave"
+    action_line = f"🔊**VC Joined:** `{voice_name}`" if action == "join" else f"🔇**VC Left:** `{voice_name}`"
+    embed = discord.Embed(
+        description=(
+            f"# Voice Chat {title_action} Log\n\n"
+            f"<:User:1525990871777017906> **User:** <@{member.id}>\n\n"
+            f"<:ID:1528825276065124492> **User ID:** `{member.id}`\n\n"
+            f"{action_line}\n\n"
+            f"<:Server:1530260496115302503> **Server:** {member.guild.name}\n"
+            f"<:Time:1525734537940701266> **Time:** <t:{now_unix}:F>"
+        ),
+        color=discord.Color.green(),
+    )
+    return embed
+
+
+def _build_member_join_leave_embed(member: discord.Member, *, joined: bool) -> discord.Embed:
+    now_unix = int(datetime.now(timezone.utc).timestamp())
+    created_unix = int(member.created_at.replace(tzinfo=timezone.utc).timestamp()) if member.created_at else now_unix
+    heading = "## Member Joined" if joined else "## Member Left"
+    server_label = "Server Joined" if joined else "Server Left"
+    time_label = "Time Joined" if joined else "Time Left"
+    embed = discord.Embed(
+        description=(
+            f"{heading}\n\n"
+            f"<:User:1525990871777017906> **User:** {member.display_name}\n"
+            f"<:ID:1528825276065124492> **User ID:** `{member.id}`\n\n"
+            f"<:Text:1529995003672137868> Account Created: <t:{created_unix}:F>\n\n"
+            f"<:Server:1530260496115302503> **{server_label}:** {member.guild.name}\n\n"
+            f"<:Time:1525734537940701266> **{time_label}:** <t:{now_unix}:F>"
+        ),
+        color=discord.Color.green(),
+    )
+    embed.set_thumbnail(url=member.display_avatar.url)
+    return embed
+
+
+def _build_message_edit_log_embed(before: discord.Message, after: discord.Message) -> discord.Embed:
+    now_unix = int(datetime.now(timezone.utc).timestamp())
+    before_text = str(before.content or "[No text]")
+    if len(before_text) > 1000:
+        before_text = before_text[:997] + "..."
+    after_text = str(after.content or "[No text]")
+    if len(after_text) > 1000:
+        after_text = after_text[:997] + "..."
+    embed = discord.Embed(
+        description=(
+            "## Message Logs\n\n"
+            f"<:User:1525990871777017906> **User:** {before.author.display_name}\n"
+            f"<:ID:1528825276065124492> **User ID:** `{before.author.id}`\n\n"
+            f"<:ID:1528825276065124492> **Message ID:** `{before.id}`\n"
+            f"<:Link:1530267311557181600> **Message Link:** {before.jump_url}\n\n"
+            f"<:Text:1529995003672137868> **Before:** {before_text}\n\n"
+            f"<:Text:1529995003672137868> **After:** {after_text}\n\n"
+            f"<:Server:1530260496115302503> **Server:** {before.guild.name}\n\n"
+            f"<:Time:1525734537940701266> **Time:** <t:{now_unix}:F>"
+        ),
+        color=discord.Color.green(),
+    )
+    if before.guild and before.guild.icon:
+        embed.set_thumbnail(url=before.guild.icon.url)
+    return embed
+
+
+def _build_message_delete_log_embed(message: discord.Message) -> discord.Embed:
+    now_unix = int(datetime.now(timezone.utc).timestamp())
+    deleted_text = str(message.content or "[No text]")
+    if len(deleted_text) > 1000:
+        deleted_text = deleted_text[:997] + "..."
+
+    message_link = "Unknown"
+    if message.guild is not None:
+        message_link = f"https://discord.com/channels/{message.guild.id}/{message.channel.id}/{message.id}"
+
+    embed = discord.Embed(
+        description=(
+            "## Message Logs\n\n"
+            f"<:User:1525990871777017906> **User:** {message.author.display_name}\n"
+            f"<:ID:1528825276065124492> **User ID:** `{message.author.id}`\n\n"
+            f"<:ID:1528825276065124492> **Message ID:** `{message.id}`\n"
+            f"<:Link:1530267311557181600> **Message Link:** {message_link}\n\n"
+            f"<:Text:1529995003672137868> **Deleted Message:** {deleted_text}\n\n"
+            f"<:Server:1530260496115302503> **Server:** {message.guild.name if message.guild else 'Unknown'}\n\n"
+            f"<:Time:1525734537940701266> **Time:** <t:{now_unix}:F>"
+        ),
+        color=discord.Color.green(),
+    )
+    if message.guild and message.guild.icon:
+        embed.set_thumbnail(url=message.guild.icon.url)
+    return embed
+
+
+async def _find_recent_audit_actor(
+    guild: discord.Guild,
+    *,
+    action: discord.AuditLogAction,
+    target_id: int,
+    lookback_seconds: int = 30,
+) -> discord.abc.User | None:
+    now = datetime.now(timezone.utc)
+    try:
+        async for entry in guild.audit_logs(limit=15, action=action):
+            if entry.target is None:
+                continue
+            entry_target_id = int(getattr(entry.target, "id", 0) or 0)
+            if entry_target_id != int(target_id):
+                continue
+            created_at = getattr(entry, "created_at", None)
+            if created_at is None:
+                continue
+            if created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=timezone.utc)
+            if (now - created_at).total_seconds() > lookback_seconds:
+                continue
+            return entry.user
+    except Exception:
+        return None
+    return None
+
+
+def _color_to_hex(color: discord.Colour) -> str:
+    return f"#{int(color.value) & 0xFFFFFF:06X}"
+
+
+def _build_role_log_embed(*, guild: discord.Guild, action_text: str, body: str) -> discord.Embed:
+    now_unix = int(datetime.now(timezone.utc).timestamp())
+    embed = discord.Embed(
+        description=(
+            "# Role Log\n\n"
+            f"**Action:** {action_text}\n\n"
+            f"{body}\n\n"
+            f"<:Server:1530260496115302503> **Server:** {guild.name}\n"
+            f"<:Time:1525734537940701266> **Time:** <t:{now_unix}:F>"
+        ),
+        color=discord.Color.green(),
+    )
+    if guild.icon:
+        embed.set_thumbnail(url=guild.icon.url)
+    return embed
+
+
+def _build_channel_log_embed(*, guild: discord.Guild, action_text: str, body: str) -> discord.Embed:
+    now_unix = int(datetime.now(timezone.utc).timestamp())
+    embed = discord.Embed(
+        description=(
+            "# Channel Log\n\n"
+            f"**Action:** {action_text}\n\n"
+            f"{body}\n\n"
+            f"<:Server:1530260496115302503> **Server:** {guild.name}\n"
+            f"<:Time:1525734537940701266> **Time:** <t:{now_unix}:F>"
+        ),
+        color=discord.Color.green(),
+    )
+    if guild.icon:
+        embed.set_thumbnail(url=guild.icon.url)
+    return embed
+
+
 async def _ensure_seed_shop_live_message_exists() -> None:
     global last_live_post_ts, last_stock_signature
     config = _load_live_config()
@@ -4078,6 +4254,20 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
         return
     if member.guild is None:
         return
+
+    if BOT_MODE == "farmers":
+        try:
+            if before.channel is None and after.channel is not None:
+                voice_log_channel = await _resolve_log_text_channel(VOICE_LOG_CHANNEL_ID)
+                if voice_log_channel is not None:
+                    await voice_log_channel.send(embed=_build_voice_log_embed(member, action="join", voice_name=after.channel.name))
+            elif before.channel is not None and after.channel is None:
+                voice_log_channel = await _resolve_log_text_channel(VOICE_LOG_CHANNEL_ID)
+                if voice_log_channel is not None:
+                    await voice_log_channel.send(embed=_build_voice_log_embed(member, action="leave", voice_name=before.channel.name))
+        except Exception as exc:
+            print(f"Voice log send failed: {exc}")
+
     if int(member.id) not in VOICE_KICK_WATCH_USER_IDS:
         return
 
@@ -4118,6 +4308,264 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
         message,
         allowed_mentions=discord.AllowedMentions(everyone=True, users=True),
     )
+
+
+@bot.event
+async def on_member_join(member: discord.Member):
+    if BOT_MODE != "farmers":
+        return
+    try:
+        channel = await _resolve_log_text_channel(MEMBER_JOIN_LOG_CHANNEL_ID)
+        if channel is None:
+            return
+        await channel.send(embed=_build_member_join_leave_embed(member, joined=True))
+    except Exception as exc:
+        print(f"Member join log failed: {exc}")
+
+
+@bot.event
+async def on_member_remove(member: discord.Member):
+    if BOT_MODE != "farmers":
+        return
+    try:
+        channel = await _resolve_log_text_channel(MEMBER_LEAVE_LOG_CHANNEL_ID)
+        if channel is None:
+            return
+        await channel.send(embed=_build_member_join_leave_embed(member, joined=False))
+    except Exception as exc:
+        print(f"Member leave log failed: {exc}")
+
+
+@bot.event
+async def on_message_edit(before: discord.Message, after: discord.Message):
+    if BOT_MODE != "farmers":
+        return
+    if before.author.bot:
+        return
+    if before.guild is None:
+        return
+    if before.content == after.content:
+        return
+
+    try:
+        channel = await _resolve_log_text_channel(MESSAGE_LOG_CHANNEL_ID)
+        if channel is None:
+            return
+        await channel.send(embed=_build_message_edit_log_embed(before, after))
+    except Exception as exc:
+        print(f"Message edit log failed: {exc}")
+
+
+@bot.event
+async def on_message_delete(message: discord.Message):
+    if BOT_MODE != "farmers":
+        return
+    if message.author.bot:
+        return
+    if message.guild is None:
+        return
+
+    try:
+        channel = await _resolve_log_text_channel(MESSAGE_LOG_CHANNEL_ID)
+        if channel is None:
+            return
+        await channel.send(embed=_build_message_delete_log_embed(message))
+    except Exception as exc:
+        print(f"Message delete log failed: {exc}")
+
+
+@bot.event
+async def on_guild_role_create(role: discord.Role):
+    if BOT_MODE != "farmers":
+        return
+    guild = role.guild
+    try:
+        actor = await _find_recent_audit_actor(guild, action=discord.AuditLogAction.role_create, target_id=role.id)
+        actor_mention = actor.mention if actor else "Unknown"
+        actor_id_text = str(actor.id) if actor else "Unknown"
+        body = (
+            f"**Role Name:** {role.name}\n"
+            f"<:ID:1528825276065124492> **Role ID:** `{role.id}`\n\n"
+            f"<:User:1525990871777017906> **User:** {actor_mention}\n"
+            f"<:ID:1528825276065124492> **User ID:** `{actor_id_text}`"
+        )
+        log_channel = await _resolve_log_text_channel(ROLE_LOG_CHANNEL_ID)
+        if log_channel is not None:
+            await log_channel.send(embed=_build_role_log_embed(guild=guild, action_text="Role Created", body=body))
+    except Exception as exc:
+        print(f"Role create log failed: {exc}")
+
+
+@bot.event
+async def on_guild_role_update(before: discord.Role, after: discord.Role):
+    if BOT_MODE != "farmers":
+        return
+    guild = after.guild
+    try:
+        actor = await _find_recent_audit_actor(guild, action=discord.AuditLogAction.role_update, target_id=after.id)
+        actor_mention = actor.mention if actor else "Unknown"
+        actor_id_text = str(actor.id) if actor else "Unknown"
+        log_channel = await _resolve_log_text_channel(ROLE_LOG_CHANNEL_ID)
+        if log_channel is None:
+            return
+
+        if before.name != after.name:
+            body = (
+                f"**Previous Role Name:** {before.name}\n"
+                f"**New Role Name:** {after.name}\n"
+                f"<:ID:1528825276065124492> **Role ID:** `{after.id}`\n\n"
+                f"<:User:1525990871777017906> **User:** {actor_mention}\n"
+                f"<:ID:1528825276065124492> **User ID:** `{actor_id_text}`"
+            )
+            await log_channel.send(embed=_build_role_log_embed(guild=guild, action_text="Role Name Updated", body=body))
+
+        if before.color != after.color:
+            body = (
+                f"**Previous Role Color:** {_color_to_hex(before.color)}\n"
+                f"**New Role Color:** {_color_to_hex(after.color)}\n"
+                f"<:ID:1528825276065124492> **Role ID:** `{after.id}`\n\n"
+                f"<:User:1525990871777017906> **User:** {actor_mention}\n"
+                f"<:ID:1528825276065124492> **User ID:** `{actor_id_text}`"
+            )
+            await log_channel.send(embed=_build_role_log_embed(guild=guild, action_text="Role Color Updated", body=body))
+    except Exception as exc:
+        print(f"Role update log failed: {exc}")
+
+
+@bot.event
+async def on_guild_role_delete(role: discord.Role):
+    if BOT_MODE != "farmers":
+        return
+    guild = role.guild
+    try:
+        actor = await _find_recent_audit_actor(guild, action=discord.AuditLogAction.role_delete, target_id=role.id)
+        actor_mention = actor.mention if actor else "Unknown"
+        actor_id_text = str(actor.id) if actor else "Unknown"
+        body = (
+            f"**Role Name:** {role.name}\n"
+            f"<:ID:1528825276065124492> **Role ID:** `{role.id}`\n\n"
+            f"<:User:1525990871777017906> **User:** {actor_mention}\n"
+            f"<:ID:1528825276065124492> **User ID:** `{actor_id_text}`"
+        )
+        log_channel = await _resolve_log_text_channel(ROLE_LOG_CHANNEL_ID)
+        if log_channel is not None:
+            await log_channel.send(embed=_build_role_log_embed(guild=guild, action_text="Role Deleted", body=body))
+    except Exception as exc:
+        print(f"Role delete log failed: {exc}")
+
+
+@bot.event
+async def on_member_update(before: discord.Member, after: discord.Member):
+    if BOT_MODE != "farmers":
+        return
+    if before.roles == after.roles:
+        return
+
+    added_roles = [role for role in after.roles if role not in before.roles]
+    removed_roles = [role for role in before.roles if role not in after.roles]
+
+    try:
+        actor = await _find_recent_audit_actor(after.guild, action=discord.AuditLogAction.member_role_update, target_id=after.id)
+        actor_mention = actor.mention if actor else "Unknown"
+        actor_id_text = str(actor.id) if actor else "Unknown"
+        log_channel = await _resolve_log_text_channel(ROLE_LOG_CHANNEL_ID)
+        if log_channel is None:
+            return
+
+        for role in added_roles:
+            body = (
+                f"**Role Name:** {role.name}\n"
+                f"<:ID:1528825276065124492> **Role ID:** `{role.id}`\n\n"
+                f"<:User:1525990871777017906> **User Role Added To:** {after.mention}\n"
+                f"<:ID:1528825276065124492> **User ID:** `{after.id}`\n\n"
+                f"<:User:1525990871777017906> **User Who Added role:** {actor_mention}\n"
+                f"<:ID:1528825276065124492> **User ID:** `{actor_id_text}`"
+            )
+            await log_channel.send(embed=_build_role_log_embed(guild=after.guild, action_text="Role added to a user", body=body))
+
+        for role in removed_roles:
+            body = (
+                f"**Role Name:** {role.name}\n"
+                f"<:ID:1528825276065124492> **Role ID:** `{role.id}`\n\n"
+                f"<:User:1525990871777017906> **User Role Removed From:** {after.mention}\n"
+                f"<:ID:1528825276065124492> **User ID:** `{after.id}`\n\n"
+                f"<:User:1525990871777017906> **User Who Removed Role:** {actor_mention}\n"
+                f"<:ID:1528825276065124492> **User ID:** `{actor_id_text}`"
+            )
+            await log_channel.send(embed=_build_role_log_embed(guild=after.guild, action_text="Role Removed from a user", body=body))
+    except Exception as exc:
+        print(f"Member role update log failed: {exc}")
+
+
+@bot.event
+async def on_guild_channel_create(channel: discord.abc.GuildChannel):
+    if BOT_MODE != "farmers":
+        return
+    guild = channel.guild
+    try:
+        body = (
+            f"<:Server:1530260496115302503> **New Channel:** `{channel.name}`\n"
+            f"<:Server:1530260496115302503> **New Channel ID:** `{channel.id}`"
+        )
+        log_channel = await _resolve_log_text_channel(CHANNEL_LOG_CHANNEL_ID)
+        if log_channel is not None:
+            await log_channel.send(embed=_build_channel_log_embed(guild=guild, action_text="Channel Made", body=body))
+    except Exception as exc:
+        print(f"Channel create log failed: {exc}")
+
+
+@bot.event
+async def on_guild_channel_update(before: discord.abc.GuildChannel, after: discord.abc.GuildChannel):
+    if BOT_MODE != "farmers":
+        return
+    guild = after.guild
+    try:
+        log_channel = await _resolve_log_text_channel(CHANNEL_LOG_CHANNEL_ID)
+        if log_channel is None:
+            return
+
+        if before.name != after.name:
+            body = (
+                f"<:Server:1530260496115302503> **Channel Name:** `{before.name}`\n"
+                f"<:Server:1530260496115302503> **Channel ID:** `{after.id}`\n\n"
+                f"<:Server:1530260496115302503> **New Channel Name:** `{after.name}`\n"
+                f"<:Server:1530260496115302503> **Channel ID:** `{after.id}`"
+            )
+            await log_channel.send(embed=_build_channel_log_embed(guild=guild, action_text="Channel Updated", body=body))
+
+        before_overwrites = getattr(before, "overwrites", {}) or {}
+        after_overwrites = getattr(after, "overwrites", {}) or {}
+        if before_overwrites != after_overwrites:
+            changed_target = "Unknown"
+            changed_keys = set(before_overwrites.keys()) | set(after_overwrites.keys())
+            for key in changed_keys:
+                if before_overwrites.get(key) != after_overwrites.get(key):
+                    changed_target = getattr(key, "mention", None) or getattr(key, "name", "Unknown")
+                    break
+            body = (
+                "<:Auction:1528502578109747290> **Permison Updated:** Overwrites changed\n"
+                f"**For:** {changed_target}"
+            )
+            await log_channel.send(embed=_build_channel_log_embed(guild=guild, action_text="Channel Updated", body=body))
+    except Exception as exc:
+        print(f"Channel update log failed: {exc}")
+
+
+@bot.event
+async def on_guild_channel_delete(channel: discord.abc.GuildChannel):
+    if BOT_MODE != "farmers":
+        return
+    guild = channel.guild
+    try:
+        body = (
+            f"<:Server:1530260496115302503> **Channel Name:** `{channel.name}`\n"
+            f"<:Server:1530260496115302503> **Channel ID:** `{channel.id}`"
+        )
+        log_channel = await _resolve_log_text_channel(CHANNEL_LOG_CHANNEL_ID)
+        if log_channel is not None:
+            await log_channel.send(embed=_build_channel_log_embed(guild=guild, action_text="Channel Deleted", body=body))
+    except Exception as exc:
+        print(f"Channel delete log failed: {exc}")
 
 
 @bot.event
