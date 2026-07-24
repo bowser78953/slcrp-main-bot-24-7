@@ -3374,6 +3374,30 @@ def _build_giveaway_embed(giveaway: dict) -> discord.Embed:
     return embed
 
 
+def _build_giveaway_winner_dm_embed(*, giveaway: dict, guild: discord.Guild | None) -> discord.Embed:
+    prize = str(giveaway.get("prize", "Giveaway"))
+    giveaway_id = int(giveaway.get("giveaway_id", 0) or 0)
+    host_user_id = int(giveaway.get("host_user_id", 0) or 0)
+    host_text = f"<@{host_user_id}>" if host_user_id > 0 else "Unknown"
+
+    embed = discord.Embed(
+        title="[FAS] Farmers Giveaway Winner Notification!",
+        description=(
+            f"Congratulations! You won the giveaway for {prize}.\n\n"
+            f"Giveaway ID: {giveaway_id}\n"
+            f"Host: {host_text}\n"
+            "To claim please go to https://discord.com/channels/1521774456274686044/1529991811085500587 "
+            "Click **Make a Ticket** Then click the **Dropdown Menu**, scroll until you see **Giveaway Claim/Host**, and click it.\n\n"
+            "Congrats on winning the giveaway! <:tada:1525999768369631273> (**YOU HAVE 24 HOURS TO CLAIM YOUR PRIZE!**)!"
+        ),
+        color=discord.Color.green(),
+    )
+    if guild and guild.icon:
+        embed.set_thumbnail(url=guild.icon.url)
+    embed.set_footer(text="[FAS] Farmers Giveaway System")
+    return embed
+
+
 class GiveawayView(discord.ui.View):
     def __init__(self, giveaway_key: int):
         super().__init__(timeout=None)
@@ -3455,6 +3479,25 @@ async def _finish_giveaway(giveaway_key: int):
 
     winner_count = min(giveaway["winner_count"], len(entries))
     winners = random.sample(entries, k=winner_count)
+
+    dm_embed = _build_giveaway_winner_dm_embed(giveaway=giveaway, guild=channel.guild)
+    for winner_id in winners:
+        target_user = channel.guild.get_member(int(winner_id))
+        if target_user is None:
+            target_user = bot.get_user(int(winner_id))
+        if target_user is None:
+            try:
+                target_user = await bot.fetch_user(int(winner_id))
+            except Exception:
+                target_user = None
+        if target_user is None:
+            continue
+        try:
+            await target_user.send(embed=dm_embed)
+        except Exception:
+            # DMs can fail when disabled or blocked; giveaway should still complete.
+            pass
+
     winner_mentions = ", ".join(f"<@{winner_id}>" for winner_id in winners)
     await channel.send(f"<:tada:1525999768369631273> Congratulations {winner_mentions}, you won {giveaway['prize']}!")
 
