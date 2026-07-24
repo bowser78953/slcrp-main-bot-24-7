@@ -974,30 +974,37 @@ def _find_open_ticket_channel(guild: discord.Guild, user_id: int) -> discord.Tex
     return None
 
 
-def _build_ticket_panel_embed() -> discord.Embed:
+def _build_ticket_panel_embed(guild: discord.Guild | None = None) -> discord.Embed:
     embed = discord.Embed(
         title="[FAS] Farmers - Ticket System",
-        description=(
-            "Kindly make sure to read our complete Ticket Terms of Service below before creating a ticket.\n\n"
-            "**Valid Reason**\nOpen tickets only for real issues and include enough context so staff can help quickly.\n\n"
-            "**Swearing**\nKeep language clean and professional. Abusive wording can lead to closure and moderation action.\n\n"
-            "**Pinging**\nAvoid unnecessary staff or role pings in tickets. Use clear details instead of repeated mentions.\n\n"
-            "**One Ticket Rule**\nPlease keep one open ticket per issue. Duplicate or multi-topic tickets may be closed.\n\n"
-            "**NSFW Content**\nNSFW material is not allowed in tickets under any circumstance and can result in a ban.\n\n"
-            "**Patience**\nAllow staff reasonable time to respond. Repeated bumping slows handling and may cause closure.\n\n"
-            "**Respect Staff**\nTreat everyone respectfully during review. Harassment or hostility may end support.\n\n"
-            "**Proper Formatting**\nProvide readable, complete information so your case can be reviewed without delays.\n\n"
-            "**Time Limit**\nIf a ticket is inactive for 12+ hours, it may be closed until you are ready to continue.\n\n"
-            "**Language**\nUse English in tickets so all available staff can accurately review and respond.\n\n"
-            "**Honesty**\nShare accurate details and evidence. False or misleading claims can lead to warnings.\n\n"
-            "**Remain Calm**\nStay calm while your case is reviewed. Aggressive behavior can result in closure."
-        ),
-        color=0xF1C40F,
+        description="Kindly make sure to read our complete Ticket Terms of Service below before creating a ticket.",
+        color=0x3498DB,
     )
+
+    tos_rules = [
+        ("◉ Valid Reason", "Open tickets only for real issues and include enough context so staff can help quickly."),
+        ("◉ Swearing", "Keep language clean and professional. Abusive wording can lead to closure and moderation action."),
+        ("◉ Pinging", "Avoid unnecessary staff or role pings in tickets. Use clear details instead of repeated mentions."),
+        ("◉ One Ticket Rule", "Please keep one open ticket per issue. Duplicate or multi-topic tickets may be closed."),
+        ("◉ NSFW Content", "NSFW material is not allowed in tickets under any circumstance and can result in a ban."),
+        ("◉ Patience", "Allow staff reasonable time to respond. Repeated bumping slows handling and may cause closure."),
+        ("◉ Respect Staff", "Treat everyone respectfully during review. Harassment or hostility may end support."),
+        ("◉ Proper Formatting", "Provide readable, complete information so your case can be reviewed without delays."),
+        ("◉ Time Limit", "If a ticket is inactive for 12+ hours, it may be closed until you are ready to continue."),
+        ("◉ Language", "Use English in tickets so all available staff can accurately review and respond."),
+        ("◉ Honesty", "Share accurate details and evidence. False or misleading claims can lead to warnings."),
+        ("◉ Remain Calm", "Stay calm while your case is reviewed. Aggressive behavior can result in closure."),
+    ]
+    for rule_title, rule_text in tos_rules:
+        embed.add_field(name=rule_title, value=rule_text, inline=True)
+
+    if guild and guild.icon:
+        embed.set_thumbnail(url=guild.icon.url)
+    embed.set_footer(text="[FAS] Farmers Support System")
     return embed
 
 
-def _build_ticket_open_message(config: dict, opener: discord.abc.User, topic: str, details: str) -> tuple[str, str]:
+def _build_ticket_open_message(config: dict, opener: discord.abc.User, topic: str, details: str) -> tuple[str, discord.Embed]:
     role_mentions = [f"<@&{int(role_id)}>" for role_id in config.get("ping_roles", []) if int(role_id) > 0]
     if config.get("ping_here"):
         role_mentions.insert(0, "@here")
@@ -1005,19 +1012,19 @@ def _build_ticket_open_message(config: dict, opener: discord.abc.User, topic: st
     ping_line = " | ".join(role_mentions)
 
     opened_title = str(config.get("opened_title") or f"{config.get('label', 'Support')} Ticket Opened")
-    ticket_text = (
-        f"{opened_title}\n"
-        f"Hello, {opener.mention}\n\n"
-        "Your ticket has been opened, thank you for reaching out.\n"
-        "Someone from our team will be in touch with you shortly.\n\n"
-        "![:warning:](https://cdn.discordapp.com/emojis/1384289838144163933.webp?size=44) "
-        "**Note: all messages will be recorded and saved to our ticket transcript, do not share any sensitive information.**\n\n"
-        "<:Text:1529995003672137868> Topic\n"
-        f"`{topic}`\n\n"
-        "<:Text:1529995003672137868> Details\n"
-        f"`{details}`"
+    ticket_embed = discord.Embed(
+        title=opened_title,
+        description=(
+            f"Hello, {opener.mention}\n\n"
+            "Your ticket has been opened, thank you for reaching out.\n"
+            "Someone from our team will be in touch with you shortly.\n\n"
+            "⚠️**Note: all messages will be recorded and saved to our ticket transcript, do not share any sensitive information.**"
+        ),
+        color=0xF1C40F,
     )
-    return ping_line, ticket_text
+    ticket_embed.add_field(name="<:Text:1529995003672137868> Topic", value=f"`{topic}`", inline=False)
+    ticket_embed.add_field(name="<:Text:1529995003672137868> Details", value=f"`{details}`", inline=False)
+    return ping_line, ticket_embed
 
 
 class TicketDetailsModal(discord.ui.Modal):
@@ -1086,10 +1093,11 @@ class TicketDetailsModal(discord.ui.Modal):
 
         topic_text = str(self.topic_input.value or "").strip()[:120]
         details_text = str(self.details_input.value or "").strip()[:1800]
-        ping_line, ticket_message = _build_ticket_open_message(ticket_config, interaction.user, topic_text, details_text)
+        ping_line, ticket_embed = _build_ticket_open_message(ticket_config, interaction.user, topic_text, details_text)
 
         await channel.send(
-            f"{ping_line}\n{ticket_message}",
+            content=ping_line,
+            embed=ticket_embed,
             allowed_mentions=discord.AllowedMentions(everyone=True, users=True, roles=True),
         )
         await interaction.response.send_message(f"Your ticket has been created: {channel.mention}", ephemeral=True)
@@ -1135,7 +1143,7 @@ async def _post_ticket_support_panel() -> None:
         print(f"Ticket panel channel {TICKET_PANEL_CHANNEL_ID} not found or not a text channel.")
         return
 
-    await channel.send(embed=_build_ticket_panel_embed(), view=TicketPanelView())
+    await channel.send(embed=_build_ticket_panel_embed(channel.guild), view=TicketPanelView())
 
 
 def _has_seed_shop_seller_role(member: discord.Member | None) -> bool:
@@ -5514,5 +5522,4 @@ async def sreportremove(ctx: commands.Context, scam_id: int):
 
 if __name__ == "__main__":
     bot.run(TOKEN)
-
 
