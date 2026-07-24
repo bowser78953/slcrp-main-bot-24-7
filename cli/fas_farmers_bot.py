@@ -1171,6 +1171,25 @@ async def _post_ticket_support_panel() -> None:
         print(f"Ticket panel channel {TICKET_PANEL_CHANNEL_ID} not found or not a text channel.")
         return
 
+    # Keep a single active support panel by deleting older bot-posted panel embeds.
+    bot_user_id = int(bot.user.id) if bot.user is not None else 0
+    if bot_user_id > 0:
+        try:
+            async for old_message in channel.history(limit=100):
+                if int(getattr(old_message.author, "id", 0) or 0) != bot_user_id:
+                    continue
+                if not old_message.embeds:
+                    continue
+                first_embed = old_message.embeds[0]
+                if str(getattr(first_embed, "title", "") or "") != "[FAS] Farmers - Ticket System":
+                    continue
+                try:
+                    await old_message.delete()
+                except Exception:
+                    continue
+        except Exception as exc:
+            print(f"Ticket panel cleanup failed: {exc}")
+
     await channel.send(embed=_build_ticket_panel_embed(channel.guild), view=TicketPanelView())
 
 
@@ -4099,15 +4118,15 @@ async def on_ready():
         print(f"Failed to restore active auctions: {exc}")
     if app_commands is not None and not TREE_SYNCED:
         guild_obj = discord.Object(id=TARGET_GUILD_ID)
-        bot.tree.clear_commands(guild=guild_obj)
-        bot.tree.copy_global_to(guild=guild_obj)
-
         for attempt in range(1, 6):
             try:
-                await bot.tree.sync(guild=guild_obj)
-                await bot.tree.sync()
+                synced_guild = await bot.tree.sync(guild=guild_obj)
+                try:
+                    await bot.tree.sync()
+                except Exception as global_exc:
+                    print(f"Global slash sync skipped/failed: {global_exc}")
                 TREE_SYNCED = True
-                print(f"Slash commands synced (guild {TARGET_GUILD_ID} + global).")
+                print(f"Slash commands synced for guild {TARGET_GUILD_ID}: {len(synced_guild)} command(s).")
                 break
             except Exception as exc:
                 print(f"Slash sync attempt {attempt}/5 failed: {exc}")
@@ -4268,12 +4287,15 @@ async def syncslash(ctx: commands.Context):
     if app_commands is not None:
         guild_obj = discord.Object(id=TARGET_GUILD_ID)
         try:
-            bot.tree.clear_commands(guild=guild_obj)
-            bot.tree.copy_global_to(guild=guild_obj)
             synced_guild = await bot.tree.sync(guild=guild_obj)
-            synced_global = await bot.tree.sync()
+            global_note = ""
+            try:
+                synced_global = await bot.tree.sync()
+                global_note = f" | Global: `{len(synced_global)}`"
+            except Exception as global_exc:
+                global_note = f" | Global sync skipped/failed: `{global_exc}`"
             await ctx.send(
-                f"Slash commands synced. Guild: `{len(synced_guild)}` | Global: `{len(synced_global)}`.\n"
+                f"Slash commands synced. Guild: `{len(synced_guild)}`{global_note}.\n"
                 "Try Ctrl+R in Discord if the command list is cached."
             )
             return
