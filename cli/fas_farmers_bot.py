@@ -104,6 +104,7 @@ WATCHED_VOICE_CHANNEL_ID = 1521774457537167383
 KICK_ALERT_CHANNEL_ID = 1521777234258432100
 MOD_LOG_CHANNEL_ID = 1526953977848266872
 TICKET_PANEL_CHANNEL_ID = 1529991811085500587
+TICKET_LOG_CHANNEL_ID = 1530006660238672174
 TICKET_GENERAL_STAFF_ROLE_ID = 1529987760356593784
 TICKET_ELDER_ROLE_ID = 1521774545835659338
 VOICE_KICK_AUDIT_LOOKBACK_SECONDS = 90
@@ -421,6 +422,9 @@ NON_SEED_COMMAND_NAMES = {
     "help",
     "auction",
     "bid",
+    "closerequest",
+    "closeticket",
+    "transcript",
 }
 
 TICKET_TYPE_CONFIG: dict[str, dict] = {
@@ -483,6 +487,7 @@ TICKET_TYPE_CONFIG: dict[str, dict] = {
 }
 
 TICKET_CATEGORY_IDS = {int(cfg.get("category_id", 0) or 0) for cfg in TICKET_TYPE_CONFIG.values()}
+TICKET_TRANSCRIPTS_DIR = os.path.join(SEED_DATA_DIR, "ticket_transcripts")
 
 
 def _configure_commands_for_mode() -> None:
@@ -982,18 +987,18 @@ def _build_ticket_panel_embed(guild: discord.Guild | None = None) -> discord.Emb
     )
 
     tos_rules = [
-        ("◉ Valid Reason", "Open tickets only for real issues and include enough context so staff can help quickly."),
-        ("◉ Swearing", "Keep language clean and professional. Abusive wording can lead to closure and moderation action."),
-        ("◉ Pinging", "Avoid unnecessary staff or role pings in tickets. Use clear details instead of repeated mentions."),
-        ("◉ One Ticket Rule", "Please keep one open ticket per issue. Duplicate or multi-topic tickets may be closed."),
-        ("◉ NSFW Content", "NSFW material is not allowed in tickets under any circumstance and can result in a ban."),
-        ("◉ Patience", "Allow staff reasonable time to respond. Repeated bumping slows handling and may cause closure."),
-        ("◉ Respect Staff", "Treat everyone respectfully during review. Harassment or hostility may end support."),
-        ("◉ Proper Formatting", "Provide readable, complete information so your case can be reviewed without delays."),
-        ("◉ Time Limit", "If a ticket is inactive for 12+ hours, it may be closed until you are ready to continue."),
-        ("◉ Language", "Use English in tickets so all available staff can accurately review and respond."),
-        ("◉ Honesty", "Share accurate details and evidence. False or misleading claims can lead to warnings."),
-        ("◉ Remain Calm", "Stay calm while your case is reviewed. Aggressive behavior can result in closure."),
+        ("Valid Reason", "Open tickets only for real issues and include enough context so staff can help quickly."),
+        ("Swearing", "Keep language clean and professional. Abusive wording can lead to closure and moderation action."),
+        ("Pinging", "Avoid unnecessary staff or role pings in tickets. Use clear details instead of repeated mentions."),
+        ("One Ticket Rule", "Please keep one open ticket per issue. Duplicate or multi-topic tickets may be closed."),
+        ("NSFW Content", "NSFW material is not allowed in tickets under any circumstance and can result in a ban."),
+        ("Patience", "Allow staff reasonable time to respond. Repeated bumping slows handling and may cause closure."),
+        ("Respect Staff", "Treat everyone respectfully during review. Harassment or hostility may end support."),
+        ("Proper Formatting", "Provide readable, complete information so your case can be reviewed without delays."),
+        ("Time Limit", "If a ticket is inactive for 12+ hours, it may be closed until you are ready to continue."),
+        ("Language", "Use English in tickets so all available staff can accurately review and respond."),
+        ("Honesty", "Share accurate details and evidence. False or misleading claims can lead to warnings."),
+        ("Remain Calm", "Stay calm while your case is reviewed. Aggressive behavior can result in closure."),
     ]
     for rule_title, rule_text in tos_rules:
         embed.add_field(name=rule_title, value=rule_text, inline=True)
@@ -1144,6 +1149,249 @@ async def _post_ticket_support_panel() -> None:
         return
 
     await channel.send(embed=_build_ticket_panel_embed(channel.guild), view=TicketPanelView())
+
+
+def _ensure_ticket_transcripts_dir() -> None:
+    os.makedirs(TICKET_TRANSCRIPTS_DIR, exist_ok=True)
+
+
+def _is_ticket_channel(channel: discord.abc.GuildChannel | None) -> bool:
+    if not isinstance(channel, discord.TextChannel):
+        return False
+    return int(channel.category_id or 0) in TICKET_CATEGORY_IDS
+
+
+def _get_ticket_channel_meta(channel: discord.TextChannel) -> dict:
+    topic = str(channel.topic or "")
+    owner_match = re.search(r"ticket_owner_id:(\d+)", topic)
+    ticket_type_match = re.search(r"ticket_type:([a-z_]+)", topic)
+    owner_id = int(owner_match.group(1)) if owner_match else 0
+    ticket_key = str(ticket_type_match.group(1)) if ticket_type_match else ""
+    config = TICKET_TYPE_CONFIG.get(ticket_key, {})
+
+    category_label = str(config.get("label") or "Unknown")
+    if category_label == "Unknown" and channel.category is not None:
+        category_label = str(channel.category.name)
+
+    return {
+        "owner_id": owner_id,
+        "ticket_key": ticket_key,
+        "category_label": category_label,
+    }
+
+
+def _can_manage_ticket(member: discord.Member | None, channel: discord.TextChannel) -> bool:
+    if member is None:
+        return False
+    if _has_mod_command_role(member):
+        return True
+    meta = _get_ticket_channel_meta(channel)
+    return int(meta.get("owner_id", 0) or 0) == int(member.id)
+
+
+def _build_ticket_transcript_id(channel: discord.TextChannel) -> str:
+    now_text = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    return f"transcript_{now_text}_{int(channel.id)}"
+
+
+async def _create_ticket_transcript_file(channel: discord.TextChannel) -> tuple[str, str]:
+    _ensure_ticket_transcripts_dir()
+    transcript_id = _build_ticket_transcript_id(channel)
+    file_name = f"{transcript_id}.txt"
+    file_path = os.path.join(TICKET_TRANSCRIPTS_DIR, file_name)
+
+    lines: list[str] = []
+    async for message in channel.history(limit=None, oldest_first=True):
+        ts = message.created_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        author_line = f"[{ts}] {message.author} ({message.author.id})"
+        lines.append(author_line)
+
+        content = str(message.content or "").strip()
+        if content:
+            lines.append(content)
+
+        if message.attachments:
+            for attachment in message.attachments:
+                lines.append(f"[Attachment] {attachment.url}")
+
+        if message.embeds:
+            for embed in message.embeds:
+                embed_title = str(getattr(embed, "title", "") or "")
+                embed_desc = str(getattr(embed, "description", "") or "")
+                if embed_title:
+                    lines.append(f"[Embed Title] {embed_title}")
+                if embed_desc:
+                    lines.append(f"[Embed Description] {embed_desc}")
+        lines.append("")
+
+    with open(file_path, "w", encoding="utf-8") as transcript_file:
+        transcript_file.write("\n".join(lines).strip() + "\n")
+
+    return transcript_id, file_path
+
+
+def _build_ticket_close_log_embed(
+    *,
+    guild: discord.Guild,
+    channel_name: str,
+    closer: discord.abc.User | None,
+    owner_id: int,
+    reason: str,
+    category_label: str,
+    transcript_id: str,
+    closed_unix: int,
+) -> discord.Embed:
+    closer_text = closer.mention if closer else "Unknown"
+    owner_mention = f"<@{owner_id}>" if owner_id > 0 else "Unknown"
+    owner_id_text = str(owner_id) if owner_id > 0 else "Unknown"
+
+    embed = discord.Embed(
+        title="[FAS] Farmers - Ticket Closed",
+        description=(
+            "Ticket Closure Log\n\n"
+            f"Ticket `{channel_name}` closed by {closer_text}.\n\n"
+            f"- Transcript ID: `{transcript_id}`"
+        ),
+        color=0xE67E22,
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.add_field(name="<:Text:1529995003672137868> Reason", value=reason[:1024], inline=False)
+    embed.add_field(name="<:Text:1529995003672137868> Category", value=category_label[:1024], inline=False)
+    embed.add_field(name="<:User:1525990871777017906> User", value=owner_mention, inline=True)
+    embed.add_field(name="<:ID:1528825276065124492> User ID", value=owner_id_text, inline=True)
+    embed.add_field(name="<:Time:1525734537940701266> Closed at", value=f"<t:{closed_unix}:F>", inline=False)
+    if guild.icon:
+        embed.set_thumbnail(url=guild.icon.url)
+    embed.set_footer(text="[FAS] Farmers | Close Ticket System")
+    return embed
+
+
+async def _send_ticket_close_log(
+    *,
+    guild: discord.Guild,
+    channel_name: str,
+    closer: discord.abc.User | None,
+    owner_id: int,
+    reason: str,
+    category_label: str,
+    transcript_id: str,
+) -> None:
+    log_channel = bot.get_channel(TICKET_LOG_CHANNEL_ID)
+    if log_channel is None:
+        try:
+            log_channel = await bot.fetch_channel(TICKET_LOG_CHANNEL_ID)
+        except Exception:
+            log_channel = None
+    if not isinstance(log_channel, discord.TextChannel):
+        return
+
+    closed_unix = int(datetime.now(timezone.utc).timestamp())
+    embed = _build_ticket_close_log_embed(
+        guild=guild,
+        channel_name=channel_name,
+        closer=closer,
+        owner_id=owner_id,
+        reason=reason,
+        category_label=category_label,
+        transcript_id=transcript_id,
+        closed_unix=closed_unix,
+    )
+    await log_channel.send(embed=embed)
+
+
+async def _close_ticket_channel(
+    *,
+    channel: discord.TextChannel,
+    closer: discord.abc.User | None,
+    reason: str,
+) -> tuple[bool, str]:
+    if not _is_ticket_channel(channel):
+        return False, "This command can only be used in ticket channels."
+
+    guild = channel.guild
+    meta = _get_ticket_channel_meta(channel)
+    owner_id = int(meta.get("owner_id", 0) or 0)
+    category_label = str(meta.get("category_label") or "Unknown")
+
+    try:
+        transcript_id, _transcript_path = await _create_ticket_transcript_file(channel)
+    except Exception as exc:
+        return False, f"Failed to generate transcript before close: {exc}"
+
+    try:
+        await _send_ticket_close_log(
+            guild=guild,
+            channel_name=channel.name,
+            closer=closer,
+            owner_id=owner_id,
+            reason=reason,
+            category_label=category_label,
+            transcript_id=transcript_id,
+        )
+    except Exception:
+        pass
+
+    close_reason = str(reason or "No reason provided").strip()
+    if closer is not None:
+        close_reason = f"{close_reason} | Closed by {closer}"
+
+    try:
+        await channel.delete(reason=f"[FAS] Farmers Ticket Close | {close_reason[:180]}")
+    except Exception as exc:
+        return False, f"Ticket closure log created (ID `{transcript_id}`), but I could not delete this channel: {exc}"
+
+    return True, transcript_id
+
+
+class TicketCloseRequestView(discord.ui.View):
+    def __init__(self, requester_id: int):
+        super().__init__(timeout=3600)
+        self.requester_id = int(requester_id)
+
+    def _can_manage_request(self, member: discord.Member | None) -> bool:
+        if member is None:
+            return False
+        return bool(member.id == self.requester_id or _has_mod_command_role(member))
+
+    @discord.ui.button(label="Accept", style=discord.ButtonStyle.danger)
+    async def accept_close(self, first, second):
+        if isinstance(first, discord.ui.Button):
+            interaction = second
+        else:
+            interaction = first
+        if not isinstance(interaction, discord.Interaction):
+            return
+        if interaction.channel is None or not isinstance(interaction.channel, discord.TextChannel):
+            await interaction.response.send_message("This request is not in a text channel.", ephemeral=True)
+            return
+        requester = interaction.user if isinstance(interaction.user, discord.Member) else None
+        if not self._can_manage_request(requester):
+            await interaction.response.send_message("Only the requester or staff can accept this close request.", ephemeral=True)
+            return
+
+        await interaction.response.send_message("Closing this ticket now...", ephemeral=True)
+        success, details = await _close_ticket_channel(
+            channel=interaction.channel,
+            closer=interaction.user,
+            reason="Close request accepted.",
+        )
+        if not success:
+            await interaction.followup.send(details, ephemeral=True)
+
+    @discord.ui.button(label="Deny", style=discord.ButtonStyle.success)
+    async def deny_close(self, first, second):
+        if isinstance(first, discord.ui.Button):
+            interaction = second
+        else:
+            interaction = first
+        if not isinstance(interaction, discord.Interaction):
+            return
+        requester = interaction.user if isinstance(interaction.user, discord.Member) else None
+        if not self._can_manage_request(requester):
+            await interaction.response.send_message("Only the requester or staff can deny this close request.", ephemeral=True)
+            return
+
+        await interaction.response.send_message("Close request denied. Ticket will stay open.", ephemeral=True)
 
 
 def _has_seed_shop_seller_role(member: discord.Member | None) -> bool:
@@ -3843,6 +4091,95 @@ if app_commands is not None:
 @bot.command(name="ping")
 async def ping(ctx: commands.Context):
     await ctx.send("Pong!")
+
+
+@bot.command(name="closerequest")
+async def closerequest(ctx: commands.Context):
+    if ctx.guild is None or not isinstance(ctx.channel, discord.TextChannel):
+        await ctx.send("This command can only be used in a server ticket channel.")
+        return
+    if not _is_ticket_channel(ctx.channel):
+        await ctx.send("This command can only be used in ticket channels.")
+        return
+
+    request_embed = discord.Embed(
+        title="[FAS] Farmers - Ticket Close Request",
+        description=(
+            f"{ctx.author.mention} Has request to close these ticket. "
+            "If this ticket is ready to be closed please click accept. "
+            "If not click deny."
+        ),
+        color=0xF39C12,
+    )
+    request_embed.set_footer(text="[FAS] Farmers | Ticket Close Request")
+
+    await ctx.send(
+        content=ctx.author.mention,
+        embed=request_embed,
+        view=TicketCloseRequestView(requester_id=ctx.author.id),
+        allowed_mentions=discord.AllowedMentions(users=True, roles=True),
+    )
+
+
+@bot.command(name="closeticket")
+async def closeticket(ctx: commands.Context):
+    if ctx.guild is None or not isinstance(ctx.channel, discord.TextChannel):
+        await ctx.send("This command can only be used in a server ticket channel.")
+        return
+    if not _is_ticket_channel(ctx.channel):
+        await ctx.send("This command can only be used in ticket channels.")
+        return
+    if not _can_manage_ticket(ctx.author if isinstance(ctx.author, discord.Member) else None, ctx.channel):
+        await ctx.send("Only the ticket owner or staff can close this ticket.")
+        return
+
+    await ctx.send("The next message will be the reason for the ticket being closed you have <60 Seconds>.")
+
+    def reason_check(message: discord.Message) -> bool:
+        return bool(
+            message.author.id == ctx.author.id
+            and message.channel.id == ctx.channel.id
+        )
+
+    try:
+        response = await bot.wait_for("message", timeout=60.0, check=reason_check)
+    except asyncio.TimeoutError:
+        await ctx.send("Ticket close cancelled due to timeout.")
+        return
+
+    close_reason = str(response.content or "").strip()
+    if not close_reason:
+        await ctx.send("Close reason cannot be empty.")
+        return
+
+    await ctx.send("Closing ticket now...")
+    success, details = await _close_ticket_channel(
+        channel=ctx.channel,
+        closer=ctx.author,
+        reason=close_reason,
+    )
+    if not success:
+        await ctx.send(details)
+
+
+@bot.command(name="transcript")
+async def transcript(ctx: commands.Context, *, transcript_id: str):
+    query = str(transcript_id or "").strip()
+    if not query:
+        await ctx.send("Usage: -transcript <Transcript ID>")
+        return
+
+    _ensure_ticket_transcripts_dir()
+    normalized = query[:-4] if query.lower().endswith(".txt") else query
+    path = os.path.join(TICKET_TRANSCRIPTS_DIR, f"{normalized}.txt")
+    if not os.path.exists(path):
+        await ctx.send(f"I could not find transcript ID `{normalized}`.")
+        return
+
+    try:
+        await ctx.send(file=discord.File(path, filename=f"{normalized}.txt"))
+    except Exception as exc:
+        await ctx.send(f"I could not send that transcript file: {exc}")
 
 
 @bot.command(name="syncslash")
