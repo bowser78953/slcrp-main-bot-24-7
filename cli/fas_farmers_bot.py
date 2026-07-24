@@ -983,7 +983,7 @@ def _build_ticket_panel_embed(guild: discord.Guild | None = None) -> discord.Emb
     embed = discord.Embed(
         title="[FAS] Farmers - Ticket System",
         description="Kindly make sure to read our complete Ticket Terms of Service below before creating a ticket.",
-        color=0x3498DB,
+        color=discord.Color.green(),
     )
 
     tos_rules = [
@@ -1025,7 +1025,7 @@ def _build_ticket_open_message(config: dict, opener: discord.abc.User, topic: st
             "Someone from our team will be in touch with you shortly.\n\n"
             "⚠️**Note: all messages will be recorded and saved to our ticket transcript, do not share any sensitive information.**"
         ),
-        color=0xF1C40F,
+        color=discord.Color.green(),
     )
     ticket_embed.add_field(name="<:Text:1529995003672137868> Topic", value=f"`{topic}`", inline=False)
     ticket_embed.add_field(name="<:Text:1529995003672137868> Details", value=f"`{details}`", inline=False)
@@ -1131,10 +1131,33 @@ class TicketTypeSelect(discord.ui.Select):
         await interaction.response.send_modal(TicketDetailsModal(selected))
 
 
+class TicketTypeSelectView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=300)
+        self.add_item(TicketTypeSelect())
+
+
 class TicketPanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
-        self.add_item(TicketTypeSelect())
+
+    @discord.ui.button(label="Make a ticket", style=discord.ButtonStyle.success, custom_id="fas_ticket_open_button")
+    async def make_ticket(self, first, second):
+        # Support both callback orders across discord.py/py-cord variants.
+        if isinstance(first, discord.ui.Button):
+            interaction = second
+        else:
+            interaction = first
+
+        if not isinstance(interaction, discord.Interaction):
+            return
+
+        dropdown_view = TicketTypeSelectView()
+        message_text = "Select a ticket type from the menu below."
+        if interaction.response.is_done():
+            await interaction.followup.send(message_text, view=dropdown_view, ephemeral=True)
+            return
+        await interaction.response.send_message(message_text, view=dropdown_view, ephemeral=True)
 
 
 async def _post_ticket_support_panel() -> None:
@@ -1252,7 +1275,7 @@ def _build_ticket_close_log_embed(
             f"Ticket `{channel_name}` closed by {closer_text}.\n\n"
             f"- Transcript ID: `{transcript_id}`"
         ),
-        color=0xE67E22,
+        color=discord.Color.green(),
         timestamp=datetime.now(timezone.utc),
     )
     embed.add_field(name="<:Text:1529995003672137868> Reason", value=reason[:1024], inline=False)
@@ -4109,7 +4132,7 @@ async def closerequest(ctx: commands.Context):
             "If this ticket is ready to be closed please click accept. "
             "If not click deny."
         ),
-        color=0xF39C12,
+        color=discord.Color.green(),
     )
     request_embed.set_footer(text="[FAS] Farmers | Ticket Close Request")
 
@@ -4133,7 +4156,11 @@ async def closeticket(ctx: commands.Context):
         await ctx.send("Only the ticket owner or staff can close this ticket.")
         return
 
-    await ctx.send("The next message will be the reason for the ticket being closed you have <60 Seconds>.")
+    expires_unix = int((datetime.now(timezone.utc) + timedelta(seconds=60)).timestamp())
+    await ctx.send(
+        "The next message will be the reason for the ticket being closed. "
+        f"You have until <t:{expires_unix}:R> (<t:{expires_unix}:T>)."
+    )
 
     def reason_check(message: discord.Message) -> bool:
         return bool(
@@ -5859,4 +5886,5 @@ async def sreportremove(ctx: commands.Context, scam_id: int):
 
 if __name__ == "__main__":
     bot.run(TOKEN)
+
 
