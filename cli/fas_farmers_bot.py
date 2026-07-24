@@ -103,6 +103,9 @@ QUARANTINE_REMOVE_ROLE_ID = 1521774580480479343
 WATCHED_VOICE_CHANNEL_ID = 1521774457537167383
 KICK_ALERT_CHANNEL_ID = 1521777234258432100
 MOD_LOG_CHANNEL_ID = 1526953977848266872
+TICKET_PANEL_CHANNEL_ID = 1529991811085500587
+TICKET_GENERAL_STAFF_ROLE_ID = 1529987760356593784
+TICKET_ELDER_ROLE_ID = 1521774545835659338
 VOICE_KICK_AUDIT_LOOKBACK_SECONDS = 90
 VOICE_KICK_AUDIT_RETRIES = 4
 VOICE_KICK_AUDIT_RETRY_DELAY_SECONDS = 1.0
@@ -419,6 +422,67 @@ NON_SEED_COMMAND_NAMES = {
     "auction",
     "bid",
 }
+
+TICKET_TYPE_CONFIG: dict[str, dict] = {
+    "general_support": {
+        "label": "General Support",
+        "opened_title": "General Support Ticket Opened",
+        "category_id": 1529987689091174531,
+        "ping_roles": [TICKET_GENERAL_STAFF_ROLE_ID],
+        "ping_here": False,
+    },
+    "giveaway_claim_host": {
+        "label": "Giveaway Claim/Host",
+        "opened_title": "Giveaway Claim/Host Ticket Opened",
+        "category_id": 1529988466656674004,
+        "ping_roles": [TICKET_GENERAL_STAFF_ROLE_ID],
+        "ping_here": False,
+    },
+    "seed_shop_support": {
+        "label": "Seed Shop Support",
+        "opened_title": "Seed Shop Ticket Opened",
+        "category_id": 1529989678302756874,
+        "ping_roles": [SEED_SHOP_MANAGER_ROLE_ID, SEED_BALANCE_ADMIN_ROLE_ID],
+        "ping_here": False,
+    },
+    "elder_support": {
+        "label": "Elder Support",
+        "opened_title": "Elder Support Ticket Opened",
+        "category_id": 1529989774889193533,
+        "ping_roles": [TICKET_ELDER_ROLE_ID],
+        "ping_here": False,
+    },
+    "guild_join_request": {
+        "label": "Guild Join Request",
+        "opened_title": "Guild Join Request Ticket Opened",
+        "category_id": 1529987516202225867,
+        "ping_roles": [TICKET_ELDER_ROLE_ID],
+        "ping_here": False,
+    },
+    "report_member": {
+        "label": "Report a Member",
+        "opened_title": "Report a Member Ticket Opened",
+        "category_id": 1529990078439620748,
+        "ping_roles": [MOD_COMMAND_ROLE_ID],
+        "ping_here": False,
+    },
+    "itt_support": {
+        "label": "ITT Support",
+        "opened_title": "ITT Support Ticket Opened",
+        "category_id": 1529989556516946122,
+        "ping_roles": [],
+        "ping_here": True,
+    },
+    "owner_team_support": {
+        "label": "Owner Team Support",
+        "opened_title": "Owner Team Ticket Opened",
+        "category_id": 1529988622093390016,
+        "ping_roles": [],
+        "ping_here": True,
+    },
+}
+
+TICKET_CATEGORY_IDS = {int(cfg.get("category_id", 0) or 0) for cfg in TICKET_TYPE_CONFIG.values()}
 
 
 def _configure_commands_for_mode() -> None:
@@ -890,6 +954,188 @@ def _is_server_booster(member: discord.Member | None) -> bool:
     if member.premium_since is not None:
         return True
     return any(role.id == BOOSTER_LIKE_ROLE_ID for role in member.roles)
+
+
+def _ticket_channel_slug_for_user(user: discord.abc.User) -> str:
+    base = re.sub(r"[^a-z0-9._-]+", "-", user.name.lower()).strip("-._")
+    if not base:
+        base = f"user-{user.id}"
+    return f"ticket-{base}"[:95]
+
+
+def _find_open_ticket_channel(guild: discord.Guild, user_id: int) -> discord.TextChannel | None:
+    marker = f"ticket_owner_id:{int(user_id)}"
+    for channel in guild.text_channels:
+        if channel.category_id not in TICKET_CATEGORY_IDS:
+            continue
+        topic = str(channel.topic or "")
+        if marker in topic:
+            return channel
+    return None
+
+
+def _build_ticket_panel_embed() -> discord.Embed:
+    embed = discord.Embed(
+        title="[FAS] Farmers - Ticket System",
+        description=(
+            "Kindly make sure to read our complete Ticket Terms of Service below before creating a ticket.\n\n"
+            "**Valid Reason**\nOpen tickets only for real issues and include enough context so staff can help quickly.\n\n"
+            "**Swearing**\nKeep language clean and professional. Abusive wording can lead to closure and moderation action.\n\n"
+            "**Pinging**\nAvoid unnecessary staff or role pings in tickets. Use clear details instead of repeated mentions.\n\n"
+            "**One Ticket Rule**\nPlease keep one open ticket per issue. Duplicate or multi-topic tickets may be closed.\n\n"
+            "**NSFW Content**\nNSFW material is not allowed in tickets under any circumstance and can result in a ban.\n\n"
+            "**Patience**\nAllow staff reasonable time to respond. Repeated bumping slows handling and may cause closure.\n\n"
+            "**Respect Staff**\nTreat everyone respectfully during review. Harassment or hostility may end support.\n\n"
+            "**Proper Formatting**\nProvide readable, complete information so your case can be reviewed without delays.\n\n"
+            "**Time Limit**\nIf a ticket is inactive for 12+ hours, it may be closed until you are ready to continue.\n\n"
+            "**Language**\nUse English in tickets so all available staff can accurately review and respond.\n\n"
+            "**Honesty**\nShare accurate details and evidence. False or misleading claims can lead to warnings.\n\n"
+            "**Remain Calm**\nStay calm while your case is reviewed. Aggressive behavior can result in closure."
+        ),
+        color=0xF1C40F,
+    )
+    return embed
+
+
+def _build_ticket_open_message(config: dict, opener: discord.abc.User, topic: str, details: str) -> tuple[str, str]:
+    role_mentions = [f"<@&{int(role_id)}>" for role_id in config.get("ping_roles", []) if int(role_id) > 0]
+    if config.get("ping_here"):
+        role_mentions.insert(0, "@here")
+    role_mentions.append(opener.mention)
+    ping_line = " | ".join(role_mentions)
+
+    opened_title = str(config.get("opened_title") or f"{config.get('label', 'Support')} Ticket Opened")
+    ticket_text = (
+        f"{opened_title}\n"
+        f"Hello, {opener.mention}\n\n"
+        "Your ticket has been opened, thank you for reaching out.\n"
+        "Someone from our team will be in touch with you shortly.\n\n"
+        "![:warning:](https://cdn.discordapp.com/emojis/1384289838144163933.webp?size=44) "
+        "**Note: all messages will be recorded and saved to our ticket transcript, do not share any sensitive information.**\n\n"
+        "<:Text:1529995003672137868> Topic\n"
+        f"`{topic}`\n\n"
+        "<:Text:1529995003672137868> Details\n"
+        f"`{details}`"
+    )
+    return ping_line, ticket_text
+
+
+class TicketDetailsModal(discord.ui.Modal):
+    def __init__(self, ticket_key: str):
+        ticket_config = TICKET_TYPE_CONFIG.get(ticket_key, {})
+        super().__init__(title=f"{ticket_config.get('label', 'Support')} Ticket")
+        self.ticket_key = ticket_key
+        self.topic_input = discord.ui.TextInput(label="Topic", required=True, max_length=120)
+        self.details_input = discord.ui.TextInput(label="Details", style=discord.TextStyle.paragraph, required=True, max_length=1800)
+        self.add_item(self.topic_input)
+        self.add_item(self.details_input)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message("Tickets can only be opened inside a server.", ephemeral=True)
+            return
+
+        ticket_config = TICKET_TYPE_CONFIG.get(self.ticket_key)
+        if ticket_config is None:
+            await interaction.response.send_message("This ticket type is not configured.", ephemeral=True)
+            return
+
+        existing = _find_open_ticket_channel(guild, interaction.user.id)
+        if existing is not None:
+            await interaction.response.send_message(f"You already have an open ticket: {existing.mention}", ephemeral=True)
+            return
+
+        category_id = int(ticket_config.get("category_id", 0) or 0)
+        category = guild.get_channel(category_id)
+        if category is None:
+            try:
+                category = await guild.fetch_channel(category_id)
+            except Exception:
+                category = None
+        if not isinstance(category, discord.CategoryChannel):
+            await interaction.response.send_message("Ticket category is missing or invalid. Please contact staff.", ephemeral=True)
+            return
+
+        channel_name = _ticket_channel_slug_for_user(interaction.user)
+        channel_topic = f"ticket_owner_id:{interaction.user.id} ticket_type:{self.ticket_key}"
+
+        try:
+            channel = await guild.create_text_channel(
+                name=channel_name,
+                category=category,
+                topic=channel_topic,
+                reason=f"Ticket opened by {interaction.user} ({interaction.user.id})",
+            )
+        except Exception as exc:
+            await interaction.response.send_message(f"Could not create ticket channel: {exc}", ephemeral=True)
+            return
+
+        try:
+            await channel.set_permissions(
+                interaction.user,
+                view_channel=True,
+                send_messages=True,
+                read_message_history=True,
+                attach_files=True,
+                embed_links=True,
+                reason="Ticket opener access",
+            )
+        except Exception:
+            pass
+
+        topic_text = str(self.topic_input.value or "").strip()[:120]
+        details_text = str(self.details_input.value or "").strip()[:1800]
+        ping_line, ticket_message = _build_ticket_open_message(ticket_config, interaction.user, topic_text, details_text)
+
+        await channel.send(
+            f"{ping_line}\n{ticket_message}",
+            allowed_mentions=discord.AllowedMentions(everyone=True, users=True, roles=True),
+        )
+        await interaction.response.send_message(f"Your ticket has been created: {channel.mention}", ephemeral=True)
+
+
+class TicketTypeSelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label=config["label"], value=key)
+            for key, config in TICKET_TYPE_CONFIG.items()
+        ]
+        super().__init__(
+            placeholder="Select ticket type...",
+            min_values=1,
+            max_values=1,
+            options=options,
+            custom_id="fas_ticket_type_select",
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        selected = str(self.values[0]) if self.values else ""
+        if selected not in TICKET_TYPE_CONFIG:
+            await interaction.response.send_message("Invalid ticket selection.", ephemeral=True)
+            return
+
+        await interaction.response.send_modal(TicketDetailsModal(selected))
+
+
+class TicketPanelView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(TicketTypeSelect())
+
+
+async def _post_ticket_support_panel() -> None:
+    channel = bot.get_channel(TICKET_PANEL_CHANNEL_ID)
+    if channel is None:
+        try:
+            channel = await bot.fetch_channel(TICKET_PANEL_CHANNEL_ID)
+        except Exception:
+            channel = None
+    if not isinstance(channel, discord.TextChannel):
+        print(f"Ticket panel channel {TICKET_PANEL_CHANNEL_ID} not found or not a text channel.")
+        return
+
+    await channel.send(embed=_build_ticket_panel_embed(), view=TicketPanelView())
 
 
 def _has_seed_shop_seller_role(member: discord.Member | None) -> bool:
@@ -3557,6 +3803,10 @@ async def on_ready():
             await _ensure_seed_shop_live_message_exists()
         except Exception as exc:
             print(f"Failed to initialize live seed shop message: {exc}")
+        try:
+            await _post_ticket_support_panel()
+        except Exception as exc:
+            print(f"Failed to post ticket support panel: {exc}")
         if not seed_shop_live_loop.is_running():
             seed_shop_live_loop.start()
     if not temp_ban_expiry_loop.is_running():
