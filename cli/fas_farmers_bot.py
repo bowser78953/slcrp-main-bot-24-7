@@ -4092,7 +4092,11 @@ async def on_ready():
     _configure_commands_for_mode()
     if bot.user:
         print(f"{bot.user} is online. mode={BOT_MODE}")
-    await _restore_active_auctions()
+    try:
+        await _restore_active_auctions()
+    except Exception as exc:
+        # Keep startup resilient so slash sync still runs even with bad persisted auction data.
+        print(f"Failed to restore active auctions: {exc}")
     if app_commands is not None and not TREE_SYNCED:
         guild_obj = discord.Object(id=TARGET_GUILD_ID)
         bot.tree.clear_commands(guild=guild_obj)
@@ -5929,5 +5933,6 @@ async def sreportremove(ctx: commands.Context, scam_id: int):
 
 if __name__ == "__main__":
     bot.run(TOKEN)
+
 
 
