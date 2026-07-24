@@ -425,6 +425,8 @@ NON_SEED_COMMAND_NAMES = {
     "closerequest",
     "closeticket",
     "transcript",
+    "add",
+    "remove",
 }
 
 TICKET_TYPE_CONFIG: dict[str, dict] = {
@@ -1229,6 +1231,19 @@ def _can_manage_ticket(member: discord.Member | None, channel: discord.TextChann
         return True
     meta = _get_ticket_channel_meta(channel)
     return int(meta.get("owner_id", 0) or 0) == int(member.id)
+
+
+async def _resolve_ticket_member_from_target(guild: discord.Guild, target: str) -> discord.Member | None:
+    target_id = _parse_target_user_id(target)
+    if target_id is None:
+        return None
+    member = guild.get_member(target_id)
+    if member is not None:
+        return member
+    try:
+        return await guild.fetch_member(target_id)
+    except Exception:
+        return None
 
 
 def _build_ticket_transcript_id(channel: discord.TextChannel) -> str:
@@ -4275,6 +4290,83 @@ async def transcript(ctx: commands.Context, *, transcript_id: str):
         await ctx.send(f"I could not send that transcript file: {exc}")
 
 
+@bot.command(name="add")
+async def add_to_ticket(ctx: commands.Context, *, target: str):
+    if ctx.guild is None or not isinstance(ctx.channel, discord.TextChannel):
+        await ctx.send("This command can only be used in a server ticket channel.")
+        return
+    if not _is_ticket_channel(ctx.channel):
+        await ctx.send("This command can only be used in ticket channels.")
+        return
+    if not _can_manage_ticket(ctx.author if isinstance(ctx.author, discord.Member) else None, ctx.channel):
+        await ctx.send("Only the ticket owner or staff can add users to this ticket.")
+        return
+
+    member = await _resolve_ticket_member_from_target(ctx.guild, target)
+    if member is None:
+        await ctx.send("Usage: -add <user ID/user mention>")
+        return
+    if member.bot:
+        await ctx.send("Bots cannot be added to tickets with this command.")
+        return
+
+    try:
+        await ctx.channel.set_permissions(
+            member,
+            view_channel=True,
+            send_messages=True,
+            read_message_history=True,
+            attach_files=True,
+            embed_links=True,
+            reason=f"Ticket add by {ctx.author} ({ctx.author.id})",
+        )
+    except Exception as exc:
+        await ctx.send(f"I could not add {member.mention} to this ticket: {exc}")
+        return
+
+    await ctx.send(f"Added {member.mention} to this ticket.")
+
+
+@bot.command(name="remove")
+async def remove_from_ticket(ctx: commands.Context, *, target: str):
+    if ctx.guild is None or not isinstance(ctx.channel, discord.TextChannel):
+        await ctx.send("This command can only be used in a server ticket channel.")
+        return
+    if not _is_ticket_channel(ctx.channel):
+        await ctx.send("This command can only be used in ticket channels.")
+        return
+    if not _can_manage_ticket(ctx.author if isinstance(ctx.author, discord.Member) else None, ctx.channel):
+        await ctx.send("Only the ticket owner or staff can remove users from this ticket.")
+        return
+
+    member = await _resolve_ticket_member_from_target(ctx.guild, target)
+    if member is None:
+        await ctx.send("Usage: -remove <user ID/user mention>")
+        return
+
+    meta = _get_ticket_channel_meta(ctx.channel)
+    owner_id = int(meta.get("owner_id", 0) or 0)
+    if member.id == owner_id:
+        await ctx.send("You cannot remove the ticket opener from their own ticket.")
+        return
+
+    try:
+        await ctx.channel.set_permissions(
+            member,
+            view_channel=False,
+            send_messages=False,
+            read_message_history=False,
+            attach_files=False,
+            embed_links=False,
+            reason=f"Ticket remove by {ctx.author} ({ctx.author.id})",
+        )
+    except Exception as exc:
+        await ctx.send(f"I could not remove {member.mention} from this ticket: {exc}")
+        return
+
+    await ctx.send(f"Removed {member.mention} from this ticket.")
+
+
 @bot.command(name="syncslash")
 async def syncslash(ctx: commands.Context):
     if ctx.guild is None:
@@ -5955,6 +6047,4 @@ async def sreportremove(ctx: commands.Context, scam_id: int):
 
 if __name__ == "__main__":
     bot.run(TOKEN)
-
-
 
