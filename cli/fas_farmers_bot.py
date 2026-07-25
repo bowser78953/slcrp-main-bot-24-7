@@ -149,6 +149,14 @@ BOOSTER_SEED_CLAIM_MAX = 2000
 SEED_CLAIM_COOLDOWN_SECONDS = 86400
 BOOSTER_CLAIM_MULTIPLIER = 2.5
 BOOSTER_CLAIM_MULTIPLIER_CHANCE = 0.40
+CLAIM_BOOST_ROLE_2X_ROLE_ID = 1526267367875936307
+CLAIM_BOOST_ROLE_225X_ROLE_ID = 1530279531615879369
+CLAIM_BOOST_ROLE_25X_ROLE_ID = 1530313688102207558
+CLAIM_BOOST_ROLE_RULES: list[tuple[int, float, float]] = [
+    (CLAIM_BOOST_ROLE_2X_ROLE_ID, 0.40, 2.0),
+    (CLAIM_BOOST_ROLE_225X_ROLE_ID, 0.60, 2.25),
+    (CLAIM_BOOST_ROLE_25X_ROLE_ID, 0.75, 2.5),
+]
 TOP1_CLAIM_MULTIPLIER = 1.75
 TOP2_CLAIM_MULTIPLIER = 1.5
 TOP3_CLAIM_MULTIPLIER = 1.25
@@ -967,6 +975,21 @@ def _is_server_booster(member: discord.Member | None) -> bool:
     if member.premium_since is not None:
         return True
     return any(role.id == BOOSTER_LIKE_ROLE_ID for role in member.roles)
+
+
+def _get_role_claim_boost(member: discord.Member | None) -> tuple[float, float, int] | None:
+    if member is None:
+        return None
+
+    member_role_ids = {role.id for role in member.roles}
+    matched: list[tuple[int, float, float]] = [
+        rule for rule in CLAIM_BOOST_ROLE_RULES if rule[0] in member_role_ids
+    ]
+    if not matched:
+        return None
+
+    best_role_id, best_chance, best_multiplier = max(matched, key=lambda item: item[2])
+    return best_chance, best_multiplier, best_role_id
 
 
 def _ticket_channel_slug_for_user(user: discord.abc.User) -> str:
@@ -4245,6 +4268,27 @@ async def on_message(message: discord.Message):
                     last_message_seed_role_sync = now_unix
                     await _sync_seed_leader_roles(message.guild, bank_data)
 
+    if (
+        message.guild is not None
+        and isinstance(message.channel, discord.TextChannel)
+        and _is_ticket_channel(message.channel)
+    ):
+        meta = _get_ticket_channel_meta(message.channel)
+        owner_id = int(meta.get("owner_id", 0) or 0)
+        if owner_id == message.author.id and (
+            message.mentions
+            or message.role_mentions
+            or message.mention_everyone
+        ):
+            has_other_user_mention = any(user.id != message.author.id for user in message.mentions)
+            if has_other_user_mention or message.role_mentions or message.mention_everyone:
+                await _close_ticket_channel(
+                    channel=message.channel,
+                    closer=message.author,
+                    reason="Pinging Staff",
+                )
+                return
+
     await bot.process_commands(message)
 
 
@@ -5217,13 +5261,27 @@ async def seedclaim(ctx: commands.Context):
         leaderboard_multiplier = TOP3_CLAIM_MULTIPLIER
 
     booster_multiplier_applied = False
+    multiplier_label: str | None = None
+    applied_multiplier: float | None = None
+    role_boost = _get_role_claim_boost(ctx.author)
+
     if is_booster:
         amount = random.randint(BOOSTER_SEED_CLAIM_MIN, BOOSTER_SEED_CLAIM_MAX)
-        if random.random() < BOOSTER_CLAIM_MULTIPLIER_CHANCE:
-            amount = int(amount * BOOSTER_CLAIM_MULTIPLIER)
-            booster_multiplier_applied = True
     else:
         amount = random.randint(SEED_CLAIM_MIN, SEED_CLAIM_MAX)
+
+    if role_boost is not None:
+        role_chance, role_multiplier, _matched_role_id = role_boost
+        if random.random() < role_chance:
+            amount = int(amount * role_multiplier)
+            booster_multiplier_applied = True
+            multiplier_label = "Role"
+            applied_multiplier = role_multiplier
+    elif is_booster and random.random() < BOOSTER_CLAIM_MULTIPLIER_CHANCE:
+        amount = int(amount * BOOSTER_CLAIM_MULTIPLIER)
+        booster_multiplier_applied = True
+        multiplier_label = "Booster"
+        applied_multiplier = BOOSTER_CLAIM_MULTIPLIER
 
     if leaderboard_multiplier > 1.0 and not booster_multiplier_applied:
         amount = int(amount * leaderboard_multiplier)
@@ -5236,8 +5294,8 @@ async def seedclaim(ctx: commands.Context):
     await _sync_seed_leader_roles(ctx.guild, bank_data)
 
     bonus_parts: list[str] = []
-    if booster_multiplier_applied:
-        bonus_parts.append(f"Booster x{BOOSTER_CLAIM_MULTIPLIER:g}")
+    if booster_multiplier_applied and applied_multiplier is not None and multiplier_label is not None:
+        bonus_parts.append(f"{multiplier_label} x{applied_multiplier:g}")
     if leaderboard_multiplier > 1.0 and not booster_multiplier_applied:
         bonus_parts.append(f"Collector x{leaderboard_multiplier:g}")
     bonus_text = f" ({', '.join(bonus_parts)})" if bonus_parts else ""
