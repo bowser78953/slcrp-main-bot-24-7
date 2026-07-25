@@ -1352,6 +1352,74 @@ def _build_ticket_close_log_embed(
     return embed
 
 
+def _build_ticket_closed_dm_embed(
+    *,
+    guild: discord.Guild,
+    channel_name: str,
+    closer: discord.abc.User | None,
+    reason: str,
+    transcript_id: str,
+    closed_unix: int,
+) -> discord.Embed:
+    closer_text = closer.mention if closer else "Unknown"
+    embed = discord.Embed(
+        title="[FAS] Farmers - Ticket Closed",
+        description=(
+            "Your ticket has been closed by staff.\n\n"
+            f"- Ticket: `{channel_name}`\n"
+            f"- Closed by: {closer_text}\n"
+            f"- Transcript ID: `{transcript_id}`"
+        ),
+        color=discord.Color.green(),
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.add_field(name="<:Text:1529995003672137868> Reason", value=(reason or "No reason provided")[:1024], inline=False)
+    embed.add_field(name="<:Time:1525734537940701266> Closed at", value=f"<t:{closed_unix}:F>", inline=False)
+    if guild.icon:
+        embed.set_thumbnail(url=guild.icon.url)
+    embed.set_footer(text="[FAS] Farmers | Ticket System")
+    return embed
+
+
+async def _send_ticket_close_dm(
+    *,
+    guild: discord.Guild,
+    owner_id: int,
+    channel_name: str,
+    closer: discord.abc.User | None,
+    reason: str,
+    transcript_id: str,
+) -> None:
+    if owner_id <= 0:
+        return
+
+    target_user: discord.abc.User | None = guild.get_member(owner_id)
+    if target_user is None:
+        target_user = bot.get_user(owner_id)
+    if target_user is None:
+        try:
+            target_user = await bot.fetch_user(owner_id)
+        except Exception:
+            target_user = None
+    if target_user is None:
+        return
+
+    closed_unix = int(datetime.now(timezone.utc).timestamp())
+    embed = _build_ticket_closed_dm_embed(
+        guild=guild,
+        channel_name=channel_name,
+        closer=closer,
+        reason=reason,
+        transcript_id=transcript_id,
+        closed_unix=closed_unix,
+    )
+    try:
+        await target_user.send(embed=embed)
+    except Exception:
+        # DMs can fail when disabled/blocked; ticket close should continue.
+        pass
+
+
 async def _send_ticket_close_log(
     *,
     guild: discord.Guild,
@@ -1412,6 +1480,18 @@ async def _close_ticket_channel(
             owner_id=owner_id,
             reason=reason,
             category_label=category_label,
+            transcript_id=transcript_id,
+        )
+    except Exception:
+        pass
+
+    try:
+        await _send_ticket_close_dm(
+            guild=guild,
+            owner_id=owner_id,
+            channel_name=channel.name,
+            closer=closer,
+            reason=reason,
             transcript_id=transcript_id,
         )
     except Exception:
