@@ -33,6 +33,8 @@ BOT_MODE = (os.getenv("FAS_BOT_MODE") or "farmers").strip().lower()
 if BOT_MODE not in {"farmers", "seed"}:
     BOT_MODE = "farmers"
 
+IS_MAIN_BOT_INSTANCE = (os.getenv("FAS_IS_MAIN_BOT") or "1").strip().lower() in {"1", "true", "yes", "on"}
+
 if BOT_MODE == "seed":
     TOKEN = (os.getenv("FAS_SEED_BOT_TOKEN") or "").strip()
     if not TOKEN:
@@ -1192,6 +1194,9 @@ class TicketPanelView(discord.ui.View):
 
 
 async def _post_ticket_support_panel() -> None:
+    if not IS_MAIN_BOT_INSTANCE:
+        return
+
     channel = bot.get_channel(TICKET_PANEL_CHANNEL_ID)
     if channel is None:
         try:
@@ -1430,6 +1435,9 @@ async def _send_ticket_close_log(
     category_label: str,
     transcript_id: str,
 ) -> None:
+    if not IS_MAIN_BOT_INSTANCE:
+        return
+
     log_channel = bot.get_channel(TICKET_LOG_CHANNEL_ID)
     if log_channel is None:
         try:
@@ -6633,4 +6641,5 @@ async def sreportremove(ctx: commands.Context, scam_id: int):
 
 if __name__ == "__main__":
     bot.run(TOKEN)
+
 
