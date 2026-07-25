@@ -115,6 +115,9 @@ MEMBER_JOIN_LOG_CHANNEL_ID = 1530260865754992691
 MESSAGE_LOG_CHANNEL_ID = 1530261107946684457
 ROLE_LOG_CHANNEL_ID = 1530264444544876544
 CHANNEL_LOG_CHANNEL_ID = 1530291212819501076
+SELL_PRICE_LIVE_CHANNEL_ID = 1530414527739330650
+SELL_PRICE_2X_PING_ROLE_ID = 1530415834126745620
+SELL_PRICE_4X_PING_ROLE_ID = 1530416033721090170
 VOICE_KICK_AUDIT_LOOKBACK_SECONDS = 90
 VOICE_KICK_AUDIT_RETRIES = 4
 VOICE_KICK_AUDIT_RETRY_DELAY_SECONDS = 1.0
@@ -374,6 +377,8 @@ SEED_PREDICT_CHANCES = {
 http_session: aiohttp.ClientSession | None = None
 last_live_post_ts: int | None = None
 last_stock_signature: str | None = None
+last_sell_price_post_ts: int | None = None
+last_sell_price_signature: str | None = None
 
 GIVEAWAYS: dict[int, dict] = {}
 TREE_SYNCED = False
@@ -2715,6 +2720,103 @@ def _build_sellprice_embed(rows: list[dict], title: str = "Grow A Garden 2 Sell 
     return embed
 
 
+def _sell_row_emoji(name: str, key: str | None) -> str:
+    resolved_key = _predictor_key_from_stock_item(name, key)
+    entry = SEED_LOOKUP.get(resolved_key)
+    if entry is None:
+        return "•"
+    return str(entry.get("emoji") or "•")
+
+
+def _build_live_sell_multiplier_embed(rows: list[dict], guild: discord.Guild | None = None) -> discord.Embed:
+    lines: list[str] = []
+    for row in rows:
+        name = str(row.get("name", "Unknown"))
+        key = str(row.get("key", "") or "")
+        multiplier = float(row.get("multiplier", 0.0) or 0.0)
+        emoji = _sell_row_emoji(name, key)
+        lines.append(f"{emoji} {name} - {_format_sell_multiplier(multiplier)}")
+
+    if not lines:
+        lines = ["No live sell multiplier data available."]
+
+    embed = discord.Embed(
+        title="Grow a Garden 2 Sell Multipliers",
+        description="🌱 **LIVE SEED SELL MULTIPLIERS**\n\n" + "\n".join(lines),
+        color=discord.Color.green(),
+        timestamp=datetime.now(timezone.utc),
+    )
+    if guild is not None and guild.icon:
+        embed.set_thumbnail(url=guild.icon.url)
+    embed.set_footer(text="Live sell multiplier feed")
+    return embed
+
+
+def _build_sell_multiplier_ping_content(rows: list[dict]) -> str | None:
+    max_multiplier = 0.0
+    for row in rows:
+        try:
+            max_multiplier = max(max_multiplier, float(row.get("multiplier", 0.0) or 0.0))
+        except Exception:
+            continue
+
+    if max_multiplier >= 4.0:
+        return f"<@&{SELL_PRICE_4X_PING_ROLE_ID}>"
+    if max_multiplier >= 2.0:
+        return f"<@&{SELL_PRICE_2X_PING_ROLE_ID}>"
+    return None
+
+
+async def _resolve_sell_price_live_channel() -> discord.TextChannel | None:
+    channel = bot.get_channel(SELL_PRICE_LIVE_CHANNEL_ID)
+    if channel is None:
+        try:
+            channel = await bot.fetch_channel(SELL_PRICE_LIVE_CHANNEL_ID)
+        except Exception:
+            return None
+    return channel if isinstance(channel, discord.TextChannel) else None
+
+
+async def _update_sell_price_live_feed() -> None:
+    global last_sell_price_post_ts, last_sell_price_signature
+
+    if not IS_MAIN_BOT_INSTANCE:
+        return
+    if BOT_MODE != "farmers":
+        return
+
+    channel = await _resolve_sell_price_live_channel()
+    if channel is None:
+        return
+
+    try:
+        rows = await _fetch_sell_price_rows()
+    except Exception as exc:
+        print(f"Sell multiplier live update failed: {exc}")
+        return
+
+    signature_rows = [f"{str(row.get('name', ''))}:{float(row.get('multiplier', 0.0) or 0.0):.4f}" for row in rows]
+    signature = "|".join(signature_rows)
+    now_unix = int(datetime.now(timezone.utc).timestamp())
+    should_post = bool(signature and signature != last_sell_price_signature)
+
+    if should_post and last_sell_price_post_ts is not None and (now_unix - last_sell_price_post_ts) < 2:
+        should_post = False
+
+    if not should_post:
+        return
+
+    embed = _build_live_sell_multiplier_embed(rows, guild=channel.guild)
+    ping_content = _build_sell_multiplier_ping_content(rows)
+    await channel.send(
+        content=ping_content,
+        embed=embed,
+        allowed_mentions=discord.AllowedMentions(roles=True),
+    )
+    last_sell_price_post_ts = now_unix
+    last_sell_price_signature = signature
+
+
 def _rainbow_color_value() -> int:
     phase = (datetime.now(timezone.utc).timestamp() % 12.0) / 12.0
     r, g, b = colorsys.hsv_to_rgb(phase, 0.85, 1.0)
@@ -4181,6 +4283,16 @@ async def before_seed_shop_live_loop():
     await bot.wait_until_ready()
 
 
+@tasks.loop(seconds=POLL_SECONDS)
+async def sell_price_live_loop():
+    await _update_sell_price_live_feed()
+
+
+@sell_price_live_loop.before_loop
+async def before_sell_price_live_loop():
+    await bot.wait_until_ready()
+
+
 @tasks.loop(seconds=30)
 async def temp_ban_expiry_loop():
     now_unix = int(datetime.now(timezone.utc).timestamp())
@@ -4744,11 +4856,17 @@ async def on_ready():
         except Exception as exc:
             print(f"Failed to initialize live seed shop message: {exc}")
         try:
+            await _update_sell_price_live_feed()
+        except Exception as exc:
+            print(f"Failed to initialize live sell multipliers: {exc}")
+        try:
             await _post_ticket_support_panel()
         except Exception as exc:
             print(f"Failed to post ticket support panel: {exc}")
         if not seed_shop_live_loop.is_running():
             seed_shop_live_loop.start()
+        if IS_MAIN_BOT_INSTANCE and not sell_price_live_loop.is_running():
+            sell_price_live_loop.start()
     if not temp_ban_expiry_loop.is_running():
         temp_ban_expiry_loop.start()
     if not quarantine_expiry_loop.is_running():
@@ -6641,5 +6759,6 @@ async def sreportremove(ctx: commands.Context, scam_id: int):
 
 if __name__ == "__main__":
     bot.run(TOKEN)
+
 
 
