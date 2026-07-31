@@ -3991,19 +3991,16 @@ async def _fetch_stock_lines_and_next_restock() -> tuple[list[str], list[str], s
         item_name: str,
         item_rarity: str | None,
         quantity: int,
-        ping_display_text: str | None,
     ) -> str:
         rarity_key = str(item_rarity or "").strip().lower()
         rarity_label = rarity_key.title() if rarity_key else "Unknown"
         rarity_emoji = RARITY_EMOJIS.get(rarity_key, "")
         item_emoji_render = item_emoji
-        rarity_line = f"Rarity: {rarity_label} {rarity_emoji}".rstrip()
-        ping_line = f"Ping: {ping_display_text}" if ping_display_text else "Ping: None"
+        rarity_line = f"> Rairty: {rarity_label} {rarity_emoji}".rstrip()
         return (
             f"{item_emoji_render} **{item_name}**\n"
             f"{rarity_line}\n"
-            f"In Stock: **{int(quantity)}**\n"
-            f"{ping_line}"
+            f"> In Stock: **{int(quantity)}**"
         )
 
     lines: list[str] = []
@@ -4022,7 +4019,6 @@ async def _fetch_stock_lines_and_next_restock() -> tuple[list[str], list[str], s
                 entry["name"],
                 str(rarity) if rarity else None,
                 qty,
-                f"@{entry['name']}" if key in STOCK_ROLE_PINGS else None,
             )
         )
 
@@ -4044,7 +4040,6 @@ async def _fetch_stock_lines_and_next_restock() -> tuple[list[str], list[str], s
                 entry["name"],
                 str(rarity) if rarity else None,
                 qty,
-                f"@{entry['name']}" if key in STOCK_ROLE_PINGS else None,
             )
         )
 
@@ -4107,16 +4102,84 @@ def _truncate_component_text(value: str, limit: int = 3900) -> str:
     return text[: limit - 3].rstrip() + "..."
 
 
+def _resolve_stock_notifier_banner_file() -> str | None:
+    candidate_paths: list[str] = []
+    if STOCK_NOTIFIER_IMAGE_FILE:
+        candidate_paths.append(STOCK_NOTIFIER_IMAGE_FILE)
+        if not os.path.isabs(STOCK_NOTIFIER_IMAGE_FILE):
+            candidate_paths.append(os.path.join(BASE_DIR, STOCK_NOTIFIER_IMAGE_FILE))
+
+    candidate_paths.extend(
+        [
+            os.path.join(BASE_DIR, "stock_notifier_banner.png"),
+            os.path.join(BASE_DIR, "stock_notifier_banner.jpg"),
+            os.path.join(BASE_DIR, "assets", "stock_notifier_banner.png"),
+            os.path.join(BASE_DIR, "assets", "stock_notifier_banner.jpg"),
+        ]
+    )
+
+    seen_paths: set[str] = set()
+    for raw_path in candidate_paths:
+        normalized = os.path.abspath(raw_path)
+        if normalized in seen_paths:
+            continue
+        seen_paths.add(normalized)
+        if not os.path.isfile(normalized):
+            continue
+        try:
+            if os.path.getsize(normalized) <= 0:
+                print(f"Stock notifier banner file is empty and will be skipped: {normalized}")
+                continue
+        except Exception as exc:
+            print(f"Could not read stock notifier banner file size for {normalized}: {exc}")
+            continue
+        return normalized
+
+    return None
+
+
 def _build_seed_shop_components_v2_payload(
     lines: list[str],
     gear_lines: list[str],
     next_restock_text: str | None,
     content: str | None = None,
-) -> dict:
+) -> tuple[dict, str | None]:
     seed_block = "\n\n".join(lines) if lines else "No tracked seeds in stock right now."
     gear_block = "\n\n".join(gear_lines) if gear_lines else "No tracked gear in stock right now."
 
+    banner_file_path: str | None = None
+    media_url: str | None = STOCK_NOTIFIER_IMAGE_URL or None
+    if not media_url:
+        banner_file_path = _resolve_stock_notifier_banner_file()
+        if banner_file_path:
+            media_url = f"attachment://{os.path.basename(banner_file_path)}"
+
     container_children: list[dict] = [
+        {
+            "type": 10,
+            "content": _truncate_component_text("### File"),
+        },
+    ]
+
+    if media_url:
+        container_children.append(
+            {
+                "type": 12,
+                "items": [
+                    {
+                        "media": {"url": media_url},
+                    }
+                ],
+            }
+        )
+
+    container_children.extend(
+        [
+            {
+                "type": 14,
+                "divider": True,
+                "spacing": 2,
+            },
         {
             "type": 10,
             "content": _truncate_component_text("## Grow a Garden 2 Stock [V2]"),
@@ -4124,7 +4187,7 @@ def _build_seed_shop_components_v2_payload(
         {
             "type": 14,
             "divider": True,
-            "spacing": 1,
+            "spacing": 2,
         },
         {
             "type": 10,
@@ -4133,13 +4196,14 @@ def _build_seed_shop_components_v2_payload(
         {
             "type": 14,
             "divider": True,
-            "spacing": 1,
+            "spacing": 2,
         },
         {
             "type": 10,
             "content": _truncate_component_text(f"### 🛠️Gear Stock\n\n{gear_block}"),
         },
-    ]
+        ]
+    )
 
     if next_restock_text:
         container_children.append(
@@ -4149,19 +4213,7 @@ def _build_seed_shop_components_v2_payload(
             }
         )
 
-    if STOCK_NOTIFIER_IMAGE_URL:
-        container_children.append(
-            {
-                "type": 12,
-                "items": [
-                    {
-                        "media": {"url": STOCK_NOTIFIER_IMAGE_URL},
-                    }
-                ],
-            }
-        )
-
-    return {
+    payload = {
         "flags": DISCORD_MESSAGE_FLAG_COMPONENTS_V2,
         "content": str(content or ""),
         "components": [
@@ -4173,6 +4225,7 @@ def _build_seed_shop_components_v2_payload(
         ],
         "allowed_mentions": {"parse": ["roles"]},
     }
+    return payload, banner_file_path
 
 
 async def _discord_api_send_or_edit_components_v2_message(
@@ -4181,11 +4234,11 @@ async def _discord_api_send_or_edit_components_v2_message(
     payload: dict,
     *,
     force_new_message: bool = False,
+    banner_file_path: str | None = None,
 ) -> int:
     session = await _get_http_session()
     headers = {
         "Authorization": f"Bot {TOKEN}",
-        "Content-Type": "application/json",
     }
 
     if message_id > 0 and not force_new_message:
@@ -4195,11 +4248,24 @@ async def _discord_api_send_or_edit_components_v2_message(
         url = f"https://discord.com/api/v10/channels/{int(channel_id)}/messages"
         method = "POST"
 
-    async with session.request(method, url, headers=headers, json=payload) as resp:
-        if resp.status not in {200, 201}:
-            body = await resp.text()
-            raise RuntimeError(f"Discord API HTTP {resp.status}: {body[:300]}")
-        data = await resp.json()
+    request_kwargs: dict = {"headers": headers}
+    if banner_file_path:
+        form = aiohttp.FormData()
+        form.add_field("payload_json", json.dumps(payload), content_type="application/json")
+        with open(banner_file_path, "rb") as banner_fp:
+            form.add_field("files[0]", banner_fp, filename=os.path.basename(banner_file_path), content_type="application/octet-stream")
+            async with session.request(method, url, data=form, **request_kwargs) as resp:
+                if resp.status not in {200, 201}:
+                    body = await resp.text()
+                    raise RuntimeError(f"Discord API HTTP {resp.status}: {body[:300]}")
+                data = await resp.json()
+    else:
+        headers["Content-Type"] = "application/json"
+        async with session.request(method, url, json=payload, **request_kwargs) as resp:
+            if resp.status not in {200, 201}:
+                body = await resp.text()
+                raise RuntimeError(f"Discord API HTTP {resp.status}: {body[:300]}")
+            data = await resp.json()
 
     new_message_id = int(data.get("id", 0) or 0)
     if new_message_id <= 0:
@@ -4310,6 +4376,7 @@ async def _send_or_edit_seed_shop_live_message(
     embed: discord.Embed,
     content: str | None,
     components_v2_payload: dict | None = None,
+    components_v2_banner_file: str | None = None,
 ) -> int:
     message_id = int(config.get("message_id", 0) or 0)
     force_new_message = SEED_STOCK_LIVE_SEND_NEW_MESSAGES
@@ -4321,6 +4388,7 @@ async def _send_or_edit_seed_shop_live_message(
                 message_id,
                 components_v2_payload,
                 force_new_message=force_new_message,
+                banner_file_path=components_v2_banner_file,
             )
         except Exception as exc:
             print(f"Components V2 stock message failed, falling back to embed: {exc}")
@@ -4583,7 +4651,7 @@ async def _ensure_seed_shop_live_message_exists() -> None:
     lines, gear_lines, next_restock_text, _next_restock_unix, best_rarity, role_mentions, _ = await _fetch_stock_lines_and_next_restock()
     embed = _compose_seed_shop_embed(lines, gear_lines, next_restock_text, best_rarity)
     ping_content = _build_stock_ping_content(role_mentions)
-    components_v2_payload = _build_seed_shop_components_v2_payload(
+    components_v2_payload, banner_file_path = _build_seed_shop_components_v2_payload(
         lines,
         gear_lines,
         next_restock_text,
@@ -4597,6 +4665,7 @@ async def _ensure_seed_shop_live_message_exists() -> None:
         embed=embed,
         content=ping_content,
         components_v2_payload=components_v2_payload,
+        components_v2_banner_file=banner_file_path,
     )
     _save_live_config(config)
     last_live_post_ts = int(datetime.now(timezone.utc).timestamp())
@@ -4632,7 +4701,7 @@ async def _update_seed_shop_live_message() -> None:
         if should_post:
             embed = _compose_seed_shop_embed(lines, gear_lines, next_restock_text, best_rarity)
             ping_content = _build_stock_ping_content(role_mentions)
-            components_v2_payload = _build_seed_shop_components_v2_payload(
+            components_v2_payload, banner_file_path = _build_seed_shop_components_v2_payload(
                 lines,
                 gear_lines,
                 next_restock_text,
@@ -4646,6 +4715,7 @@ async def _update_seed_shop_live_message() -> None:
                 embed=embed,
                 content=ping_content,
                 components_v2_payload=components_v2_payload,
+                components_v2_banner_file=banner_file_path,
             )
             _save_live_config(config)
             last_live_post_ts = now_unix
