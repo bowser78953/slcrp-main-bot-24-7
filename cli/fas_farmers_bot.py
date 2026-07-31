@@ -1202,6 +1202,31 @@ def _build_ticket_panel_components_v2_payload() -> dict:
         )
         children.append({"type": 14})
 
+    children.append(
+        {
+            "type": 9,
+            "components": [
+                {
+                    "type": 10,
+                    "content": _truncate_component_text(
+                        "## Need Help?\n> Open a General Support Ticket/Owner Team Ticket!"
+                    ),
+                }
+            ],
+            "accessory": {
+                "type": 2,
+                "style": 3,
+                "custom_id": SUPPORT_PANEL_OPEN_BUTTON_CUSTOM_ID,
+                "label": "Make a ticket",
+                "emoji": {
+                    "id": "1524539236462624932",
+                    "name": "Dragons_Breath_seed",
+                },
+            },
+        }
+    )
+    children.append({"type": 14})
+
     for idx, (rule_title, rule_text) in enumerate(_ticket_tos_rules()):
         children.append(
             {
@@ -1218,21 +1243,6 @@ def _build_ticket_panel_components_v2_payload() -> dict:
             {
                 "type": 17,
                 "components": children,
-            },
-            {
-                "type": 1,
-                "components": [
-                    {
-                        "type": 2,
-                        "style": 3,
-                        "custom_id": SUPPORT_PANEL_OPEN_BUTTON_CUSTOM_ID,
-                        "label": "Make a ticket",
-                        "emoji": {
-                            "id": "1524539236462624932",
-                            "name": "Dragons_Breath_seed",
-                        },
-                    }
-                ],
             },
         ],
     }
