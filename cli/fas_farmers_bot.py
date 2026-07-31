@@ -4199,11 +4199,6 @@ async def _send_or_edit_seed_shop_live_message(
     embed: discord.Embed,
     content: str | None,
 ) -> int:
-    # Role pings should be posted as a fresh message so Discord sends a notification.
-    if content and "<@&" in content:
-        sent_message = await channel.send(**_build_stock_embed_send_kwargs(embed, content=content))
-        return sent_message.id
-
     message_id = int(config.get("message_id", 0) or 0)
     if message_id > 0:
         try:
@@ -4215,6 +4210,26 @@ async def _send_or_edit_seed_shop_live_message(
 
     sent_message = await channel.send(**_build_stock_embed_send_kwargs(embed, content=content))
     return sent_message.id
+
+
+async def _send_transient_stock_role_ping(channel: discord.TextChannel, ping_content: str | None) -> None:
+    if not ping_content:
+        return
+    if "<@&" not in ping_content:
+        return
+
+    try:
+        ping_message = await channel.send(
+            content=ping_content,
+            allowed_mentions=discord.AllowedMentions(roles=True, users=False, everyone=False),
+        )
+    except Exception:
+        return
+
+    try:
+        await ping_message.delete(delay=2)
+    except Exception:
+        pass
 
 
 async def _find_voice_kick_actor(guild: discord.Guild, target_user_id: int) -> int | None:
@@ -4442,6 +4457,8 @@ async def _ensure_seed_shop_live_message_exists() -> None:
 
     lines, gear_lines, next_restock_text, _next_restock_unix, best_rarity, role_mentions, _ = await _fetch_stock_lines_and_next_restock()
     embed = _compose_seed_shop_embed(lines, gear_lines, next_restock_text, best_rarity)
+    ping_content = _build_stock_ping_content(role_mentions)
+    await _send_transient_stock_role_ping(channel, ping_content)
     config["message_id"] = await _send_or_edit_seed_shop_live_message(
         channel,
         config,
@@ -4481,6 +4498,8 @@ async def _update_seed_shop_live_message() -> None:
 
         if should_post:
             embed = _compose_seed_shop_embed(lines, gear_lines, next_restock_text, best_rarity)
+            ping_content = _build_stock_ping_content(role_mentions)
+            await _send_transient_stock_role_ping(channel, ping_content)
             config["message_id"] = await _send_or_edit_seed_shop_live_message(
                 channel,
                 config,
