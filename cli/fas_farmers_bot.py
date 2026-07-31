@@ -46,8 +46,18 @@ else:
         print("Missing FAS_FARMERS_BOT_TOKEN in .env.fas_farmers.")
         raise SystemExit(1)
 
-STOCK_NOTIFIER_IMAGE_URL = (os.getenv("FAS_STOCK_NOTIFIER_IMAGE_URL") or "").strip()
-STOCK_NOTIFIER_IMAGE_FILE = (os.getenv("FAS_STOCK_NOTIFIER_IMAGE_FILE") or "").strip()
+STOCK_NOTIFIER_IMAGE_URL = (
+    os.getenv("FAS_STOCK_NOTIFIER_IMAGE_URL")
+    or os.getenv("STOCK_NOTIFIER_IMAGE_URL")
+    or os.getenv("FAS_STOCK_BANNER_URL")
+    or ""
+).strip()
+STOCK_NOTIFIER_IMAGE_FILE = (
+    os.getenv("FAS_STOCK_NOTIFIER_IMAGE_FILE")
+    or os.getenv("STOCK_NOTIFIER_IMAGE_FILE")
+    or os.getenv("FAS_STOCK_BANNER_FILE")
+    or ""
+).strip()
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -4036,12 +4046,13 @@ def _compose_seed_shop_embed(lines: list[str], gear_lines: list[str], next_resto
 
     embed = discord.Embed(
         title="Grow a Garden 2 Stock",
-        description="🌱 **SEED STOCK**\n\n" + seed_block + "\n\n🛠️ **GEAR STOCK**\n\n" + gear_block,
+        description="# 🌱Seed Stock\n\n" + seed_block + "\n\n# 🛠️Gear Stock\n\n" + gear_block,
         color=_color_for_best_rarity(best_rarity),
         timestamp=datetime.now(timezone.utc),
     )
     if STOCK_NOTIFIER_IMAGE_URL:
         embed.set_image(url=STOCK_NOTIFIER_IMAGE_URL)
+        embed.set_thumbnail(url=STOCK_NOTIFIER_IMAGE_URL)
     if next_restock_text:
         embed.add_field(name="Next Shop Refresh", value=next_restock_text, inline=False)
     embed.set_footer(text="Posts when the shop refreshes (about every 5 minutes)")
@@ -4082,6 +4093,7 @@ def _build_stock_embed_send_kwargs(embed: discord.Embed, *, content: str | None 
 
         file_name = os.path.basename(normalized)
         embed.set_image(url=f"attachment://{file_name}")
+        embed.set_thumbnail(url=f"attachment://{file_name}")
         kwargs["file"] = discord.File(normalized, filename=file_name)
         break
 
