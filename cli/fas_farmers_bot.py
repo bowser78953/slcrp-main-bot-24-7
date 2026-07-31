@@ -3971,15 +3971,23 @@ async def _fetch_stock_lines_and_next_restock() -> tuple[list[str], list[str], s
     if BOT_MODE == "farmers":
         _record_predictor_v2_sightings(predictor_stock, now_unix)
 
-    def _format_stock_item_block(item_emoji: str, item_name: str, item_rarity: str | None, quantity: int) -> str:
+    def _format_stock_item_block(
+        item_emoji: str,
+        item_name: str,
+        item_rarity: str | None,
+        quantity: int,
+        ping_mention: str | None,
+    ) -> str:
         rarity_key = str(item_rarity or "").strip().lower()
         rarity_label = rarity_key.title() if rarity_key else "Unknown"
         rarity_emoji = RARITY_EMOJIS.get(rarity_key, "")
         rarity_line = f"> Rarity: {rarity_label} {rarity_emoji}".rstrip()
+        ping_line = f"> Ping: {ping_mention}" if ping_mention else "> Ping: None"
         return (
             f"{item_emoji} **{item_name}**\n"
             f"{rarity_line}\n"
-            f"> In Stock: **{int(quantity)}**"
+            f"> In Stock: **{int(quantity)}**\n"
+            f"{ping_line}"
         )
 
     lines: list[str] = []
@@ -3992,7 +4000,15 @@ async def _fetch_stock_lines_and_next_restock() -> tuple[list[str], list[str], s
             continue
         qty = in_stock[key]
         rarity = entry.get("rarity")
-        lines.append(_format_stock_item_block(entry["emoji"], entry["name"], str(rarity) if rarity else None, qty))
+        lines.append(
+            _format_stock_item_block(
+                entry["emoji"],
+                entry["name"],
+                str(rarity) if rarity else None,
+                qty,
+                STOCK_ROLE_PINGS.get(key),
+            )
+        )
 
         if rarity and (best_rarity is None or RARITY_RANK.get(str(rarity), 0) > RARITY_RANK.get(str(best_rarity), 0)):
             best_rarity = str(rarity)
@@ -4006,7 +4022,15 @@ async def _fetch_stock_lines_and_next_restock() -> tuple[list[str], list[str], s
             continue
         qty = gear_in_stock[key]
         rarity = entry.get("rarity")
-        gear_lines.append(_format_stock_item_block(entry["emoji"], entry["name"], str(rarity) if rarity else None, qty))
+        gear_lines.append(
+            _format_stock_item_block(
+                entry["emoji"],
+                entry["name"],
+                str(rarity) if rarity else None,
+                qty,
+                STOCK_ROLE_PINGS.get(key),
+            )
+        )
 
         if rarity and (best_rarity is None or RARITY_RANK.get(str(rarity), 0) > RARITY_RANK.get(str(best_rarity), 0)):
             best_rarity = str(rarity)
@@ -4064,6 +4088,8 @@ def _build_stock_embed_send_kwargs(embed: discord.Embed, *, content: str | None 
     kwargs: dict = {"embed": embed}
     if content is not None:
         kwargs["content"] = content
+        if "<@&" in content or "<@" in content:
+            kwargs["allowed_mentions"] = discord.AllowedMentions(roles=True, users=True, everyone=False)
 
     if STOCK_NOTIFIER_IMAGE_URL:
         return kwargs
@@ -4161,6 +4187,11 @@ async def _send_or_edit_seed_shop_live_message(
     embed: discord.Embed,
     content: str | None,
 ) -> int:
+    # Role pings should be posted as a fresh message so Discord sends a notification.
+    if content and "<@&" in content:
+        sent_message = await channel.send(**_build_stock_embed_send_kwargs(embed, content=content))
+        return sent_message.id
+
     message_id = int(config.get("message_id", 0) or 0)
     if message_id > 0:
         try:
