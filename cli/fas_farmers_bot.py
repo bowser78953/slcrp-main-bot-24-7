@@ -395,7 +395,7 @@ last_sell_price_signature: str | None = None
 SEED_STOCK_EMBED_STYLE_VERSION = "v2"
 SEED_STOCK_COMPONENTS_V2_ENABLED = (os.getenv("FAS_STOCK_COMPONENTS_V2") or "1").strip().lower() in {"1", "true", "yes", "on"}
 SEED_STOCK_LIVE_SEND_NEW_MESSAGES = (os.getenv("FAS_STOCK_LIVE_SEND_NEW_MESSAGES") or "1").strip().lower() in {"1", "true", "yes", "on"}
-SEED_STOCK_COMPONENTS_V2_STRICT = (os.getenv("FAS_STOCK_COMPONENTS_V2_STRICT") or "0").strip().lower() in {"1", "true", "yes", "on"}
+SEED_STOCK_COMPONENTS_V2_STRICT = (os.getenv("FAS_STOCK_COMPONENTS_V2_STRICT") or "1").strip().lower() in {"1", "true", "yes", "on"}
 # Discord message flag value for IsComponentsV2.
 DISCORD_MESSAGE_FLAG_COMPONENTS_V2 = 32768
 
@@ -6302,8 +6302,27 @@ async def remove_seeds(ctx: commands.Context, user: discord.Member, amount: int)
 @bot.command(name="seedstock")
 async def seedstock(ctx: commands.Context):
     try:
-        embed = await _build_seed_shop_embed()
-        await ctx.send(**_build_stock_embed_send_kwargs(embed))
+        if not isinstance(ctx.channel, discord.TextChannel):
+            await ctx.send("```⚠️ Command Failed ```\n-# This command only works in server text channels.")
+            return
+
+        lines, gear_lines, next_restock_text, _next_restock_unix, best_rarity, role_mentions, _ = await _fetch_stock_lines_and_next_restock()
+        embed = _compose_seed_shop_embed(lines, gear_lines, next_restock_text, best_rarity)
+        ping_content = _build_stock_ping_content(role_mentions)
+        components_v2_payload, banner_file_path = _build_seed_shop_components_v2_payload(
+            lines,
+            gear_lines,
+            next_restock_text,
+            ping_content=ping_content,
+        )
+        await _send_or_edit_seed_shop_live_message(
+            ctx.channel,
+            {"message_id": 0},
+            embed=embed,
+            content=ping_content,
+            components_v2_payload=components_v2_payload,
+            components_v2_banner_file=banner_file_path,
+        )
     except Exception as exc:
         await ctx.send(f"```⚠️ Command Failed ```\n-# Could not fetch live seed stock right now: {exc}")
 
@@ -6316,13 +6335,28 @@ async def seedshoplive(ctx: commands.Context):
         return
 
     try:
-        embed = await _build_seed_shop_embed()
+        lines, gear_lines, next_restock_text, _next_restock_unix, best_rarity, role_mentions, _ = await _fetch_stock_lines_and_next_restock()
+        embed = _compose_seed_shop_embed(lines, gear_lines, next_restock_text, best_rarity)
+        ping_content = _build_stock_ping_content(role_mentions)
+        components_v2_payload, banner_file_path = _build_seed_shop_components_v2_payload(
+            lines,
+            gear_lines,
+            next_restock_text,
+            ping_content=ping_content,
+        )
     except Exception as exc:
         await ctx.send(f"```⚠️ Command Failed ```\n-# Could not start live seed shop: {exc}")
         return
 
-    message = await channel.send(**_build_stock_embed_send_kwargs(embed))
-    _save_live_config({"channel_id": SEED_SHOP_CHANNEL_ID, "message_id": message.id})
+    message_id = await _send_or_edit_seed_shop_live_message(
+        channel,
+        {"message_id": 0},
+        embed=embed,
+        content=ping_content,
+        components_v2_payload=components_v2_payload,
+        components_v2_banner_file=banner_file_path,
+    )
+    _save_live_config({"channel_id": SEED_SHOP_CHANNEL_ID, "message_id": message_id})
     await ctx.send(f"Live seed shop started in <#{SEED_SHOP_CHANNEL_ID}>. This message refreshes every 5 minutes.")
     await _update_seed_shop_live_message()
 
