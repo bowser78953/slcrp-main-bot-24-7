@@ -395,7 +395,7 @@ last_sell_price_signature: str | None = None
 SEED_STOCK_EMBED_STYLE_VERSION = "v2"
 SEED_STOCK_COMPONENTS_V2_ENABLED = (os.getenv("FAS_STOCK_COMPONENTS_V2") or "1").strip().lower() in {"1", "true", "yes", "on"}
 SEED_STOCK_LIVE_SEND_NEW_MESSAGES = (os.getenv("FAS_STOCK_LIVE_SEND_NEW_MESSAGES") or "1").strip().lower() in {"1", "true", "yes", "on"}
-SEED_STOCK_COMPONENTS_V2_STRICT = (os.getenv("FAS_STOCK_COMPONENTS_V2_STRICT") or "1").strip().lower() in {"1", "true", "yes", "on"}
+SEED_STOCK_COMPONENTS_V2_STRICT = (os.getenv("FAS_STOCK_COMPONENTS_V2_STRICT") or "0").strip().lower() in {"1", "true", "yes", "on"}
 # Discord message flag value for IsComponentsV2.
 DISCORD_MESSAGE_FLAG_COMPONENTS_V2 = 32768
 
@@ -4178,8 +4178,6 @@ def _build_seed_shop_components_v2_payload(
         [
             {
                 "type": 14,
-                "divider": True,
-                "spacing": 2,
             },
         {
             "type": 10,
@@ -4187,8 +4185,6 @@ def _build_seed_shop_components_v2_payload(
         },
         {
             "type": 14,
-            "divider": True,
-            "spacing": 2,
         },
         {
             "type": 10,
@@ -4196,8 +4192,6 @@ def _build_seed_shop_components_v2_payload(
         },
         {
             "type": 14,
-            "divider": True,
-            "spacing": 2,
         },
         {
             "type": 10,
@@ -4218,8 +4212,6 @@ def _build_seed_shop_components_v2_payload(
             3,
             {
                 "type": 14,
-                "divider": True,
-                "spacing": 2,
             },
         )
 
