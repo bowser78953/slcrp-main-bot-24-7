@@ -3991,8 +3991,8 @@ async def _fetch_stock_lines_and_next_restock() -> tuple[list[str], list[str], s
     ) -> str:
         rarity_key = str(item_rarity or "").strip().lower()
         rarity_label = rarity_key.title() if rarity_key else "Unknown"
-        rarity_emoji = _emoji_to_markdown(RARITY_EMOJIS.get(rarity_key, ""))
-        item_emoji_render = _emoji_to_markdown(item_emoji)
+        rarity_emoji = RARITY_EMOJIS.get(rarity_key, "")
+        item_emoji_render = item_emoji
         rarity_line = f"> Rarity: {rarity_label} {rarity_emoji}".rstrip()
         ping_line = f"> Ping: {ping_mention}" if ping_mention else "> Ping: None"
         return (
@@ -4446,7 +4446,7 @@ async def _ensure_seed_shop_live_message_exists() -> None:
         channel,
         config,
         embed=embed,
-        content=_build_stock_ping_content(role_mentions),
+        content=None,
     )
     _save_live_config(config)
     last_live_post_ts = int(datetime.now(timezone.utc).timestamp())
@@ -4485,7 +4485,7 @@ async def _update_seed_shop_live_message() -> None:
                 channel,
                 config,
                 embed=embed,
-                content=_build_stock_ping_content(role_mentions),
+                content=None,
             )
             _save_live_config(config)
             last_live_post_ts = now_unix
