@@ -4110,23 +4110,33 @@ def _build_seed_shop_components_v2_payload(lines: list[str], gear_lines: list[st
     seed_block = "\n\n".join(lines) if lines else "No tracked seeds in stock right now."
     gear_block = "\n\n".join(gear_lines) if gear_lines else "No tracked gear in stock right now."
 
-    components: list[dict] = [
+    container_children: list[dict] = [
         {
             "type": 10,
-            "content": _truncate_component_text("# Grow a Garden 2 Stock [V2]"),
+            "content": _truncate_component_text("## Grow a Garden 2 Stock [V2]"),
+        },
+        {
+            "type": 14,
+            "divider": True,
+            "spacing": 1,
         },
         {
             "type": 10,
-            "content": _truncate_component_text(f"## 🌱Seed Stock\n\n{seed_block}"),
+            "content": _truncate_component_text(f"### 🌱Seed Stock\n\n{seed_block}"),
+        },
+        {
+            "type": 14,
+            "divider": True,
+            "spacing": 1,
         },
         {
             "type": 10,
-            "content": _truncate_component_text(f"## 🛠️Gear Stock\n\n{gear_block}"),
+            "content": _truncate_component_text(f"### 🛠️Gear Stock\n\n{gear_block}"),
         },
     ]
 
     if next_restock_text:
-        components.append(
+        container_children.append(
             {
                 "type": 10,
                 "content": _truncate_component_text(f"### Next Shop Refresh\n{next_restock_text}"),
@@ -4134,7 +4144,7 @@ def _build_seed_shop_components_v2_payload(lines: list[str], gear_lines: list[st
         )
 
     if STOCK_NOTIFIER_IMAGE_URL:
-        components.append(
+        container_children.append(
             {
                 "type": 12,
                 "items": [
@@ -4147,7 +4157,13 @@ def _build_seed_shop_components_v2_payload(lines: list[str], gear_lines: list[st
 
     return {
         "flags": DISCORD_MESSAGE_FLAG_COMPONENTS_V2,
-        "components": components,
+        "components": [
+            {
+                "type": 17,
+                "accent_color": _color_for_best_rarity(None).value,
+                "components": container_children,
+            }
+        ],
         "allowed_mentions": {"parse": []},
     }
 
