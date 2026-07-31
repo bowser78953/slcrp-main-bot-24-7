@@ -60,6 +60,14 @@ STOCK_NOTIFIER_IMAGE_FILE = (
     or os.getenv("FAS_STOCK_BANNER_FILE")
     or ""
 ).strip()
+SUPPORT_NOTIFIER_IMAGE_URL = (
+    os.getenv("FAS_SUPPORT_NOTIFIER_IMAGE_URL")
+    or os.getenv("SUPPORT_NOTIFIER_IMAGE_URL")
+    or os.getenv("FAS_SUPPORT_BANNER_URL")
+    or ""
+).strip()
+if not SUPPORT_NOTIFIER_IMAGE_URL:
+    SUPPORT_NOTIFIER_IMAGE_URL = "https://raw.githubusercontent.com/bowser78953/slcrp-main-bot-24-7/main/cli/support_notifier_banner.png"
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -1150,8 +1158,8 @@ def _build_ticket_panel_embed(guild: discord.Guild | None = None) -> discord.Emb
         color=discord.Color.green(),
     )
 
-    if STOCK_NOTIFIER_IMAGE_URL:
-        embed.set_image(url=STOCK_NOTIFIER_IMAGE_URL)
+    if SUPPORT_NOTIFIER_IMAGE_URL:
+        embed.set_image(url=SUPPORT_NOTIFIER_IMAGE_URL)
 
     if guild and guild.icon:
         embed.set_thumbnail(url=guild.icon.url)
