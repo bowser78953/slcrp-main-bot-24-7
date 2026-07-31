@@ -3971,6 +3971,17 @@ async def _fetch_stock_lines_and_next_restock() -> tuple[list[str], list[str], s
     if BOT_MODE == "farmers":
         _record_predictor_v2_sightings(predictor_stock, now_unix)
 
+    def _emoji_to_markdown(emoji_text: str) -> str:
+        text = str(emoji_text or "").strip()
+        if not text:
+            return ""
+        match = re.fullmatch(r"<(a?):([A-Za-z0-9_]+):(\d+)>", text)
+        if match:
+            animated_flag, emoji_name, emoji_id = match.groups()
+            ext = "gif" if animated_flag == "a" else "webp"
+            return f"![:{emoji_name}:](https://cdn.discordapp.com/emojis/{emoji_id}.{ext}?size=44)"
+        return text
+
     def _format_stock_item_block(
         item_emoji: str,
         item_name: str,
@@ -3980,11 +3991,12 @@ async def _fetch_stock_lines_and_next_restock() -> tuple[list[str], list[str], s
     ) -> str:
         rarity_key = str(item_rarity or "").strip().lower()
         rarity_label = rarity_key.title() if rarity_key else "Unknown"
-        rarity_emoji = RARITY_EMOJIS.get(rarity_key, "")
+        rarity_emoji = _emoji_to_markdown(RARITY_EMOJIS.get(rarity_key, ""))
+        item_emoji_render = _emoji_to_markdown(item_emoji)
         rarity_line = f"> Rarity: {rarity_label} {rarity_emoji}".rstrip()
         ping_line = f"> Ping: {ping_mention}" if ping_mention else "> Ping: None"
         return (
-            f"{item_emoji} **{item_name}**\n"
+            f"{item_emoji_render} **{item_name}**\n"
             f"{rarity_line}\n"
             f"> In Stock: **{int(quantity)}**\n"
             f"{ping_line}"
