@@ -1,0 +1,6 @@
+{
+  "name": "forceend",
+  "description": "Force end a giveaway by ID.",
+  "usage": "-forceend <giveaway_id>",
+  "category": "giveaway"
+}

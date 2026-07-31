@@ -1,0 +1,6 @@
+{
+  "name": "vouchremove",
+  "description": "Remove a vouch by vouch ID.",
+  "usage": "-vouchremove <vouch_id>",
+  "category": "vouch"
+}

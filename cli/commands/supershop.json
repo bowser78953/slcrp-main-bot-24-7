@@ -1,0 +1,6 @@
+{
+  "name": "supershop",
+  "description": "Show active items in the super shop.",
+  "usage": "-supershop",
+  "category": "seed"
+}

@@ -1,0 +1,6 @@
+{
+  "name": "tempban",
+  "description": "Temporarily ban a user.",
+  "usage": "-tempban <@user> <reason>",
+  "category": "moderation"
+}

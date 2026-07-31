@@ -1,0 +1,6 @@
+{
+  "name": "permban",
+  "description": "Permanently ban a user.",
+  "usage": "-permban <@user> <reason>",
+  "category": "moderation"
+}

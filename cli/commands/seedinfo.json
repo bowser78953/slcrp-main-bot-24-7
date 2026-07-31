@@ -1,0 +1,6 @@
+{
+  "name": "seedinfo",
+  "description": "Show seed system information.",
+  "usage": "-seedinfo",
+  "category": "seed"
+}

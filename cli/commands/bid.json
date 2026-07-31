@@ -1,0 +1,6 @@
+{
+  "name": "bid",
+  "description": "Place a bid on an active auction.",
+  "usage": "-bid <auction_id> <@user> <amount>",
+  "category": "seed"
+}

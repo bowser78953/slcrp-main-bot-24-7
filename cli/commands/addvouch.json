@@ -1,0 +1,6 @@
+{
+  "name": "addvouch",
+  "description": "Add a vouch for a user from a specific voucher.",
+  "usage": "-addvouch <@user> <@voucher> <reason>",
+  "category": "vouch"
+}

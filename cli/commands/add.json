@@ -1,0 +1,6 @@
+{
+  "name": "add",
+  "description": "Add a user to the current ticket channel.",
+  "usage": "-add <user_id_or_mention>",
+  "category": "tickets"
+}

@@ -1,0 +1,6 @@
+{
+  "name": "addseeds",
+  "description": "Add seeds to a user balance.",
+  "usage": "-addseeds <@user> <amount>",
+  "category": "seed"
+}

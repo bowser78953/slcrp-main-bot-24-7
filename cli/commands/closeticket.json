@@ -1,0 +1,6 @@
+{
+  "name": "closeticket",
+  "description": "Close the current ticket after collecting a reason.",
+  "usage": "-closeticket",
+  "category": "tickets"
+}

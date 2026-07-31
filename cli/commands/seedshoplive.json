@@ -1,0 +1,6 @@
+{
+  "name": "seedshoplive",
+  "description": "Start or refresh the live seed shop embed.",
+  "usage": "-seedshoplive",
+  "category": "seed"
+}

@@ -1,0 +1,6 @@
+{
+  "name": "syncslash",
+  "description": "Force slash-command sync to Discord.",
+  "usage": "-syncslash",
+  "category": "utility"
+}

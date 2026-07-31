@@ -1,0 +1,6 @@
+{
+  "name": "baninfo",
+  "description": "Show ban and moderation history for a user.",
+  "usage": "-baninfo <@user>",
+  "category": "moderation"
+}

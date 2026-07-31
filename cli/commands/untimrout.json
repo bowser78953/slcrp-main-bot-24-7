@@ -1,0 +1,9 @@
+{
+  "name": "untimrout",
+  "description": "Remove a timeout from a user.",
+  "usage": "-untimeout <@user>",
+  "aliases": [
+    "untimeout"
+  ],
+  "category": "moderation"
+}

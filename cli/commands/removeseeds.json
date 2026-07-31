@@ -1,0 +1,9 @@
+{
+  "name": "removeseeds",
+  "description": "Remove seeds from a user balance.",
+  "usage": "-removeseeds <@user> <amount>",
+  "aliases": [
+    "remove_seeds"
+  ],
+  "category": "seed"
+}

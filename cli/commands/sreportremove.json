@@ -1,0 +1,6 @@
+{
+  "name": "sreportremove",
+  "description": "Remove a scam report by ID.",
+  "usage": "-sreportremove <scam_id>",
+  "category": "vouch"
+}

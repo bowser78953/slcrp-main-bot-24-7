@@ -1,0 +1,6 @@
+{
+  "name": "seedcmds",
+  "description": "Show seed-related commands only.",
+  "usage": "-seedcmds",
+  "category": "seed"
+}

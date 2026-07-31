@@ -1,0 +1,6 @@
+{
+  "name": "sellprice",
+  "description": "Show live sell multiplier for one fruit or all fruits.",
+  "usage": "-sellprice <fruit_name|all_fruits>",
+  "category": "seed"
+}

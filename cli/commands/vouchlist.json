@@ -1,0 +1,6 @@
+{
+  "name": "vouchlist",
+  "description": "Show vouches and scam reports for a user.",
+  "usage": "-vouchlist <@user>",
+  "category": "vouch"
+}

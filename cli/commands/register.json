@@ -1,0 +1,6 @@
+{
+  "name": "register",
+  "description": "Register your Roblox username for seed-shop purchases.",
+  "usage": "-register <roblox_username>",
+  "category": "seed"
+}

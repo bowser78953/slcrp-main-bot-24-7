@@ -1,0 +1,6 @@
+{
+  "name": "warn",
+  "description": "Warn a user and apply warning ladder actions.",
+  "usage": "-warn <@user> <reason>",
+  "category": "moderation"
+}

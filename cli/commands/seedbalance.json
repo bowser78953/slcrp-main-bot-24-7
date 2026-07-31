@@ -1,0 +1,6 @@
+{
+  "name": "seedbalance",
+  "description": "Show your current seed balance.",
+  "usage": "-seedbalance",
+  "category": "seed"
+}

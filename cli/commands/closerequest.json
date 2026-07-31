@@ -1,0 +1,6 @@
+{
+  "name": "closerequest",
+  "description": "Request ticket closure with approve or deny buttons.",
+  "usage": "-closerequest",
+  "category": "tickets"
+}

@@ -1,0 +1,6 @@
+{
+  "name": "seedclaim",
+  "description": "Claim your daily seed reward.",
+  "usage": "-seedclaim",
+  "category": "seed"
+}

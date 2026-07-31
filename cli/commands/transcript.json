@@ -1,0 +1,6 @@
+{
+  "name": "transcript",
+  "description": "Fetch a saved ticket transcript by ID.",
+  "usage": "-transcript <transcript_id>",
+  "category": "tickets"
+}

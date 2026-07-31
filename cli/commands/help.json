@@ -1,0 +1,6 @@
+{
+  "name": "help",
+  "description": "Show the full bot command list.",
+  "usage": "-help",
+  "category": "utility"
+}

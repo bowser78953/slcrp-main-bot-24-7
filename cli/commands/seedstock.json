@@ -1,0 +1,6 @@
+{
+  "name": "seedstock",
+  "description": "Show current live seed stock.",
+  "usage": "-seedstock",
+  "category": "seed"
+}

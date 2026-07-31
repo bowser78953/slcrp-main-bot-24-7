@@ -1,0 +1,6 @@
+{
+  "name": "quarantine",
+  "description": "Quarantine a user for a timed duration.",
+  "usage": "-quarantine <@user> <reason> <time>",
+  "category": "moderation"
+}

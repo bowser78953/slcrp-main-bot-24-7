@@ -1,0 +1,6 @@
+{
+  "name": "unwarn",
+  "description": "Remove a warning by warning ID.",
+  "usage": "-unwarn <warning_id>",
+  "category": "moderation"
+}

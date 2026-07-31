@@ -1,0 +1,6 @@
+{
+  "name": "addtosshop",
+  "description": "Add an item to the super seed shop.",
+  "usage": "-addtosshop <item_name> <price>",
+  "category": "seed"
+}

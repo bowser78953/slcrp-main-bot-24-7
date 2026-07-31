@@ -1,0 +1,6 @@
+{
+  "name": "seeddebug",
+  "description": "Show seed persistence debug info for your account.",
+  "usage": "-seeddebug",
+  "category": "seed"
+}

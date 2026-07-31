@@ -1,0 +1,6 @@
+{
+  "name": "auction",
+  "description": "Start a seed auction in the auction channel.",
+  "usage": "-auction <item> <starting_price> <time_1d_1h_1m_1s>",
+  "category": "seed"
+}

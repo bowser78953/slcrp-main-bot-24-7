@@ -1,0 +1,6 @@
+{
+  "name": "ping",
+  "description": "Check bot responsiveness.",
+  "usage": "-ping",
+  "category": "utility"
+}

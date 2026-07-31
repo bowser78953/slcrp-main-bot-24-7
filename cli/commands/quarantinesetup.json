@@ -1,0 +1,7 @@
+{
+  "name": "quarantinesetup",
+  "description": "Configure quarantine role and channel using slash command.",
+  "usage": "/quarantinesetup",
+  "category": "slash",
+  "command_type": "slash"
+}

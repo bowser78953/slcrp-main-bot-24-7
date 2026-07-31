@@ -1,0 +1,9 @@
+{
+  "name": "seedleaderboard",
+  "description": "Show the seed leaderboard.",
+  "usage": "-seedleaderboard",
+  "aliases": [
+    "seedlb"
+  ],
+  "category": "seed"
+}

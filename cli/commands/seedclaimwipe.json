@@ -1,0 +1,6 @@
+{
+  "name": "seedclaimwipe",
+  "description": "Wipe claim cooldowns for all users or one user.",
+  "usage": "-seedclaimwipe all|@user",
+  "category": "seed"
+}

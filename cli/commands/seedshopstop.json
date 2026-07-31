@@ -1,0 +1,6 @@
+{
+  "name": "seedshopstop",
+  "description": "Stop live seed shop updates.",
+  "usage": "-seedshopstop",
+  "category": "seed"
+}

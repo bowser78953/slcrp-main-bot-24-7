@@ -1,0 +1,6 @@
+{
+  "name": "remove",
+  "description": "Remove a user from the current ticket channel.",
+  "usage": "-remove <user_id_or_mention>",
+  "category": "tickets"
+}
