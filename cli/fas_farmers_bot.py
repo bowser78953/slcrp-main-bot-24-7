@@ -4153,8 +4153,6 @@ def _build_seed_shop_components_v2_payload(
     media_url: str | None = STOCK_NOTIFIER_IMAGE_URL or None
     if not media_url:
         banner_file_path = _resolve_stock_notifier_banner_file()
-        if banner_file_path:
-            media_url = f"attachment://{os.path.basename(banner_file_path)}"
 
     container_children: list[dict] = [
         {
@@ -4172,6 +4170,13 @@ def _build_seed_shop_components_v2_payload(
                         "media": {"url": media_url},
                     }
                 ],
+            }
+        )
+    elif banner_file_path:
+        container_children.append(
+            {
+                "type": 10,
+                "content": _truncate_component_text(f"Using file: {os.path.basename(banner_file_path)}"),
             }
         )
 
@@ -4226,7 +4231,6 @@ def _build_seed_shop_components_v2_payload(
 
     payload = {
         "flags": DISCORD_MESSAGE_FLAG_COMPONENTS_V2,
-        "content": str(ping_content or ""),
         "components": [
             {
                 "type": 17,
@@ -4234,15 +4238,7 @@ def _build_seed_shop_components_v2_payload(
                 "components": container_children,
             }
         ],
-        "allowed_mentions": {"parse": ["roles"]},
     }
-    if banner_file_path:
-        payload["attachments"] = [
-            {
-                "id": "0",
-                "filename": os.path.basename(banner_file_path),
-            }
-        ]
     return payload, banner_file_path
 
 
@@ -4252,7 +4248,6 @@ async def _discord_api_send_or_edit_components_v2_message(
     payload: dict,
     *,
     force_new_message: bool = False,
-    banner_file_path: str | None = None,
 ) -> int:
     session = await _get_http_session()
     headers = {
@@ -4266,24 +4261,12 @@ async def _discord_api_send_or_edit_components_v2_message(
         url = f"https://discord.com/api/v10/channels/{int(channel_id)}/messages"
         method = "POST"
 
-    request_kwargs: dict = {"headers": headers}
-    if banner_file_path:
-        form = aiohttp.FormData()
-        form.add_field("payload_json", json.dumps(payload), content_type="application/json")
-        with open(banner_file_path, "rb") as banner_fp:
-            form.add_field("files[0]", banner_fp, filename=os.path.basename(banner_file_path), content_type="application/octet-stream")
-            async with session.request(method, url, data=form, **request_kwargs) as resp:
-                if resp.status not in {200, 201}:
-                    body = await resp.text()
-                    raise RuntimeError(f"Discord API HTTP {resp.status}: {body[:300]}")
-                data = await resp.json()
-    else:
-        headers["Content-Type"] = "application/json"
-        async with session.request(method, url, json=payload, **request_kwargs) as resp:
-            if resp.status not in {200, 201}:
-                body = await resp.text()
-                raise RuntimeError(f"Discord API HTTP {resp.status}: {body[:300]}")
-            data = await resp.json()
+    headers["Content-Type"] = "application/json"
+    async with session.request(method, url, json=payload, headers=headers) as resp:
+        if resp.status not in {200, 201}:
+            body = await resp.text()
+            raise RuntimeError(f"Discord API HTTP {resp.status}: {body[:300]}")
+        data = await resp.json()
 
     new_message_id = int(data.get("id", 0) or 0)
     if new_message_id <= 0:
@@ -4400,13 +4383,17 @@ async def _send_or_edit_seed_shop_live_message(
     force_new_message = SEED_STOCK_LIVE_SEND_NEW_MESSAGES
 
     if components_v2_payload and SEED_STOCK_COMPONENTS_V2_ENABLED:
+        if force_new_message and components_v2_banner_file and not STOCK_NOTIFIER_IMAGE_URL:
+            try:
+                await channel.send(file=discord.File(components_v2_banner_file, filename=os.path.basename(components_v2_banner_file)))
+            except Exception as exc:
+                print(f"Local banner file post failed: {exc}")
         try:
             return await _discord_api_send_or_edit_components_v2_message(
                 int(channel.id),
                 message_id,
                 components_v2_payload,
                 force_new_message=force_new_message,
-                banner_file_path=components_v2_banner_file,
             )
         except Exception as exc:
             print(f"Components V2 stock message failed: {exc}")
@@ -4686,8 +4673,7 @@ async def _ensure_seed_shop_live_message_exists() -> None:
         next_restock_text,
         ping_content=ping_content,
     )
-    if not SEED_STOCK_LIVE_SEND_NEW_MESSAGES:
-        await _send_transient_stock_role_ping(channel, ping_content)
+    await _send_transient_stock_role_ping(channel, ping_content)
     config["message_id"] = await _send_or_edit_seed_shop_live_message(
         channel,
         config,
@@ -4743,8 +4729,7 @@ async def _update_seed_shop_live_message() -> None:
                 next_restock_text,
                 ping_content=ping_content,
             )
-            if not SEED_STOCK_LIVE_SEND_NEW_MESSAGES:
-                await _send_transient_stock_role_ping(channel, ping_content)
+            await _send_transient_stock_role_ping(channel, ping_content)
             config["message_id"] = await _send_or_edit_seed_shop_live_message(
                 channel,
                 config,
