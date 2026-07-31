@@ -392,6 +392,7 @@ last_live_post_ts: int | None = None
 last_stock_signature: str | None = None
 last_sell_price_post_ts: int | None = None
 last_sell_price_signature: str | None = None
+SEED_STOCK_EMBED_STYLE_VERSION = "v2"
 
 GIVEAWAYS: dict[int, dict] = {}
 TREE_SYNCED = False
@@ -4090,6 +4091,13 @@ def _build_stock_embed_send_kwargs(embed: discord.Embed, *, content: str | None 
         seen_paths.add(normalized)
         if not os.path.isfile(normalized):
             continue
+        try:
+            if os.path.getsize(normalized) <= 0:
+                print(f"Stock notifier banner file is empty and will be skipped: {normalized}")
+                continue
+        except Exception as exc:
+            print(f"Could not read stock notifier banner file size for {normalized}: {exc}")
+            continue
 
         file_name = os.path.basename(normalized)
         embed.set_image(url=f"attachment://{file_name}")
@@ -4144,6 +4152,26 @@ async def _resolve_seed_shop_channel() -> discord.TextChannel | None:
         except Exception:
             return None
     return channel if isinstance(channel, discord.TextChannel) else None
+
+
+async def _send_or_edit_seed_shop_live_message(
+    channel: discord.TextChannel,
+    config: dict,
+    *,
+    embed: discord.Embed,
+    content: str | None,
+) -> int:
+    message_id = int(config.get("message_id", 0) or 0)
+    if message_id > 0:
+        try:
+            existing_message = await channel.fetch_message(message_id)
+            await existing_message.edit(**_build_stock_embed_send_kwargs(embed, content=content))
+            return existing_message.id
+        except Exception:
+            pass
+
+    sent_message = await channel.send(**_build_stock_embed_send_kwargs(embed, content=content))
+    return sent_message.id
 
 
 async def _find_voice_kick_actor(guild: discord.Guild, target_user_id: int) -> int | None:
@@ -4371,11 +4399,15 @@ async def _ensure_seed_shop_live_message_exists() -> None:
 
     lines, gear_lines, next_restock_text, _next_restock_unix, best_rarity, role_mentions, _ = await _fetch_stock_lines_and_next_restock()
     embed = _compose_seed_shop_embed(lines, gear_lines, next_restock_text, best_rarity)
-    message = await channel.send(**_build_stock_embed_send_kwargs(embed, content=_build_stock_ping_content(role_mentions)))
-    config["message_id"] = message.id
+    config["message_id"] = await _send_or_edit_seed_shop_live_message(
+        channel,
+        config,
+        embed=embed,
+        content=_build_stock_ping_content(role_mentions),
+    )
     _save_live_config(config)
     last_live_post_ts = int(datetime.now(timezone.utc).timestamp())
-    last_stock_signature = "\n".join(lines + ["---"] + gear_lines)
+    last_stock_signature = f"{SEED_STOCK_EMBED_STYLE_VERSION}|" + "\n".join(lines + ["---"] + gear_lines)
 
 
 async def _update_seed_shop_live_message() -> None:
@@ -4399,15 +4431,19 @@ async def _update_seed_shop_live_message() -> None:
         lines, gear_lines, next_restock_text, _next_restock_unix, best_rarity, role_mentions, _ = await _fetch_stock_lines_and_next_restock()
         now_unix = int(datetime.now(timezone.utc).timestamp())
 
-        stock_signature = "\n".join(lines + ["---"] + gear_lines)
+        stock_signature = f"{SEED_STOCK_EMBED_STYLE_VERSION}|" + "\n".join(lines + ["---"] + gear_lines)
         should_post = bool(stock_signature and stock_signature != last_stock_signature)
         if should_post and last_live_post_ts is not None and (now_unix - last_live_post_ts) < 2:
             should_post = False
 
         if should_post:
             embed = _compose_seed_shop_embed(lines, gear_lines, next_restock_text, best_rarity)
-            message = await channel.send(**_build_stock_embed_send_kwargs(embed, content=_build_stock_ping_content(role_mentions)))
-            config["message_id"] = message.id
+            config["message_id"] = await _send_or_edit_seed_shop_live_message(
+                channel,
+                config,
+                embed=embed,
+                content=_build_stock_ping_content(role_mentions),
+            )
             _save_live_config(config)
             last_live_post_ts = now_unix
             last_stock_signature = stock_signature
