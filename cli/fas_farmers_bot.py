@@ -395,7 +395,8 @@ last_sell_price_signature: str | None = None
 SEED_STOCK_EMBED_STYLE_VERSION = "v2"
 SEED_STOCK_COMPONENTS_V2_ENABLED = (os.getenv("FAS_STOCK_COMPONENTS_V2") or "1").strip().lower() in {"1", "true", "yes", "on"}
 SEED_STOCK_LIVE_SEND_NEW_MESSAGES = (os.getenv("FAS_STOCK_LIVE_SEND_NEW_MESSAGES") or "1").strip().lower() in {"1", "true", "yes", "on"}
-SEED_STOCK_COMPONENTS_V2_STRICT = (os.getenv("FAS_STOCK_COMPONENTS_V2_STRICT") or "0").strip().lower() in {"1", "true", "yes", "on"}
+SEED_STOCK_COMPONENTS_V2_STRICT = (os.getenv("FAS_STOCK_COMPONENTS_V2_STRICT") or "1").strip().lower() in {"1", "true", "yes", "on"}
+SEED_STOCK_COMPONENTS_V2_ALLOW_EMBED_FALLBACK = (os.getenv("FAS_STOCK_COMPONENTS_V2_ALLOW_EMBED_FALLBACK") or "0").strip().lower() in {"1", "true", "yes", "on"}
 # Discord message flag value for IsComponentsV2.
 DISCORD_MESSAGE_FLAG_COMPONENTS_V2 = 32768
 
@@ -4409,6 +4410,15 @@ async def _send_or_edit_seed_shop_live_message(
             )
         except Exception as exc:
             print(f"Components V2 stock message failed: {exc}")
+            if not SEED_STOCK_COMPONENTS_V2_ALLOW_EMBED_FALLBACK:
+                try:
+                    await channel.send(
+                        "⚠️ Stock post failed because Components V2 payload was rejected. "
+                        "Classic embed fallback is disabled.",
+                    )
+                except Exception:
+                    pass
+                raise
             if SEED_STOCK_COMPONENTS_V2_STRICT:
                 raise
 
