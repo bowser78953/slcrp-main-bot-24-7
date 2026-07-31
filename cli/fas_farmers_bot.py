@@ -1122,12 +1122,6 @@ def _find_open_ticket_channel(guild: discord.Guild, user_id: int) -> discord.Tex
 
 
 def _build_ticket_panel_embed(guild: discord.Guild | None = None) -> discord.Embed:
-    embed = discord.Embed(
-        title="[FAS] Farmers - Ticket System",
-        description="Kindly make sure to read our complete Ticket Terms of Service below before creating a ticket.",
-        color=discord.Color.green(),
-    )
-
     tos_rules = [
         ("Valid Reason", "Open tickets only for real issues and include enough context so staff can help quickly."),
         ("Swearing", "Keep language clean and professional. Abusive wording can lead to closure and moderation action."),
@@ -1142,8 +1136,22 @@ def _build_ticket_panel_embed(guild: discord.Guild | None = None) -> discord.Emb
         ("Honesty", "Share accurate details and evidence. False or misleading claims can lead to warnings."),
         ("Remain Calm", "Stay calm while your case is reviewed. Aggressive behavior can result in closure."),
     ]
-    for rule_title, rule_text in tos_rules:
-        embed.add_field(name=rule_title, value=rule_text, inline=True)
+
+    rules_block = "\n".join([f"> **{rule_title}:** {rule_text}" for rule_title, rule_text in tos_rules])
+    embed = discord.Embed(
+        title="[FAS] Farmers Support [V2]",
+        description=(
+            "# 🎫 Support Tickets\n\n"
+            "> Read all terms before opening a ticket.\n"
+            "> Click **Make a ticket** below to continue.\n\n"
+            "## Terms of Service\n"
+            f"{rules_block}"
+        ),
+        color=discord.Color.green(),
+    )
+
+    if STOCK_NOTIFIER_IMAGE_URL:
+        embed.set_image(url=STOCK_NOTIFIER_IMAGE_URL)
 
     if guild and guild.icon:
         embed.set_thumbnail(url=guild.icon.url)
