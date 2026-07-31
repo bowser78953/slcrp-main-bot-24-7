@@ -52,6 +52,8 @@ STOCK_NOTIFIER_IMAGE_URL = (
     or os.getenv("FAS_STOCK_BANNER_URL")
     or ""
 ).strip()
+if not STOCK_NOTIFIER_IMAGE_URL:
+    STOCK_NOTIFIER_IMAGE_URL = "https://raw.githubusercontent.com/bowser78953/slcrp-main-bot-24-7/main/cli/stock_notifier_banner.png"
 STOCK_NOTIFIER_IMAGE_FILE = (
     os.getenv("FAS_STOCK_NOTIFIER_IMAGE_FILE")
     or os.getenv("STOCK_NOTIFIER_IMAGE_FILE")
@@ -4164,15 +4166,19 @@ def _build_seed_shop_components_v2_payload(
     if media_url:
         container_children.append(
             {
-                "type": 10,
-                "content": _truncate_component_text("Using configured banner image URL."),
+                "type": 12,
+                "items": [
+                    {
+                        "media": {"url": media_url},
+                    }
+                ],
             }
         )
     elif banner_file_path:
         container_children.append(
             {
                 "type": 10,
-                "content": _truncate_component_text(f"Using file above: {os.path.basename(banner_file_path)}"),
+                "content": _truncate_component_text(f"Banner file found: {os.path.basename(banner_file_path)}"),
             }
         )
 
@@ -4378,11 +4384,6 @@ async def _send_or_edit_seed_shop_live_message(
     force_new_message = SEED_STOCK_LIVE_SEND_NEW_MESSAGES
 
     if components_v2_payload and SEED_STOCK_COMPONENTS_V2_ENABLED:
-        if force_new_message and components_v2_banner_file and not STOCK_NOTIFIER_IMAGE_URL:
-            try:
-                await channel.send(file=discord.File(components_v2_banner_file, filename=os.path.basename(components_v2_banner_file)))
-            except Exception as exc:
-                print(f"Local banner file post failed: {exc}")
         try:
             return await _discord_api_send_or_edit_components_v2_message(
                 int(channel.id),
