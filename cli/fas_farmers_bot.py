@@ -394,6 +394,7 @@ last_sell_price_post_ts: int | None = None
 last_sell_price_signature: str | None = None
 SEED_STOCK_EMBED_STYLE_VERSION = "v2"
 SEED_STOCK_COMPONENTS_V2_ENABLED = (os.getenv("FAS_STOCK_COMPONENTS_V2") or "1").strip().lower() in {"1", "true", "yes", "on"}
+SEED_STOCK_LIVE_SEND_NEW_MESSAGES = (os.getenv("FAS_STOCK_LIVE_SEND_NEW_MESSAGES") or "1").strip().lower() in {"1", "true", "yes", "on"}
 # Discord message flag value for IsComponentsV2.
 DISCORD_MESSAGE_FLAG_COMPONENTS_V2 = 32768
 
@@ -4106,7 +4107,12 @@ def _truncate_component_text(value: str, limit: int = 3900) -> str:
     return text[: limit - 3].rstrip() + "..."
 
 
-def _build_seed_shop_components_v2_payload(lines: list[str], gear_lines: list[str], next_restock_text: str | None) -> dict:
+def _build_seed_shop_components_v2_payload(
+    lines: list[str],
+    gear_lines: list[str],
+    next_restock_text: str | None,
+    content: str | None = None,
+) -> dict:
     seed_block = "\n\n".join(lines) if lines else "No tracked seeds in stock right now."
     gear_block = "\n\n".join(gear_lines) if gear_lines else "No tracked gear in stock right now."
 
@@ -4157,6 +4163,7 @@ def _build_seed_shop_components_v2_payload(lines: list[str], gear_lines: list[st
 
     return {
         "flags": DISCORD_MESSAGE_FLAG_COMPONENTS_V2,
+        "content": str(content or ""),
         "components": [
             {
                 "type": 17,
@@ -4164,7 +4171,7 @@ def _build_seed_shop_components_v2_payload(lines: list[str], gear_lines: list[st
                 "components": container_children,
             }
         ],
-        "allowed_mentions": {"parse": []},
+        "allowed_mentions": {"parse": ["roles"]},
     }
 
 
@@ -4172,6 +4179,8 @@ async def _discord_api_send_or_edit_components_v2_message(
     channel_id: int,
     message_id: int,
     payload: dict,
+    *,
+    force_new_message: bool = False,
 ) -> int:
     session = await _get_http_session()
     headers = {
@@ -4179,7 +4188,7 @@ async def _discord_api_send_or_edit_components_v2_message(
         "Content-Type": "application/json",
     }
 
-    if message_id > 0:
+    if message_id > 0 and not force_new_message:
         url = f"https://discord.com/api/v10/channels/{int(channel_id)}/messages/{int(message_id)}"
         method = "PATCH"
     else:
@@ -4303,6 +4312,7 @@ async def _send_or_edit_seed_shop_live_message(
     components_v2_payload: dict | None = None,
 ) -> int:
     message_id = int(config.get("message_id", 0) or 0)
+    force_new_message = SEED_STOCK_LIVE_SEND_NEW_MESSAGES
 
     if components_v2_payload and SEED_STOCK_COMPONENTS_V2_ENABLED:
         try:
@@ -4310,11 +4320,12 @@ async def _send_or_edit_seed_shop_live_message(
                 int(channel.id),
                 message_id,
                 components_v2_payload,
+                force_new_message=force_new_message,
             )
         except Exception as exc:
             print(f"Components V2 stock message failed, falling back to embed: {exc}")
 
-    if message_id > 0:
+    if message_id > 0 and not force_new_message:
         try:
             existing_message = await channel.fetch_message(message_id)
             await existing_message.edit(**_build_stock_embed_send_kwargs(embed, content=content))
@@ -4571,14 +4582,20 @@ async def _ensure_seed_shop_live_message_exists() -> None:
 
     lines, gear_lines, next_restock_text, _next_restock_unix, best_rarity, role_mentions, _ = await _fetch_stock_lines_and_next_restock()
     embed = _compose_seed_shop_embed(lines, gear_lines, next_restock_text, best_rarity)
-    components_v2_payload = _build_seed_shop_components_v2_payload(lines, gear_lines, next_restock_text)
     ping_content = _build_stock_ping_content(role_mentions)
-    await _send_transient_stock_role_ping(channel, ping_content)
+    components_v2_payload = _build_seed_shop_components_v2_payload(
+        lines,
+        gear_lines,
+        next_restock_text,
+        content=ping_content,
+    )
+    if not SEED_STOCK_LIVE_SEND_NEW_MESSAGES:
+        await _send_transient_stock_role_ping(channel, ping_content)
     config["message_id"] = await _send_or_edit_seed_shop_live_message(
         channel,
         config,
         embed=embed,
-        content=None,
+        content=ping_content,
         components_v2_payload=components_v2_payload,
     )
     _save_live_config(config)
@@ -4614,14 +4631,20 @@ async def _update_seed_shop_live_message() -> None:
 
         if should_post:
             embed = _compose_seed_shop_embed(lines, gear_lines, next_restock_text, best_rarity)
-            components_v2_payload = _build_seed_shop_components_v2_payload(lines, gear_lines, next_restock_text)
             ping_content = _build_stock_ping_content(role_mentions)
-            await _send_transient_stock_role_ping(channel, ping_content)
+            components_v2_payload = _build_seed_shop_components_v2_payload(
+                lines,
+                gear_lines,
+                next_restock_text,
+                content=ping_content,
+            )
+            if not SEED_STOCK_LIVE_SEND_NEW_MESSAGES:
+                await _send_transient_stock_role_ping(channel, ping_content)
             config["message_id"] = await _send_or_edit_seed_shop_live_message(
                 channel,
                 config,
                 embed=embed,
-                content=None,
+                content=ping_content,
                 components_v2_payload=components_v2_payload,
             )
             _save_live_config(config)
