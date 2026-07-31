@@ -395,6 +395,7 @@ last_sell_price_signature: str | None = None
 SEED_STOCK_EMBED_STYLE_VERSION = "v2"
 SEED_STOCK_COMPONENTS_V2_ENABLED = (os.getenv("FAS_STOCK_COMPONENTS_V2") or "1").strip().lower() in {"1", "true", "yes", "on"}
 SEED_STOCK_LIVE_SEND_NEW_MESSAGES = (os.getenv("FAS_STOCK_LIVE_SEND_NEW_MESSAGES") or "1").strip().lower() in {"1", "true", "yes", "on"}
+SEED_STOCK_COMPONENTS_V2_STRICT = (os.getenv("FAS_STOCK_COMPONENTS_V2_STRICT") or "1").strip().lower() in {"1", "true", "yes", "on"}
 # Discord message flag value for IsComponentsV2.
 DISCORD_MESSAGE_FLAG_COMPONENTS_V2 = 32768
 
@@ -4142,7 +4143,7 @@ def _build_seed_shop_components_v2_payload(
     lines: list[str],
     gear_lines: list[str],
     next_restock_text: str | None,
-    content: str | None = None,
+    ping_content: str | None = None,
 ) -> tuple[dict, str | None]:
     seed_block = "\n\n".join(lines) if lines else "No tracked seeds in stock right now."
     gear_block = "\n\n".join(gear_lines) if gear_lines else "No tracked gear in stock right now."
@@ -4205,6 +4206,23 @@ def _build_seed_shop_components_v2_payload(
         ]
     )
 
+    if ping_content:
+        container_children.insert(
+            2,
+            {
+                "type": 10,
+                "content": _truncate_component_text(f"### Alerts\n{ping_content}"),
+            },
+        )
+        container_children.insert(
+            3,
+            {
+                "type": 14,
+                "divider": True,
+                "spacing": 2,
+            },
+        )
+
     if next_restock_text:
         container_children.append(
             {
@@ -4215,7 +4233,6 @@ def _build_seed_shop_components_v2_payload(
 
     payload = {
         "flags": DISCORD_MESSAGE_FLAG_COMPONENTS_V2,
-        "content": str(content or ""),
         "components": [
             {
                 "type": 17,
@@ -4391,7 +4408,9 @@ async def _send_or_edit_seed_shop_live_message(
                 banner_file_path=components_v2_banner_file,
             )
         except Exception as exc:
-            print(f"Components V2 stock message failed, falling back to embed: {exc}")
+            print(f"Components V2 stock message failed: {exc}")
+            if SEED_STOCK_COMPONENTS_V2_STRICT:
+                raise
 
     if message_id > 0 and not force_new_message:
         try:
@@ -4655,7 +4674,7 @@ async def _ensure_seed_shop_live_message_exists() -> None:
         lines,
         gear_lines,
         next_restock_text,
-        content=ping_content,
+        ping_content=ping_content,
     )
     if not SEED_STOCK_LIVE_SEND_NEW_MESSAGES:
         await _send_transient_stock_role_ping(channel, ping_content)
@@ -4705,7 +4724,7 @@ async def _update_seed_shop_live_message() -> None:
                 lines,
                 gear_lines,
                 next_restock_text,
-                content=ping_content,
+                ping_content=ping_content,
             )
             if not SEED_STOCK_LIVE_SEND_NEW_MESSAGES:
                 await _send_transient_stock_role_ping(channel, ping_content)
