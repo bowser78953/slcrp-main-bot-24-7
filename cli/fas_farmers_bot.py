@@ -3056,7 +3056,7 @@ def _build_live_sell_multiplier_embed(rows: list[dict], guild: discord.Guild | N
     return embed
 
 
-def _build_live_sell_multiplier_components_v2_payload(rows: list[dict], ping_content: str | None = None) -> dict:
+def _build_live_sell_multiplier_components_v2_payload(rows: list[dict]) -> dict:
     def _format_multiplier_x(multiplier: float) -> str:
         if float(multiplier).is_integer():
             return f"x{int(multiplier)}"
@@ -3123,9 +3123,6 @@ def _build_live_sell_multiplier_components_v2_payload(rows: list[dict], ping_con
             }
         ],
     }
-    if ping_content:
-        payload["content"] = ping_content
-        payload["allowed_mentions"] = {"parse": ["roles"]}
     return payload
 
 
@@ -3190,7 +3187,16 @@ async def _update_sell_price_live_feed() -> None:
         return
 
     ping_content = _build_sell_multiplier_ping_content(rows)
-    payload = _build_live_sell_multiplier_components_v2_payload(rows, ping_content=ping_content)
+    if ping_content:
+        try:
+            await channel.send(
+                content=ping_content,
+                allowed_mentions=discord.AllowedMentions(roles=True, users=False, everyone=False),
+            )
+        except Exception:
+            pass
+
+    payload = _build_live_sell_multiplier_components_v2_payload(rows)
     try:
         await _discord_api_send_or_edit_components_v2_message(
             int(channel.id),
@@ -3200,12 +3206,13 @@ async def _update_sell_price_live_feed() -> None:
         )
     except Exception as exc:
         print(f"Sell multiplier Components V2 post failed: {exc}")
-        embed = _build_live_sell_multiplier_embed(rows, guild=channel.guild)
-        await channel.send(
-            content=ping_content,
-            embed=embed,
-            allowed_mentions=discord.AllowedMentions(roles=True),
-        )
+        try:
+            await channel.send(
+                f"⚠️ Sell multipliers V2 payload rejected: {str(exc)[:350]}",
+            )
+        except Exception:
+            pass
+        return
     last_sell_price_post_ts = now_unix
     last_sell_price_signature = signature
 
