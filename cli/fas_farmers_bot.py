@@ -3991,14 +3991,14 @@ async def _fetch_stock_lines_and_next_restock() -> tuple[list[str], list[str], s
         item_name: str,
         item_rarity: str | None,
         quantity: int,
-        ping_mention: str | None,
+        ping_display_text: str | None,
     ) -> str:
         rarity_key = str(item_rarity or "").strip().lower()
         rarity_label = rarity_key.title() if rarity_key else "Unknown"
         rarity_emoji = RARITY_EMOJIS.get(rarity_key, "")
         item_emoji_render = item_emoji
         rarity_line = f"Rarity: {rarity_label} {rarity_emoji}".rstrip()
-        ping_line = f"Ping: {ping_mention}" if ping_mention else "Ping: None"
+        ping_line = f"Ping: {ping_display_text}" if ping_display_text else "Ping: None"
         return (
             f"{item_emoji_render} **{item_name}**\n"
             f"{rarity_line}\n"
@@ -4022,7 +4022,7 @@ async def _fetch_stock_lines_and_next_restock() -> tuple[list[str], list[str], s
                 entry["name"],
                 str(rarity) if rarity else None,
                 qty,
-                STOCK_ROLE_PINGS.get(key),
+                f"@{entry['name']}" if key in STOCK_ROLE_PINGS else None,
             )
         )
 
@@ -4044,7 +4044,7 @@ async def _fetch_stock_lines_and_next_restock() -> tuple[list[str], list[str], s
                 entry["name"],
                 str(rarity) if rarity else None,
                 qty,
-                STOCK_ROLE_PINGS.get(key),
+                f"@{entry['name']}" if key in STOCK_ROLE_PINGS else None,
             )
         )
 
