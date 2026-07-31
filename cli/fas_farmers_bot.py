@@ -68,6 +68,14 @@ SUPPORT_NOTIFIER_IMAGE_URL = (
 ).strip()
 if not SUPPORT_NOTIFIER_IMAGE_URL:
     SUPPORT_NOTIFIER_IMAGE_URL = "https://raw.githubusercontent.com/bowser78953/slcrp-main-bot-24-7/main/cli/support_notifier_banner.png"
+MULTIPLIER_NOTIFIER_IMAGE_URL = (
+    os.getenv("FAS_MULTIPLIER_NOTIFIER_IMAGE_URL")
+    or os.getenv("MULTIPLIER_NOTIFIER_IMAGE_URL")
+    or os.getenv("FAS_MULTIPLIER_BANNER_URL")
+    or ""
+).strip()
+if not MULTIPLIER_NOTIFIER_IMAGE_URL:
+    MULTIPLIER_NOTIFIER_IMAGE_URL = "https://raw.githubusercontent.com/bowser78953/slcrp-main-bot-24-7/main/cli/multipliers_notifier_banner.png"
 SUPPORT_PANEL_OPEN_BUTTON_CUSTOM_ID = "fas_ticket_open_button_v2"
 SUPPORT_PANEL_SELECT_CUSTOM_ID = "fas_ticket_type_select_v2"
 
@@ -3047,6 +3055,63 @@ def _build_live_sell_multiplier_embed(rows: list[dict], guild: discord.Guild | N
     return embed
 
 
+def _build_live_sell_multiplier_components_v2_payload(rows: list[dict], ping_content: str | None = None) -> dict:
+    lines: list[str] = []
+    for row in rows:
+        name = str(row.get("name", "Unknown"))
+        key = str(row.get("key", "") or "")
+        multiplier = float(row.get("multiplier", 0.0) or 0.0)
+        emoji = _sell_row_emoji(name, key)
+        lines.append(f"{emoji} **{name}**\\n> Multiplier: **{_format_sell_multiplier(multiplier)}**")
+
+    if not lines:
+        lines = ["No live sell multiplier data available."]
+
+    children: list[dict] = []
+    if MULTIPLIER_NOTIFIER_IMAGE_URL:
+        children.append(
+            {
+                "type": 12,
+                "items": [
+                    {
+                        "media": {"url": MULTIPLIER_NOTIFIER_IMAGE_URL},
+                    }
+                ],
+            }
+        )
+        children.append({"type": 14})
+
+    children.extend(
+        [
+            {
+                "type": 10,
+                "content": _truncate_component_text("## Grow a Garden 2 Sell Multipliers [V2]"),
+            },
+            {
+                "type": 14,
+            },
+            {
+                "type": 10,
+                "content": _truncate_component_text("### LIVE SEED SELL MULTIPLIERS\\n\\n" + "\\n\\n".join(lines)),
+            },
+        ]
+    )
+
+    payload: dict = {
+        "flags": DISCORD_MESSAGE_FLAG_COMPONENTS_V2,
+        "components": [
+            {
+                "type": 17,
+                "components": children,
+            }
+        ],
+    }
+    if ping_content:
+        payload["content"] = ping_content
+        payload["allowed_mentions"] = {"parse": ["roles"]}
+    return payload
+
+
 def _build_sell_multiplier_ping_content(rows: list[dict]) -> str | None:
     max_multiplier = 0.0
     for row in rows:
@@ -3101,13 +3166,23 @@ async def _update_sell_price_live_feed() -> None:
     if not should_post:
         return
 
-    embed = _build_live_sell_multiplier_embed(rows, guild=channel.guild)
     ping_content = _build_sell_multiplier_ping_content(rows)
-    await channel.send(
-        content=ping_content,
-        embed=embed,
-        allowed_mentions=discord.AllowedMentions(roles=True),
-    )
+    payload = _build_live_sell_multiplier_components_v2_payload(rows, ping_content=ping_content)
+    try:
+        await _discord_api_send_or_edit_components_v2_message(
+            int(channel.id),
+            0,
+            payload,
+            force_new_message=True,
+        )
+    except Exception as exc:
+        print(f"Sell multiplier Components V2 post failed: {exc}")
+        embed = _build_live_sell_multiplier_embed(rows, guild=channel.guild)
+        await channel.send(
+            content=ping_content,
+            embed=embed,
+            allowed_mentions=discord.AllowedMentions(roles=True),
+        )
     last_sell_price_post_ts = now_unix
     last_sell_price_signature = signature
 
