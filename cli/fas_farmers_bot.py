@@ -4156,12 +4156,7 @@ def _build_seed_shop_components_v2_payload(
     if not media_url:
         banner_file_path = _resolve_stock_notifier_banner_file()
 
-    container_children: list[dict] = [
-        {
-            "type": 10,
-            "content": _truncate_component_text("### File"),
-        },
-    ]
+    container_children: list[dict] = []
 
     if media_url:
         container_children.append(
@@ -4174,19 +4169,10 @@ def _build_seed_shop_components_v2_payload(
                 ],
             }
         )
-    elif banner_file_path:
-        container_children.append(
-            {
-                "type": 10,
-                "content": _truncate_component_text(f"Banner file found: {os.path.basename(banner_file_path)}"),
-            }
-        )
+        container_children.append({"type": 14})
 
     container_children.extend(
         [
-            {
-                "type": 14,
-            },
         {
             "type": 10,
             "content": _truncate_component_text("## Grow a Garden 2 Stock [V2]"),
@@ -4208,22 +4194,12 @@ def _build_seed_shop_components_v2_payload(
         ]
     )
 
-    if ping_content:
-        container_children.insert(
-            2,
-            {
-                "type": 10,
-                "content": _truncate_component_text(f"### Alerts\n{ping_content}"),
-            },
-        )
-        container_children.insert(
-            3,
+    if next_restock_text:
+        container_children.append(
             {
                 "type": 14,
-            },
+            }
         )
-
-    if next_restock_text:
         container_children.append(
             {
                 "type": 10,
