@@ -1268,23 +1268,23 @@ def _build_ticket_selector_components_v2_callback_payload(user_id: int) -> dict:
                     "type": 17,
                     "components": [
                         {
-                            "type": 10,
-                            "content": _truncate_component_text(
-                                f"<@{int(user_id)}>\n\nSelect a ticket type from the dropdown below."
-                            ),
-                        }
-                    ],
-                },
-                {
-                    "type": 1,
-                    "components": [
-                        {
-                            "type": 3,
-                            "custom_id": SUPPORT_PANEL_SELECT_CUSTOM_ID,
-                            "placeholder": "Select ticket type...",
-                            "min_values": 1,
-                            "max_values": 1,
-                            "options": _build_ticket_type_select_options(),
+                            "type": 9,
+                            "components": [
+                                {
+                                    "type": 10,
+                                    "content": _truncate_component_text(
+                                        f"<@{int(user_id)}>\n\nSelect a ticket type from the dropdown below."
+                                    ),
+                                }
+                            ],
+                            "accessory": {
+                                "type": 3,
+                                "custom_id": SUPPORT_PANEL_SELECT_CUSTOM_ID,
+                                "placeholder": "Select ticket type...",
+                                "min_values": 1,
+                                "max_values": 1,
+                                "options": _build_ticket_type_select_options(),
+                            },
                         }
                     ],
                 },
