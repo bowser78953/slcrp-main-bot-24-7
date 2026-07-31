@@ -68,6 +68,8 @@ SUPPORT_NOTIFIER_IMAGE_URL = (
 ).strip()
 if not SUPPORT_NOTIFIER_IMAGE_URL:
     SUPPORT_NOTIFIER_IMAGE_URL = "https://raw.githubusercontent.com/bowser78953/slcrp-main-bot-24-7/main/cli/support_notifier_banner.png"
+SUPPORT_PANEL_OPEN_BUTTON_CUSTOM_ID = "fas_ticket_open_button_v2"
+SUPPORT_PANEL_SELECT_CUSTOM_ID = "fas_ticket_type_select_v2"
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -1167,6 +1169,153 @@ def _build_ticket_panel_embed(guild: discord.Guild | None = None) -> discord.Emb
     return embed
 
 
+def _ticket_tos_rules() -> list[tuple[str, str]]:
+    return [
+        ("Valid Reason", "Open tickets only for real issues and include enough context so staff can help quickly."),
+        ("Swearing", "Keep language clean and professional. Abusive wording can lead to closure and moderation action."),
+        ("Pinging", "Avoid unnecessary staff or role pings in tickets. Use clear details instead of repeated mentions."),
+        ("One Ticket Rule", "Please keep one open ticket per issue. Duplicate or multi-topic tickets may be closed."),
+        ("NSFW Content", "NSFW material is not allowed in tickets under any circumstance and can result in a ban."),
+        ("Patience", "Allow staff reasonable time to respond. Repeated bumping slows handling and may cause closure."),
+        ("Respect Staff", "Treat everyone respectfully during review. Harassment or hostility may end support."),
+        ("Proper Formatting", "Provide readable, complete information so your case can be reviewed without delays."),
+        ("Time Limit", "If a ticket is inactive for 12+ hours, it may be closed until you are ready to continue."),
+        ("Language", "Use English in tickets so all available staff can accurately review and respond."),
+        ("Honesty", "Share accurate details and evidence. False or misleading claims can lead to warnings."),
+        ("Remain Calm", "Stay calm while your case is reviewed. Aggressive behavior can result in closure."),
+    ]
+
+
+def _build_ticket_panel_components_v2_payload() -> dict:
+    children: list[dict] = []
+
+    if SUPPORT_NOTIFIER_IMAGE_URL:
+        children.append(
+            {
+                "type": 12,
+                "items": [
+                    {
+                        "media": {"url": SUPPORT_NOTIFIER_IMAGE_URL},
+                    }
+                ],
+            }
+        )
+        children.append({"type": 14})
+
+    for idx, (rule_title, rule_text) in enumerate(_ticket_tos_rules()):
+        children.append(
+            {
+                "type": 10,
+                "content": _truncate_component_text(f"## {rule_title}\n> {rule_text}"),
+            }
+        )
+        if idx < (len(_ticket_tos_rules()) - 1):
+            children.append({"type": 14})
+
+    return {
+        "flags": DISCORD_MESSAGE_FLAG_COMPONENTS_V2,
+        "components": [
+            {
+                "type": 17,
+                "components": children,
+            },
+            {
+                "type": 1,
+                "components": [
+                    {
+                        "type": 2,
+                        "style": 3,
+                        "custom_id": SUPPORT_PANEL_OPEN_BUTTON_CUSTOM_ID,
+                        "label": "Make a ticket",
+                        "emoji": {
+                            "id": "1524539236462624932",
+                            "name": "Dragons_Breath_seed",
+                        },
+                    }
+                ],
+            },
+        ],
+    }
+
+
+def _build_ticket_type_select_options() -> list[dict]:
+    return [
+        {
+            "label": str(config.get("label") or key),
+            "value": str(key),
+        }
+        for key, config in TICKET_TYPE_CONFIG.items()
+    ]
+
+
+def _build_ticket_selector_components_v2_callback_payload(user_id: int) -> dict:
+    return {
+        "type": 4,
+        "data": {
+            "flags": 64 | DISCORD_MESSAGE_FLAG_COMPONENTS_V2,
+            "components": [
+                {
+                    "type": 17,
+                    "components": [
+                        {
+                            "type": 10,
+                            "content": _truncate_component_text(
+                                f"<@{int(user_id)}>\n\nSelect a ticket type from the dropdown below."
+                            ),
+                        }
+                    ],
+                },
+                {
+                    "type": 1,
+                    "components": [
+                        {
+                            "type": 3,
+                            "custom_id": SUPPORT_PANEL_SELECT_CUSTOM_ID,
+                            "placeholder": "Select ticket type...",
+                            "min_values": 1,
+                            "max_values": 1,
+                            "options": _build_ticket_type_select_options(),
+                        }
+                    ],
+                },
+            ],
+            "allowed_mentions": {"parse": ["users"]},
+        },
+    }
+
+
+async def _send_ticket_panel_components_v2(channel: discord.TextChannel) -> int:
+    session = await _get_http_session()
+    headers = {
+        "Authorization": f"Bot {TOKEN}",
+        "Content-Type": "application/json",
+    }
+    payload = _build_ticket_panel_components_v2_payload()
+    url = f"https://discord.com/api/v10/channels/{int(channel.id)}/messages"
+
+    async with session.post(url, json=payload, headers=headers) as resp:
+        if resp.status not in {200, 201}:
+            body = await resp.text()
+            raise RuntimeError(f"Ticket panel Components V2 HTTP {resp.status}: {body[:300]}")
+        data = await resp.json()
+
+    message_id = int(data.get("id", 0) or 0)
+    if message_id <= 0:
+        raise RuntimeError("Ticket panel Components V2 did not return a valid message id.")
+    return message_id
+
+
+async def _send_component_interaction_callback(interaction: discord.Interaction, callback_payload: dict) -> None:
+    session = await _get_http_session()
+    url = f"https://discord.com/api/v10/interactions/{interaction.id}/{interaction.token}/callback"
+    headers = {"Content-Type": "application/json"}
+
+    async with session.post(url, json=callback_payload, headers=headers) as resp:
+        if resp.status not in {200, 204}:
+            body = await resp.text()
+            raise RuntimeError(f"Interaction callback HTTP {resp.status}: {body[:300]}")
+
+
 def _build_ticket_open_message(config: dict, opener: discord.abc.User, topic: str, details: str) -> tuple[str, discord.Embed]:
     role_mentions = [f"<@&{int(role_id)}>" for role_id in config.get("ping_roles", []) if int(role_id) > 0]
     if config.get("ping_here"):
@@ -1339,10 +1488,22 @@ async def _post_ticket_support_panel() -> None:
             async for old_message in channel.history(limit=100):
                 if int(getattr(old_message.author, "id", 0) or 0) != bot_user_id:
                     continue
-                if not old_message.embeds:
-                    continue
-                first_embed = old_message.embeds[0]
-                if str(getattr(first_embed, "title", "") or "") != "[FAS] Farmers - Ticket System":
+                remove_message = False
+                if old_message.embeds:
+                    first_embed = old_message.embeds[0]
+                    embed_title = str(getattr(first_embed, "title", "") or "")
+                    if embed_title in {"[FAS] Farmers - Ticket System", "[FAS] Farmers Support [V2]"}:
+                        remove_message = True
+                if not remove_message and old_message.components:
+                    for row in old_message.components:
+                        for child in getattr(row, "children", []):
+                            custom_id = str(getattr(child, "custom_id", "") or "")
+                            if custom_id in {"fas_ticket_open_button", SUPPORT_PANEL_OPEN_BUTTON_CUSTOM_ID}:
+                                remove_message = True
+                                break
+                        if remove_message:
+                            break
+                if not remove_message:
                     continue
                 try:
                     await old_message.delete()
@@ -1351,7 +1512,11 @@ async def _post_ticket_support_panel() -> None:
         except Exception as exc:
             print(f"Ticket panel cleanup failed: {exc}")
 
-    await channel.send(embed=_build_ticket_panel_embed(channel.guild), view=TicketPanelView())
+    try:
+        await _send_ticket_panel_components_v2(channel)
+    except Exception as exc:
+        print(f"Ticket panel Components V2 failed: {exc}")
+        await channel.send(embed=_build_ticket_panel_embed(channel.guild), view=TicketPanelView())
 
 
 def _ensure_ticket_transcripts_dir() -> None:
@@ -4955,6 +5120,40 @@ async def on_message(message: discord.Message):
                 return
 
     await bot.process_commands(message)
+
+
+@bot.event
+async def on_interaction(interaction: discord.Interaction):
+    try:
+        if interaction.type != discord.InteractionType.component:
+            return
+
+        data = interaction.data if isinstance(interaction.data, dict) else {}
+        custom_id = str(data.get("custom_id") or "")
+
+        if custom_id == SUPPORT_PANEL_OPEN_BUTTON_CUSTOM_ID:
+            callback_payload = _build_ticket_selector_components_v2_callback_payload(interaction.user.id)
+            await _send_component_interaction_callback(interaction, callback_payload)
+            return
+
+        if custom_id == SUPPORT_PANEL_SELECT_CUSTOM_ID:
+            values = data.get("values") if isinstance(data.get("values"), list) else []
+            selected = str(values[0]) if values else ""
+            if selected not in TICKET_TYPE_CONFIG:
+                if interaction.response.is_done():
+                    await interaction.followup.send("Invalid ticket selection.", ephemeral=True)
+                else:
+                    await interaction.response.send_message("Invalid ticket selection.", ephemeral=True)
+                return
+
+            if interaction.response.is_done():
+                await interaction.followup.send("This selection has expired. Please click Make a ticket again.", ephemeral=True)
+                return
+
+            await interaction.response.send_modal(TicketDetailsModal(selected))
+            return
+    except Exception as exc:
+        print(f"Support panel component interaction failed: {exc}")
 
 
 @bot.event
