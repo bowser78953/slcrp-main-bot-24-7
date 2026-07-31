@@ -393,6 +393,9 @@ last_stock_signature: str | None = None
 last_sell_price_post_ts: int | None = None
 last_sell_price_signature: str | None = None
 SEED_STOCK_EMBED_STYLE_VERSION = "v2"
+SEED_STOCK_COMPONENTS_V2_ENABLED = (os.getenv("FAS_STOCK_COMPONENTS_V2") or "1").strip().lower() in {"1", "true", "yes", "on"}
+# Discord message flag value for IsComponentsV2.
+DISCORD_MESSAGE_FLAG_COMPONENTS_V2 = 32768
 
 GIVEAWAYS: dict[int, dict] = {}
 TREE_SYNCED = False
@@ -4096,6 +4099,89 @@ def _compose_seed_shop_embed(lines: list[str], gear_lines: list[str], next_resto
     return embed
 
 
+def _truncate_component_text(value: str, limit: int = 3900) -> str:
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3].rstrip() + "..."
+
+
+def _build_seed_shop_components_v2_payload(lines: list[str], gear_lines: list[str], next_restock_text: str | None) -> dict:
+    seed_block = "\n\n".join(lines) if lines else "No tracked seeds in stock right now."
+    gear_block = "\n\n".join(gear_lines) if gear_lines else "No tracked gear in stock right now."
+
+    components: list[dict] = [
+        {
+            "type": 10,
+            "content": _truncate_component_text("# Grow a Garden 2 Stock [V2]"),
+        },
+        {
+            "type": 10,
+            "content": _truncate_component_text(f"## 🌱Seed Stock\n\n{seed_block}"),
+        },
+        {
+            "type": 10,
+            "content": _truncate_component_text(f"## 🛠️Gear Stock\n\n{gear_block}"),
+        },
+    ]
+
+    if next_restock_text:
+        components.append(
+            {
+                "type": 10,
+                "content": _truncate_component_text(f"### Next Shop Refresh\n{next_restock_text}"),
+            }
+        )
+
+    if STOCK_NOTIFIER_IMAGE_URL:
+        components.append(
+            {
+                "type": 12,
+                "items": [
+                    {
+                        "media": {"url": STOCK_NOTIFIER_IMAGE_URL},
+                    }
+                ],
+            }
+        )
+
+    return {
+        "flags": DISCORD_MESSAGE_FLAG_COMPONENTS_V2,
+        "components": components,
+        "allowed_mentions": {"parse": []},
+    }
+
+
+async def _discord_api_send_or_edit_components_v2_message(
+    channel_id: int,
+    message_id: int,
+    payload: dict,
+) -> int:
+    session = await _get_http_session()
+    headers = {
+        "Authorization": f"Bot {TOKEN}",
+        "Content-Type": "application/json",
+    }
+
+    if message_id > 0:
+        url = f"https://discord.com/api/v10/channels/{int(channel_id)}/messages/{int(message_id)}"
+        method = "PATCH"
+    else:
+        url = f"https://discord.com/api/v10/channels/{int(channel_id)}/messages"
+        method = "POST"
+
+    async with session.request(method, url, headers=headers, json=payload) as resp:
+        if resp.status not in {200, 201}:
+            body = await resp.text()
+            raise RuntimeError(f"Discord API HTTP {resp.status}: {body[:300]}")
+        data = await resp.json()
+
+    new_message_id = int(data.get("id", 0) or 0)
+    if new_message_id <= 0:
+        raise RuntimeError("Discord API did not return a valid message id for components v2 message.")
+    return new_message_id
+
+
 def _build_stock_embed_send_kwargs(embed: discord.Embed, *, content: str | None = None) -> dict:
     kwargs: dict = {"embed": embed}
     if content is not None:
@@ -4198,8 +4284,20 @@ async def _send_or_edit_seed_shop_live_message(
     *,
     embed: discord.Embed,
     content: str | None,
+    components_v2_payload: dict | None = None,
 ) -> int:
     message_id = int(config.get("message_id", 0) or 0)
+
+    if components_v2_payload and SEED_STOCK_COMPONENTS_V2_ENABLED:
+        try:
+            return await _discord_api_send_or_edit_components_v2_message(
+                int(channel.id),
+                message_id,
+                components_v2_payload,
+            )
+        except Exception as exc:
+            print(f"Components V2 stock message failed, falling back to embed: {exc}")
+
     if message_id > 0:
         try:
             existing_message = await channel.fetch_message(message_id)
@@ -4457,6 +4555,7 @@ async def _ensure_seed_shop_live_message_exists() -> None:
 
     lines, gear_lines, next_restock_text, _next_restock_unix, best_rarity, role_mentions, _ = await _fetch_stock_lines_and_next_restock()
     embed = _compose_seed_shop_embed(lines, gear_lines, next_restock_text, best_rarity)
+    components_v2_payload = _build_seed_shop_components_v2_payload(lines, gear_lines, next_restock_text)
     ping_content = _build_stock_ping_content(role_mentions)
     await _send_transient_stock_role_ping(channel, ping_content)
     config["message_id"] = await _send_or_edit_seed_shop_live_message(
@@ -4464,6 +4563,7 @@ async def _ensure_seed_shop_live_message_exists() -> None:
         config,
         embed=embed,
         content=None,
+        components_v2_payload=components_v2_payload,
     )
     _save_live_config(config)
     last_live_post_ts = int(datetime.now(timezone.utc).timestamp())
@@ -4498,6 +4598,7 @@ async def _update_seed_shop_live_message() -> None:
 
         if should_post:
             embed = _compose_seed_shop_embed(lines, gear_lines, next_restock_text, best_rarity)
+            components_v2_payload = _build_seed_shop_components_v2_payload(lines, gear_lines, next_restock_text)
             ping_content = _build_stock_ping_content(role_mentions)
             await _send_transient_stock_role_ping(channel, ping_content)
             config["message_id"] = await _send_or_edit_seed_shop_live_message(
@@ -4505,6 +4606,7 @@ async def _update_seed_shop_live_message() -> None:
                 config,
                 embed=embed,
                 content=None,
+                components_v2_payload=components_v2_payload,
             )
             _save_live_config(config)
             last_live_post_ts = now_unix
