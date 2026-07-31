@@ -4164,19 +4164,15 @@ def _build_seed_shop_components_v2_payload(
     if media_url:
         container_children.append(
             {
-                "type": 12,
-                "items": [
-                    {
-                        "media": {"url": media_url},
-                    }
-                ],
+                "type": 10,
+                "content": _truncate_component_text("Using configured banner image URL."),
             }
         )
     elif banner_file_path:
         container_children.append(
             {
                 "type": 10,
-                "content": _truncate_component_text(f"Using file: {os.path.basename(banner_file_path)}"),
+                "content": _truncate_component_text(f"Using file above: {os.path.basename(banner_file_path)}"),
             }
         )
 
@@ -4234,7 +4230,6 @@ def _build_seed_shop_components_v2_payload(
         "components": [
             {
                 "type": 17,
-                "accent_color": _color_for_best_rarity(None).value,
                 "components": container_children,
             }
         ],
@@ -4401,7 +4396,7 @@ async def _send_or_edit_seed_shop_live_message(
                 try:
                     await channel.send(
                         "⚠️ Stock post failed because Components V2 payload was rejected. "
-                        "Classic embed fallback is disabled.",
+                        f"Error: {str(exc)[:350]}",
                     )
                 except Exception:
                     pass
