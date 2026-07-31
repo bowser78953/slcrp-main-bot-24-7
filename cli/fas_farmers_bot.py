@@ -3076,8 +3076,8 @@ def _build_live_sell_multiplier_components_v2_payload(rows: list[dict]) -> dict:
         multiplier = float(row.get("multiplier", 0.0) or 0.0)
         emoji = _sell_row_emoji(name, key)
         lines.append(
-            f"{emoji} **{name}**\\n"
-            f"> Sell Multiplier: {_format_multiplier_x(multiplier)}\\n"
+            f"{emoji} **{name}**\n"
+            f"> Sell Multiplier: {_format_multiplier_x(multiplier)}\n"
             f"> Ping: {_row_ping_text(multiplier)}"
         )
 
@@ -3109,7 +3109,7 @@ def _build_live_sell_multiplier_components_v2_payload(rows: list[dict]) -> dict:
             },
             {
                 "type": 10,
-                "content": _truncate_component_text("### LIVE SEED SELL MULTIPLIERS\\n\\n" + "\\n\\n".join(lines)),
+                "content": _truncate_component_text("### LIVE SEED SELL MULTIPLIERS\n\n" + "\n\n".join(lines)),
             },
         ]
     )
