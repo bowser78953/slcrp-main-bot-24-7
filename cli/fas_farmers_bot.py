@@ -1202,6 +1202,17 @@ def _build_ticket_panel_components_v2_payload() -> dict:
         )
         children.append({"type": 14})
 
+    for idx, (rule_title, rule_text) in enumerate(_ticket_tos_rules()):
+        children.append(
+            {
+                "type": 10,
+                "content": _truncate_component_text(f"## {rule_title}\n> {rule_text}"),
+            }
+        )
+        if idx < (len(_ticket_tos_rules()) - 1):
+            children.append({"type": 14})
+
+    children.append({"type": 14})
     children.append(
         {
             "type": 9,
@@ -1215,7 +1226,7 @@ def _build_ticket_panel_components_v2_payload() -> dict:
             ],
             "accessory": {
                 "type": 2,
-                "style": 3,
+                "style": 2,
                 "custom_id": SUPPORT_PANEL_OPEN_BUTTON_CUSTOM_ID,
                 "label": "Make a ticket",
                 "emoji": {
@@ -1225,17 +1236,6 @@ def _build_ticket_panel_components_v2_payload() -> dict:
             },
         }
     )
-    children.append({"type": 14})
-
-    for idx, (rule_title, rule_text) in enumerate(_ticket_tos_rules()):
-        children.append(
-            {
-                "type": 10,
-                "content": _truncate_component_text(f"## {rule_title}\n> {rule_text}"),
-            }
-        )
-        if idx < (len(_ticket_tos_rules()) - 1):
-            children.append({"type": 14})
 
     return {
         "flags": DISCORD_MESSAGE_FLAG_COMPONENTS_V2,
