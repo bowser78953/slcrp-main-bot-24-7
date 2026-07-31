@@ -3057,13 +3057,29 @@ def _build_live_sell_multiplier_embed(rows: list[dict], guild: discord.Guild | N
 
 
 def _build_live_sell_multiplier_components_v2_payload(rows: list[dict], ping_content: str | None = None) -> dict:
+    def _format_multiplier_x(multiplier: float) -> str:
+        if float(multiplier).is_integer():
+            return f"x{int(multiplier)}"
+        return "x" + f"{multiplier:.2f}".rstrip("0").rstrip(".")
+
+    def _row_ping_text(multiplier: float) -> str:
+        if multiplier >= 4.0:
+            return f"<@&{SELL_PRICE_4X_PING_ROLE_ID}>"
+        if multiplier >= 2.0:
+            return f"<@&{SELL_PRICE_2X_PING_ROLE_ID}>"
+        return "N/A"
+
     lines: list[str] = []
     for row in rows:
         name = str(row.get("name", "Unknown"))
         key = str(row.get("key", "") or "")
         multiplier = float(row.get("multiplier", 0.0) or 0.0)
         emoji = _sell_row_emoji(name, key)
-        lines.append(f"{emoji} **{name}**\\n> Multiplier: **{_format_sell_multiplier(multiplier)}**")
+        lines.append(
+            f"{emoji} **{name}**\\n"
+            f"> Sell Multiplier: {_format_multiplier_x(multiplier)}\\n"
+            f"> Ping: {_row_ping_text(multiplier)}"
+        )
 
     if not lines:
         lines = ["No live sell multiplier data available."]
