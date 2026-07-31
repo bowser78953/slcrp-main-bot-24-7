@@ -4046,7 +4046,7 @@ def _compose_seed_shop_embed(lines: list[str], gear_lines: list[str], next_resto
     gear_block = "\n\n".join(gear_lines) if gear_lines else "No tracked gear in stock right now."
 
     embed = discord.Embed(
-        title="Grow a Garden 2 Stock",
+        title=f"Grow a Garden 2 Stock [{SEED_STOCK_EMBED_STYLE_VERSION.upper()}]",
         description="# 🌱Seed Stock\n\n" + seed_block + "\n\n# 🛠️Gear Stock\n\n" + gear_block,
         color=_color_for_best_rarity(best_rarity),
         timestamp=datetime.now(timezone.utc),
@@ -4056,7 +4056,7 @@ def _compose_seed_shop_embed(lines: list[str], gear_lines: list[str], next_resto
         embed.set_thumbnail(url=STOCK_NOTIFIER_IMAGE_URL)
     if next_restock_text:
         embed.add_field(name="Next Shop Refresh", value=next_restock_text, inline=False)
-    embed.set_footer(text="Posts when the shop refreshes (about every 5 minutes)")
+    embed.set_footer(text=f"Posts when the shop refreshes (about every 5 minutes) | {SEED_STOCK_EMBED_STYLE_VERSION.upper()}")
     return embed
 
 
