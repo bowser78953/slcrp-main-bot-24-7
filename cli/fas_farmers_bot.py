@@ -4233,6 +4233,7 @@ def _build_seed_shop_components_v2_payload(
 
     payload = {
         "flags": DISCORD_MESSAGE_FLAG_COMPONENTS_V2,
+        "content": str(ping_content or ""),
         "components": [
             {
                 "type": 17,
@@ -4242,6 +4243,13 @@ def _build_seed_shop_components_v2_payload(
         ],
         "allowed_mentions": {"parse": ["roles"]},
     }
+    if banner_file_path:
+        payload["attachments"] = [
+            {
+                "id": "0",
+                "filename": os.path.basename(banner_file_path),
+            }
+        ]
     return payload, banner_file_path
 
 
