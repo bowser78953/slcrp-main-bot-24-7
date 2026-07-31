@@ -413,6 +413,7 @@ last_stock_signature: str | None = None
 last_sell_price_post_ts: int | None = None
 last_sell_price_signature: str | None = None
 SEED_STOCK_EMBED_STYLE_VERSION = "v2"
+SELL_MULTIPLIER_EMBED_STYLE_VERSION = "v2"
 SEED_STOCK_COMPONENTS_V2_ENABLED = (os.getenv("FAS_STOCK_COMPONENTS_V2") or "1").strip().lower() in {"1", "true", "yes", "on"}
 SEED_STOCK_LIVE_SEND_NEW_MESSAGES = (os.getenv("FAS_STOCK_LIVE_SEND_NEW_MESSAGES") or "1").strip().lower() in {"1", "true", "yes", "on"}
 SEED_STOCK_COMPONENTS_V2_STRICT = (os.getenv("FAS_STOCK_COMPONENTS_V2_STRICT") or "1").strip().lower() in {"1", "true", "yes", "on"}
@@ -3156,12 +3157,18 @@ async def _update_sell_price_live_feed() -> None:
         return
 
     signature_rows = [f"{str(row.get('name', ''))}:{float(row.get('multiplier', 0.0) or 0.0):.4f}" for row in rows]
-    signature = "|".join(signature_rows)
+    signature = f"{SELL_MULTIPLIER_EMBED_STYLE_VERSION}|" + "|".join(signature_rows)
     now_unix = int(datetime.now(timezone.utc).timestamp())
     should_post = bool(signature and signature != last_sell_price_signature)
 
     if should_post and last_sell_price_post_ts is not None and (now_unix - last_sell_price_post_ts) < 2:
         should_post = False
+
+    if not should_post:
+        if last_sell_price_post_ts is None:
+            should_post = True
+        elif (now_unix - last_sell_price_post_ts) >= SHOP_REFRESH_SECONDS:
+            should_post = True
 
     if not should_post:
         return
