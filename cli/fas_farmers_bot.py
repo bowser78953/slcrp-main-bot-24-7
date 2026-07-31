@@ -47,6 +47,7 @@ else:
         raise SystemExit(1)
 
 STOCK_NOTIFIER_IMAGE_URL = (os.getenv("FAS_STOCK_NOTIFIER_IMAGE_URL") or "").strip()
+STOCK_NOTIFIER_IMAGE_FILE = (os.getenv("FAS_STOCK_NOTIFIER_IMAGE_FILE") or "").strip()
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -4047,6 +4048,46 @@ def _compose_seed_shop_embed(lines: list[str], gear_lines: list[str], next_resto
     return embed
 
 
+def _build_stock_embed_send_kwargs(embed: discord.Embed, *, content: str | None = None) -> dict:
+    kwargs: dict = {"embed": embed}
+    if content is not None:
+        kwargs["content"] = content
+
+    if STOCK_NOTIFIER_IMAGE_URL:
+        return kwargs
+
+    candidate_paths: list[str] = []
+    if STOCK_NOTIFIER_IMAGE_FILE:
+        candidate_paths.append(STOCK_NOTIFIER_IMAGE_FILE)
+        if not os.path.isabs(STOCK_NOTIFIER_IMAGE_FILE):
+            candidate_paths.append(os.path.join(BASE_DIR, STOCK_NOTIFIER_IMAGE_FILE))
+
+    candidate_paths.extend(
+        [
+            os.path.join(BASE_DIR, "stock_notifier_banner.png"),
+            os.path.join(BASE_DIR, "stock_notifier_banner.jpg"),
+            os.path.join(BASE_DIR, "assets", "stock_notifier_banner.png"),
+            os.path.join(BASE_DIR, "assets", "stock_notifier_banner.jpg"),
+        ]
+    )
+
+    seen_paths: set[str] = set()
+    for raw_path in candidate_paths:
+        normalized = os.path.abspath(raw_path)
+        if normalized in seen_paths:
+            continue
+        seen_paths.add(normalized)
+        if not os.path.isfile(normalized):
+            continue
+
+        file_name = os.path.basename(normalized)
+        embed.set_image(url=f"attachment://{file_name}")
+        kwargs["file"] = discord.File(normalized, filename=file_name)
+        break
+
+    return kwargs
+
+
 async def _build_seed_shop_embed() -> discord.Embed:
     lines, gear_lines, next_restock_text, _, best_rarity, _, _ = await _fetch_stock_lines_and_next_restock()
     return _compose_seed_shop_embed(lines, gear_lines, next_restock_text, best_rarity)
@@ -4318,7 +4359,7 @@ async def _ensure_seed_shop_live_message_exists() -> None:
 
     lines, gear_lines, next_restock_text, _next_restock_unix, best_rarity, role_mentions, _ = await _fetch_stock_lines_and_next_restock()
     embed = _compose_seed_shop_embed(lines, gear_lines, next_restock_text, best_rarity)
-    message = await channel.send(embed=embed, content=_build_stock_ping_content(role_mentions))
+    message = await channel.send(**_build_stock_embed_send_kwargs(embed, content=_build_stock_ping_content(role_mentions)))
     config["message_id"] = message.id
     _save_live_config(config)
     last_live_post_ts = int(datetime.now(timezone.utc).timestamp())
@@ -4353,7 +4394,7 @@ async def _update_seed_shop_live_message() -> None:
 
         if should_post:
             embed = _compose_seed_shop_embed(lines, gear_lines, next_restock_text, best_rarity)
-            message = await channel.send(embed=embed, content=_build_stock_ping_content(role_mentions))
+            message = await channel.send(**_build_stock_embed_send_kwargs(embed, content=_build_stock_ping_content(role_mentions)))
             config["message_id"] = message.id
             _save_live_config(config)
             last_live_post_ts = now_unix
@@ -5907,7 +5948,7 @@ async def remove_seeds(ctx: commands.Context, user: discord.Member, amount: int)
 async def seedstock(ctx: commands.Context):
     try:
         embed = await _build_seed_shop_embed()
-        await ctx.send(embed=embed)
+        await ctx.send(**_build_stock_embed_send_kwargs(embed))
     except Exception as exc:
         await ctx.send(f"```⚠️ Command Failed ```\n-# Could not fetch live seed stock right now: {exc}")
 
@@ -5925,7 +5966,7 @@ async def seedshoplive(ctx: commands.Context):
         await ctx.send(f"```⚠️ Command Failed ```\n-# Could not start live seed shop: {exc}")
         return
 
-    message = await channel.send(embed=embed)
+    message = await channel.send(**_build_stock_embed_send_kwargs(embed))
     _save_live_config({"channel_id": SEED_SHOP_CHANNEL_ID, "message_id": message.id})
     await ctx.send(f"Live seed shop started in <#{SEED_SHOP_CHANNEL_ID}>. This message refreshes every 5 minutes.")
     await _update_seed_shop_live_message()
@@ -6836,6 +6877,4 @@ async def sreportremove(ctx: commands.Context, scam_id: int):
 
 if __name__ == "__main__":
     bot.run(TOKEN)
-
-
 
