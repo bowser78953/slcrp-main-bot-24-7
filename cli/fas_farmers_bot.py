@@ -395,7 +395,7 @@ last_sell_price_signature: str | None = None
 SEED_STOCK_EMBED_STYLE_VERSION = "v2"
 SEED_STOCK_COMPONENTS_V2_ENABLED = (os.getenv("FAS_STOCK_COMPONENTS_V2") or "1").strip().lower() in {"1", "true", "yes", "on"}
 SEED_STOCK_LIVE_SEND_NEW_MESSAGES = (os.getenv("FAS_STOCK_LIVE_SEND_NEW_MESSAGES") or "1").strip().lower() in {"1", "true", "yes", "on"}
-SEED_STOCK_COMPONENTS_V2_STRICT = (os.getenv("FAS_STOCK_COMPONENTS_V2_STRICT") or "1").strip().lower() in {"1", "true", "yes", "on"}
+SEED_STOCK_COMPONENTS_V2_STRICT = (os.getenv("FAS_STOCK_COMPONENTS_V2_STRICT") or "0").strip().lower() in {"1", "true", "yes", "on"}
 # Discord message flag value for IsComponentsV2.
 DISCORD_MESSAGE_FLAG_COMPONENTS_V2 = 32768
 
@@ -4724,6 +4724,13 @@ async def _update_seed_shop_live_message() -> None:
         should_post = bool(stock_signature and stock_signature != last_stock_signature)
         if should_post and last_live_post_ts is not None and (now_unix - last_live_post_ts) < 2:
             should_post = False
+
+        # Keep live feed active even when stock rows are unchanged.
+        if not should_post:
+            if last_live_post_ts is None:
+                should_post = True
+            elif (now_unix - last_live_post_ts) >= SHOP_REFRESH_SECONDS:
+                should_post = True
 
         if should_post:
             embed = _compose_seed_shop_embed(lines, gear_lines, next_restock_text, best_rarity)
