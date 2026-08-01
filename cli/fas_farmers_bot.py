@@ -1270,8 +1270,6 @@ def _build_ticket_panel_components_v2_payload() -> dict:
             },
         }
     )
-    children.append({"type": 14})
-    children.append(_build_join_gag2_link_section())
 
     return {
         "flags": DISCORD_MESSAGE_FLAG_COMPONENTS_V2,
