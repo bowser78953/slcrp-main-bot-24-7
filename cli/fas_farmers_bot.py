@@ -4824,23 +4824,8 @@ def _build_seed_balance_components_v2_payload(
     seed_balance: int,
     rank_text: str,
     claim_text: str,
-    image_url: str | None = None,
 ) -> dict:
     children: list[dict] = []
-
-    resolved_image_url = str(image_url or SEED_BALANCE_NOTIFIER_IMAGE_URL or "").strip()
-    if resolved_image_url:
-        children.append(
-            {
-                "type": 12,
-                "items": [
-                    {
-                        "media": {"url": resolved_image_url},
-                    }
-                ],
-            }
-        )
-        children.append({"type": 14})
 
     children.extend(
         [
@@ -7038,32 +7023,22 @@ async def seedbalance(ctx: commands.Context, *, target: str | None = None):
     claim_text = f"<t:{next_claim_unix}:R>" if next_claim_unix > now_unix else "Ready now"
 
     user_name = str(target_member.name or f"User {target_member.id}")
-    banner_png = _build_register_user_banner_png(user_name, wrap_with_angles=False)
 
     payload = _build_seed_balance_components_v2_payload(
         user_name=user_name,
         seed_balance=balance,
         rank_text=rank_text,
         claim_text=claim_text,
-        image_url="attachment://seed_balance_banner.png" if banner_png is not None else None,
     )
 
     if isinstance(ctx.channel, discord.TextChannel):
         try:
-            if banner_png is not None:
-                await _discord_api_send_components_v2_message_with_file(
-                    int(ctx.channel.id),
-                    payload,
-                    file_bytes=banner_png.getvalue(),
-                    filename="seed_balance_banner.png",
-                )
-            else:
-                await _discord_api_send_or_edit_components_v2_message(
-                    int(ctx.channel.id),
-                    0,
-                    payload,
-                    force_new_message=True,
-                )
+            await _discord_api_send_or_edit_components_v2_message(
+                int(ctx.channel.id),
+                0,
+                payload,
+                force_new_message=True,
+            )
             return
         except Exception as exc:
             print(f"Seed balance Components V2 post failed: {exc}")
