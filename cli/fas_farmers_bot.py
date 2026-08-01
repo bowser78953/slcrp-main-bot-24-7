@@ -5010,23 +5010,33 @@ def _build_register_user_banner_png(display_name: str, *, wrap_with_angles: bool
 
     draw = ImageDraw.Draw(base)
     font_candidates = ["arialbi.ttf", "Arial Bold Italic.ttf", "DejaVuSans-BoldOblique.ttf", "arialbd.ttf", "Arial Bold.ttf", "DejaVuSans-Bold.ttf"]
-    font_size = 124
+    font_size = 128
     large_font = _pick_font(font_candidates, font_size)
 
     normalized_name = _safe_user_banner_name(display_name).upper()
     user_text = f"<{normalized_name}>" if wrap_with_angles else normalized_name
 
-    while font_size > 72:
+    # Auto-fit text into a safe box so long names never clip the banner edges.
+    text_left = 255
+    text_right = 955
+    max_text_width = max(120, text_right - text_left)
+
+    while font_size > 64:
         name_bbox = draw.textbbox((0, 0), user_text, font=large_font)
         name_width = int(name_bbox[2] - name_bbox[0])
-        if name_width <= 640:
+        if name_width <= max_text_width:
             break
         font_size -= 4
         large_font = _pick_font(font_candidates, font_size)
 
     final_bbox = draw.textbbox((0, 0), user_text, font=large_font)
     final_width = int(final_bbox[2] - final_bbox[0])
-    x = int(640 - (final_width // 2))
+    preferred_center_x = 655
+    x = int(preferred_center_x - (final_width // 2))
+    if x < text_left:
+        x = text_left
+    if x + final_width > text_right:
+        x = text_right - final_width
     draw.text((x, 82), user_text, font=large_font, fill=(255, 255, 255))
 
     output = io.BytesIO()
