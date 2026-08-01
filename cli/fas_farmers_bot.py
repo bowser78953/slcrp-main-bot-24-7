@@ -5586,8 +5586,12 @@ async def on_interaction(interaction: discord.Interaction):
         custom_id = str(data.get("custom_id") or "")
 
         if custom_id in {SUPPORT_PANEL_OPEN_BUTTON_CUSTOM_ID, LEGACY_SUPPORT_PANEL_OPEN_BUTTON_CUSTOM_ID}:
-            callback_payload = _build_ticket_selector_components_v2_callback_payload(interaction.user.id)
-            await _send_component_interaction_callback(interaction, callback_payload)
+            dropdown_view = TicketTypeSelectView()
+            message_text = "Select a ticket type from the menu below."
+            if interaction.response.is_done():
+                await interaction.followup.send(message_text, view=dropdown_view, ephemeral=True)
+            else:
+                await interaction.response.send_message(message_text, view=dropdown_view, ephemeral=True)
             return
 
         if custom_id in {SUPPORT_PANEL_SELECT_CUSTOM_ID, LEGACY_SUPPORT_PANEL_SELECT_CUSTOM_ID}:
