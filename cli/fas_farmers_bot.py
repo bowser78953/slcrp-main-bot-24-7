@@ -84,6 +84,10 @@ WEATHER_NOTIFIER_IMAGE_URL = (
 ).strip()
 SUPPORT_PANEL_OPEN_BUTTON_CUSTOM_ID = "fas_ticket_open_button_v2"
 SUPPORT_PANEL_SELECT_CUSTOM_ID = "fas_ticket_type_select_v2"
+LEGACY_SUPPORT_PANEL_OPEN_BUTTON_CUSTOM_ID = "fas_ticket_open_button"
+LEGACY_SUPPORT_PANEL_SELECT_CUSTOM_ID = "fas_ticket_type_select"
+GAG2_PLAY_URL = "https://www.roblox.com/games/97598239454123/Grow-a-Garden-2"
+GAG2_JOIN_BUTTON_LABEL = "Join GAG2"
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -435,7 +439,7 @@ SEED_STOCK_EMBED_STYLE_VERSION = "v2"
 SELL_MULTIPLIER_EMBED_STYLE_VERSION = "v2"
 WEATHER_NOTIFIER_STYLE_VERSION = "v1"
 SEED_STOCK_COMPONENTS_V2_ENABLED = (os.getenv("FAS_STOCK_COMPONENTS_V2") or "1").strip().lower() in {"1", "true", "yes", "on"}
-SEED_STOCK_LIVE_SEND_NEW_MESSAGES = (os.getenv("FAS_STOCK_LIVE_SEND_NEW_MESSAGES") or "1").strip().lower() in {"1", "true", "yes", "on"}
+SEED_STOCK_LIVE_SEND_NEW_MESSAGES = False
 SEED_STOCK_COMPONENTS_V2_STRICT = (os.getenv("FAS_STOCK_COMPONENTS_V2_STRICT") or "1").strip().lower() in {"1", "true", "yes", "on"}
 SEED_STOCK_COMPONENTS_V2_ALLOW_EMBED_FALLBACK = (os.getenv("FAS_STOCK_COMPONENTS_V2_ALLOW_EMBED_FALLBACK") or "0").strip().lower() in {"1", "true", "yes", "on"}
 # Discord message flag value for IsComponentsV2.
@@ -444,6 +448,7 @@ DISCORD_MESSAGE_FLAG_COMPONENTS_V2 = 32768
 GIVEAWAYS: dict[int, dict] = {}
 TREE_SYNCED = False
 MODE_COMMANDS_CONFIGURED = False
+TICKET_VIEWS_REGISTERED = False
 
 XP_COMMAND_NAMES = {
     "seedclaim",
@@ -1265,6 +1270,8 @@ def _build_ticket_panel_components_v2_payload() -> dict:
             },
         }
     )
+    children.append({"type": 14})
+    children.append(_build_join_gag2_link_section())
 
     return {
         "flags": DISCORD_MESSAGE_FLAG_COMPONENTS_V2,
@@ -1537,7 +1544,7 @@ async def _post_ticket_support_panel() -> None:
                     for row in old_message.components:
                         for child in getattr(row, "children", []):
                             custom_id = str(getattr(child, "custom_id", "") or "")
-                            if custom_id in {"fas_ticket_open_button", SUPPORT_PANEL_OPEN_BUTTON_CUSTOM_ID}:
+                            if custom_id in {LEGACY_SUPPORT_PANEL_OPEN_BUTTON_CUSTOM_ID, SUPPORT_PANEL_OPEN_BUTTON_CUSTOM_ID}:
                                 remove_message = True
                                 break
                         if remove_message:
@@ -3133,6 +3140,8 @@ def _build_live_sell_multiplier_components_v2_payload(rows: list[dict]) -> dict:
             },
         ]
     )
+    children.append({"type": 14})
+    children.append(_build_join_gag2_link_section())
 
     payload: dict = {
         "flags": DISCORD_MESSAGE_FLAG_COMPONENTS_V2,
@@ -3446,6 +3455,8 @@ def _build_weather_components_v2_payload(event: dict) -> dict:
             },
         ]
     )
+    children.append({"type": 14})
+    children.append(_build_join_gag2_link_section())
 
     return {
         "flags": DISCORD_MESSAGE_FLAG_COMPONENTS_V2,
@@ -4713,6 +4724,24 @@ def _truncate_component_text(value: str, limit: int = 3900) -> str:
     return text[: limit - 3].rstrip() + "..."
 
 
+def _build_join_gag2_link_section() -> dict:
+    return {
+        "type": 9,
+        "components": [
+            {
+                "type": 10,
+                "content": _truncate_component_text("> Jump in-game:")
+            }
+        ],
+        "accessory": {
+            "type": 2,
+            "style": 5,
+            "label": GAG2_JOIN_BUTTON_LABEL,
+            "url": GAG2_PLAY_URL,
+        },
+    }
+
+
 def _resolve_stock_notifier_banner_file() -> str | None:
     candidate_paths: list[str] = []
     if STOCK_NOTIFIER_IMAGE_FILE:
@@ -4812,6 +4841,9 @@ def _build_seed_shop_components_v2_payload(
                 "content": _truncate_component_text(f"### Next Shop Refresh\n{next_restock_text}"),
             }
         )
+
+    container_children.append({"type": 14})
+    container_children.append(_build_join_gag2_link_section())
 
     payload = {
         "flags": DISCORD_MESSAGE_FLAG_COMPONENTS_V2,
@@ -5555,12 +5587,12 @@ async def on_interaction(interaction: discord.Interaction):
         data = interaction.data if isinstance(interaction.data, dict) else {}
         custom_id = str(data.get("custom_id") or "")
 
-        if custom_id == SUPPORT_PANEL_OPEN_BUTTON_CUSTOM_ID:
+        if custom_id in {SUPPORT_PANEL_OPEN_BUTTON_CUSTOM_ID, LEGACY_SUPPORT_PANEL_OPEN_BUTTON_CUSTOM_ID}:
             callback_payload = _build_ticket_selector_components_v2_callback_payload(interaction.user.id)
             await _send_component_interaction_callback(interaction, callback_payload)
             return
 
-        if custom_id == SUPPORT_PANEL_SELECT_CUSTOM_ID:
+        if custom_id in {SUPPORT_PANEL_SELECT_CUSTOM_ID, LEGACY_SUPPORT_PANEL_SELECT_CUSTOM_ID}:
             values = data.get("values") if isinstance(data.get("values"), list) else []
             selected = str(values[0]) if values else ""
             if selected not in TICKET_TYPE_CONFIG:
@@ -5902,10 +5934,16 @@ async def on_guild_channel_delete(channel: discord.abc.GuildChannel):
 
 @bot.event
 async def on_ready():
-    global TREE_SYNCED
+    global TREE_SYNCED, TICKET_VIEWS_REGISTERED
     _configure_commands_for_mode()
     if bot.user:
         print(f"{bot.user} is online. mode={BOT_MODE}")
+    if not TICKET_VIEWS_REGISTERED:
+        try:
+            bot.add_view(TicketPanelView())
+            TICKET_VIEWS_REGISTERED = True
+        except Exception as exc:
+            print(f"Failed to register persistent ticket panel view: {exc}")
     try:
         await _restore_active_auctions()
     except Exception as exc:
