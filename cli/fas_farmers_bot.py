@@ -98,6 +98,13 @@ LEGACY_SUPPORT_PANEL_SELECT_CUSTOM_ID = "fas_ticket_type_select"
 GAG2_PLAY_URL = "https://www.roblox.com/games/97598239454123/Grow-a-Garden-2"
 GAG2_JOIN_BUTTON_LABEL = "Join GAG2"
 REGISTER_BANNER_TEMPLATE_FILE = (os.getenv("FAS_REGISTER_BANNER_TEMPLATE_FILE") or "user_banner_template.png").strip()
+SEED_BALANCE_NOTIFIER_IMAGE_URL = (
+    os.getenv("FAS_SEED_BALANCE_NOTIFIER_IMAGE_URL")
+    or os.getenv("SEED_BALANCE_NOTIFIER_IMAGE_URL")
+    or ""
+).strip()
+if not SEED_BALANCE_NOTIFIER_IMAGE_URL:
+    SEED_BALANCE_NOTIFIER_IMAGE_URL = STOCK_NOTIFIER_IMAGE_URL
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -4789,6 +4796,62 @@ def _build_join_gag2_link_section() -> dict:
     }
 
 
+def _build_seed_balance_components_v2_payload(
+    *,
+    user_name: str,
+    seed_balance: int,
+    rank_text: str,
+    claim_text: str,
+) -> dict:
+    children: list[dict] = []
+
+    if SEED_BALANCE_NOTIFIER_IMAGE_URL:
+        children.append(
+            {
+                "type": 12,
+                "items": [
+                    {
+                        "media": {"url": SEED_BALANCE_NOTIFIER_IMAGE_URL},
+                    }
+                ],
+            }
+        )
+        children.append({"type": 14})
+
+    children.extend(
+        [
+            {
+                "type": 10,
+                "content": _truncate_component_text(f"# {user_name} Seed Balance!"),
+            },
+            {
+                "type": 14,
+            },
+            {
+                "type": 10,
+                "content": _truncate_component_text(
+                    "Ammount of Seeds:\n"
+                    f"> `{int(seed_balance)}`\n\n"
+                    "Server Ranking:\n"
+                    f"> `{rank_text}`\n\n"
+                    "Time tell next Seed Claim:\n"
+                    f"> {claim_text}"
+                ),
+            },
+        ]
+    )
+
+    return {
+        "flags": DISCORD_MESSAGE_FLAG_COMPONENTS_V2,
+        "components": [
+            {
+                "type": 17,
+                "components": children,
+            }
+        ],
+    }
+
+
 def _resolve_register_banner_template_file() -> str | None:
     candidate_paths: list[str] = []
     if REGISTER_BANNER_TEMPLATE_FILE:
@@ -6824,9 +6887,30 @@ async def seedbalance(ctx: commands.Context, *, target: str | None = None):
     rank_text = f"#{rank_position}" if rank_position is not None else "Unranked"
     claim_text = f"<t:{next_claim_unix}:R>" if next_claim_unix > now_unix else "Ready now"
 
+    user_name = str(target_member.name or f"User {target_member.id}")
+    payload = _build_seed_balance_components_v2_payload(
+        user_name=user_name,
+        seed_balance=balance,
+        rank_text=rank_text,
+        claim_text=claim_text,
+    )
+
+    if isinstance(ctx.channel, discord.TextChannel):
+        try:
+            await _discord_api_send_or_edit_components_v2_message(
+                int(ctx.channel.id),
+                0,
+                payload,
+                force_new_message=True,
+            )
+            return
+        except Exception as exc:
+            print(f"Seed balance Components V2 post failed: {exc}")
+
+    # Fallback for channels where V2 cannot be posted by API.
     embed = discord.Embed(
         description=(
-            f"# {target_member.display_name} Seed Balance!\n\n"
+            f"# {user_name} Seed Balance!\n\n"
             "Ammount of Seeds:\n"
             f"> `{balance}`\n\n"
             "Server Ranking:\n"
@@ -6837,14 +6921,6 @@ async def seedbalance(ctx: commands.Context, *, target: str | None = None):
         color=discord.Color.dark_grey(),
         timestamp=datetime.now(timezone.utc),
     )
-
-    banner_png = _build_register_user_banner_png(target_member.display_name)
-    if banner_png is not None:
-        file = discord.File(fp=banner_png, filename="seed_balance_banner.png")
-        embed.set_image(url="attachment://seed_balance_banner.png")
-        await ctx.send(embed=embed, file=file)
-        return
-
     await ctx.send(embed=embed)
 
 
