@@ -4887,6 +4887,8 @@ def _resolve_register_banner_template_file() -> str | None:
         [
             os.path.join(BASE_DIR, "user_banner_template.png"),
             os.path.join(BASE_DIR, "assets", "user_banner_template.png"),
+            os.path.join(BASE_DIR, "stock_notifier_banner.png"),
+            os.path.join(BASE_DIR, "stock_notifier_banner.jpg"),
         ]
     )
 
@@ -4957,12 +4959,16 @@ def _build_register_user_banner_png(display_name: str, *, wrap_with_angles: bool
 
     draw = ImageDraw.Draw(base)
 
-    try:
-        large_font = ImageFont.truetype("arialbd.ttf", 128)
-        small_font = ImageFont.truetype("arial.ttf", 48)
-    except Exception:
-        large_font = ImageFont.load_default()
-        small_font = ImageFont.load_default()
+    def _pick_font(candidates: list[str], size: int):
+        for font_name in candidates:
+            try:
+                return ImageFont.truetype(font_name, size)
+            except Exception:
+                continue
+        return ImageFont.load_default()
+
+    large_font = _pick_font(["arialbd.ttf", "Arial Bold.ttf", "DejaVuSans-Bold.ttf"], 128)
+    small_font = _pick_font(["arial.ttf", "Arial.ttf", "DejaVuSans.ttf"], 48)
 
     normalized_name = _safe_user_banner_name(display_name).upper()
     user_text = f"<{normalized_name}>" if wrap_with_angles else normalized_name
@@ -4970,7 +4976,7 @@ def _build_register_user_banner_png(display_name: str, *, wrap_with_angles: bool
         draw,
         user_text,
         center_x=520,
-        y=76,
+        y=86,
         font=large_font,
         fill=(255, 255, 255),
         outline=(20, 20, 20),
