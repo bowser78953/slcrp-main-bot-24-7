@@ -4802,16 +4802,18 @@ def _build_seed_balance_components_v2_payload(
     seed_balance: int,
     rank_text: str,
     claim_text: str,
+    image_url: str | None = None,
 ) -> dict:
     children: list[dict] = []
 
-    if SEED_BALANCE_NOTIFIER_IMAGE_URL:
+    resolved_image_url = str(image_url or SEED_BALANCE_NOTIFIER_IMAGE_URL or "").strip()
+    if resolved_image_url:
         children.append(
             {
                 "type": 12,
                 "items": [
                     {
-                        "media": {"url": SEED_BALANCE_NOTIFIER_IMAGE_URL},
+                        "media": {"url": resolved_image_url},
                     }
                 ],
             }
@@ -4907,7 +4909,7 @@ def _draw_centered_text_with_outline(
     draw.text((x, y), text, font=font, fill=fill, stroke_width=stroke_width, stroke_fill=outline)
 
 
-def _build_register_user_banner_png(display_name: str) -> io.BytesIO | None:
+def _build_register_user_banner_png(display_name: str, *, wrap_with_angles: bool = True) -> io.BytesIO | None:
     if Image is None or ImageDraw is None or ImageFont is None:
         return None
 
@@ -4940,7 +4942,8 @@ def _build_register_user_banner_png(display_name: str) -> io.BytesIO | None:
         large_font = ImageFont.load_default()
         small_font = ImageFont.load_default()
 
-    user_text = f"<{_safe_user_banner_name(display_name).upper()}>"
+    normalized_name = _safe_user_banner_name(display_name).upper()
+    user_text = f"<{normalized_name}>" if wrap_with_angles else normalized_name
     _draw_centered_text_with_outline(
         draw,
         user_text,
@@ -5112,6 +5115,35 @@ async def _discord_api_send_or_edit_components_v2_message(
     new_message_id = int(data.get("id", 0) or 0)
     if new_message_id <= 0:
         raise RuntimeError("Discord API did not return a valid message id for components v2 message.")
+    return new_message_id
+
+
+async def _discord_api_send_components_v2_message_with_file(
+    channel_id: int,
+    payload: dict,
+    *,
+    file_bytes: bytes,
+    filename: str,
+) -> int:
+    session = await _get_http_session()
+    url = f"https://discord.com/api/v10/channels/{int(channel_id)}/messages"
+    headers = {
+        "Authorization": f"Bot {TOKEN}",
+    }
+
+    form = aiohttp.FormData()
+    form.add_field("payload_json", json.dumps(payload), content_type="application/json")
+    form.add_field("files[0]", file_bytes, filename=filename, content_type="image/png")
+
+    async with session.post(url, data=form, headers=headers) as resp:
+        if resp.status not in {200, 201}:
+            body = await resp.text()
+            raise RuntimeError(f"Discord API file+V2 HTTP {resp.status}: {body[:300]}")
+        data = await resp.json()
+
+    new_message_id = int(data.get("id", 0) or 0)
+    if new_message_id <= 0:
+        raise RuntimeError("Discord API did not return a valid message id for components v2 file message.")
     return new_message_id
 
 
@@ -6888,21 +6920,32 @@ async def seedbalance(ctx: commands.Context, *, target: str | None = None):
     claim_text = f"<t:{next_claim_unix}:R>" if next_claim_unix > now_unix else "Ready now"
 
     user_name = str(target_member.name or f"User {target_member.id}")
+    banner_png = _build_register_user_banner_png(user_name, wrap_with_angles=False)
+
     payload = _build_seed_balance_components_v2_payload(
         user_name=user_name,
         seed_balance=balance,
         rank_text=rank_text,
         claim_text=claim_text,
+        image_url="attachment://seed_balance_banner.png" if banner_png is not None else None,
     )
 
     if isinstance(ctx.channel, discord.TextChannel):
         try:
-            await _discord_api_send_or_edit_components_v2_message(
-                int(ctx.channel.id),
-                0,
-                payload,
-                force_new_message=True,
-            )
+            if banner_png is not None:
+                await _discord_api_send_components_v2_message_with_file(
+                    int(ctx.channel.id),
+                    payload,
+                    file_bytes=banner_png.getvalue(),
+                    filename="seed_balance_banner.png",
+                )
+            else:
+                await _discord_api_send_or_edit_components_v2_message(
+                    int(ctx.channel.id),
+                    0,
+                    payload,
+                    force_new_message=True,
+                )
             return
         except Exception as exc:
             print(f"Seed balance Components V2 post failed: {exc}")
