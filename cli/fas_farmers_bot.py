@@ -4937,6 +4937,26 @@ def _draw_centered_text_with_outline(
     draw.text((x, y), text, font=font, fill=fill, stroke_width=stroke_width, stroke_fill=outline)
 
 
+def _clean_register_banner_headline(base_image):
+    """Soft-remove STOCK/SUPPORT/MULTIPLIERS headline text baked into notifier templates."""
+    if ImageFilter is None:
+        return base_image
+
+    cleaned = base_image.copy()
+    # Main center headline area in the bundled banner templates.
+    x1, y1, x2, y2 = 170, 84, 980, 196
+    region = cleaned.crop((x1, y1, x2, y2)).convert("RGBA")
+    blurred = region.filter(ImageFilter.GaussianBlur(radius=18))
+
+    mask = Image.new("L", region.size, 0)
+    mask_draw = ImageDraw.Draw(mask)
+    mask_draw.rectangle((0, 0, region.size[0], region.size[1]), fill=215)
+    mask = mask.filter(ImageFilter.GaussianBlur(radius=10))
+
+    cleaned.paste(blurred, (x1, y1), mask)
+    return cleaned
+
+
 def _draw_centered_text_slanted(
     base_image,
     text: str,
@@ -4985,6 +5005,16 @@ def _build_register_user_banner_png(display_name: str, *, wrap_with_angles: bool
 
     if template_path:
         base = Image.open(template_path).convert("RGBA").resize((width, height))
+        template_name = os.path.basename(template_path).strip().lower()
+        if template_name in {
+            "stock_notifier_banner.png",
+            "stock_notifier_banner.jpg",
+            "support_notifier_banner.png",
+            "support_notifier_banner.jpg",
+            "multipliers_notifier_banner.png",
+            "multipliers_notifier_banner.jpg",
+        }:
+            base = _clean_register_banner_headline(base)
     else:
         base = Image.new("RGBA", (width, height), (24, 34, 24, 255))
         draw_bg = ImageDraw.Draw(base)
