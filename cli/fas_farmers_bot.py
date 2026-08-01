@@ -7,12 +7,21 @@ import math
 import random
 import shutil
 import uuid
+import io
 import aiohttp
 from datetime import datetime, timezone, timedelta
 from threading import Lock
 import discord
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
+
+try:
+    from PIL import Image, ImageDraw, ImageFont, ImageFilter
+except ImportError:
+    Image = None
+    ImageDraw = None
+    ImageFont = None
+    ImageFilter = None
 
 try:
     import redis as redis_lib
@@ -88,6 +97,7 @@ LEGACY_SUPPORT_PANEL_OPEN_BUTTON_CUSTOM_ID = "fas_ticket_open_button"
 LEGACY_SUPPORT_PANEL_SELECT_CUSTOM_ID = "fas_ticket_type_select"
 GAG2_PLAY_URL = "https://www.roblox.com/games/97598239454123/Grow-a-Garden-2"
 GAG2_JOIN_BUTTON_LABEL = "Join GAG2"
+REGISTER_BANNER_TEMPLATE_FILE = (os.getenv("FAS_REGISTER_BANNER_TEMPLATE_FILE") or "user_banner_template.png").strip()
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -4740,6 +4750,122 @@ def _build_join_gag2_link_section() -> dict:
     }
 
 
+def _resolve_register_banner_template_file() -> str | None:
+    candidate_paths: list[str] = []
+    if REGISTER_BANNER_TEMPLATE_FILE:
+        candidate_paths.append(REGISTER_BANNER_TEMPLATE_FILE)
+        if not os.path.isabs(REGISTER_BANNER_TEMPLATE_FILE):
+            candidate_paths.append(os.path.join(BASE_DIR, REGISTER_BANNER_TEMPLATE_FILE))
+
+    candidate_paths.extend(
+        [
+            os.path.join(BASE_DIR, "user_banner_template.png"),
+            os.path.join(BASE_DIR, "assets", "user_banner_template.png"),
+        ]
+    )
+
+    seen_paths: set[str] = set()
+    for raw_path in candidate_paths:
+        normalized = os.path.abspath(raw_path)
+        if normalized in seen_paths:
+            continue
+        seen_paths.add(normalized)
+        if not os.path.isfile(normalized):
+            continue
+        try:
+            if os.path.getsize(normalized) <= 0:
+                continue
+        except Exception:
+            continue
+        return normalized
+
+    return None
+
+
+def _safe_user_banner_name(raw_name: str) -> str:
+    cleaned = re.sub(r"\s+", " ", str(raw_name or "").strip())
+    if not cleaned:
+        return "USER"
+    return cleaned[:24]
+
+
+def _draw_centered_text_with_outline(
+    draw,
+    text: str,
+    center_x: int,
+    y: int,
+    font,
+    fill: tuple[int, int, int],
+    outline: tuple[int, int, int],
+    stroke_width: int,
+) -> None:
+    bbox = draw.textbbox((0, 0), text, font=font)
+    text_width = int(bbox[2] - bbox[0])
+    x = int(center_x - (text_width // 2))
+    draw.text((x, y), text, font=font, fill=fill, stroke_width=stroke_width, stroke_fill=outline)
+
+
+def _build_register_user_banner_png(display_name: str) -> io.BytesIO | None:
+    if Image is None or ImageDraw is None or ImageFont is None:
+        return None
+
+    width, height = 1000, 300
+    template_path = _resolve_register_banner_template_file()
+
+    if template_path:
+        base = Image.open(template_path).convert("RGBA").resize((width, height))
+    else:
+        base = Image.new("RGBA", (width, height), (24, 34, 24, 255))
+        draw_bg = ImageDraw.Draw(base)
+        for x in range(width):
+            blend = x / float(max(1, width - 1))
+            r = int(94 + (34 - 94) * blend)
+            g = int(191 + (72 - 191) * blend)
+            b = int(102 + (44 - 102) * blend)
+            draw_bg.line([(x, 0), (x, height)], fill=(r, g, b, 255))
+        glow = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        glow_draw = ImageDraw.Draw(glow)
+        glow_draw.ellipse((-120, 40, 380, 360), fill=(120, 255, 120, 88))
+        glow_draw.rectangle((620, 0, 1000, 300), fill=(50, 20, 16, 96))
+        base = Image.alpha_composite(base, glow)
+
+    draw = ImageDraw.Draw(base)
+
+    try:
+        large_font = ImageFont.truetype("arialbd.ttf", 128)
+        small_font = ImageFont.truetype("arial.ttf", 48)
+    except Exception:
+        large_font = ImageFont.load_default()
+        small_font = ImageFont.load_default()
+
+    user_text = f"<{_safe_user_banner_name(display_name).upper()}>"
+    _draw_centered_text_with_outline(
+        draw,
+        user_text,
+        center_x=520,
+        y=76,
+        font=large_font,
+        fill=(255, 255, 255),
+        outline=(20, 20, 20),
+        stroke_width=4,
+    )
+    _draw_centered_text_with_outline(
+        draw,
+        "WHERE THE FUN STARTS",
+        center_x=500,
+        y=245,
+        font=small_font,
+        fill=(230, 230, 230),
+        outline=(35, 35, 35),
+        stroke_width=2,
+    )
+
+    output = io.BytesIO()
+    base.convert("RGB").save(output, format="PNG")
+    output.seek(0)
+    return output
+
+
 def _resolve_stock_notifier_banner_file() -> str | None:
     candidate_paths: list[str] = []
     if STOCK_NOTIFIER_IMAGE_FILE:
@@ -6799,6 +6925,16 @@ async def register(ctx: commands.Context, *, roblox_user: str):
     bank_data = _load_seed_bank()
     _set_registered_roblox_user(bank_data, ctx.author.id, username)
     _save_seed_bank(bank_data)
+
+    banner_png = _build_register_user_banner_png(ctx.author.display_name)
+    if banner_png is not None:
+        file = discord.File(fp=banner_png, filename="register_user_banner.png")
+        await ctx.send(
+            content=f"{ctx.author.mention} registered Roblox user: `{username}`",
+            file=file,
+        )
+        return
+
     await ctx.send(f"{ctx.author.mention} registered Roblox user: `{username}`")
 
 

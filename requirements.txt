@@ -5,3 +5,4 @@ aiohttp==3.9.1
 redis==5.0.8
 yt-dlp
 imageio-ffmpeg
+Pillow==11.3.0
