@@ -4933,6 +4933,45 @@ def _draw_centered_text_with_outline(
     draw.text((x, y), text, font=font, fill=fill, stroke_width=stroke_width, stroke_fill=outline)
 
 
+def _draw_centered_text_slanted(
+    base_image,
+    text: str,
+    center_x: int,
+    y: int,
+    font,
+    fill: tuple[int, int, int],
+    shear: float = 0.16,
+) -> None:
+    if not text:
+        return
+
+    probe = ImageDraw.Draw(base_image)
+    bbox = probe.textbbox((0, 0), text, font=font)
+    text_width = int(bbox[2] - bbox[0])
+    text_height = int(bbox[3] - bbox[1])
+    if text_width <= 0 or text_height <= 0:
+        return
+
+    pad = 8
+    layer_w = text_width + (pad * 2)
+    layer_h = text_height + (pad * 2)
+
+    text_layer = Image.new("RGBA", (layer_w, layer_h), (0, 0, 0, 0))
+    text_draw = ImageDraw.Draw(text_layer)
+    text_draw.text((pad, pad), text, font=font, fill=fill)
+
+    out_w = max(1, int(layer_w + (abs(shear) * layer_h) + 2))
+    slanted_layer = text_layer.transform(
+        (out_w, layer_h),
+        Image.AFFINE,
+        (1, shear, 0, 0, 1, 0),
+        resample=Image.BICUBIC,
+    )
+
+    x = int(center_x - (out_w // 2))
+    base_image.alpha_composite(slanted_layer, dest=(x, y))
+
+
 def _build_register_user_banner_png(display_name: str, *, wrap_with_angles: bool = True) -> io.BytesIO | None:
     if Image is None or ImageDraw is None or ImageFont is None:
         return None
@@ -4957,8 +4996,6 @@ def _build_register_user_banner_png(display_name: str, *, wrap_with_angles: bool
         glow_draw.rectangle((620, 0, 1000, 300), fill=(50, 20, 16, 96))
         base = Image.alpha_composite(base, glow)
 
-    draw = ImageDraw.Draw(base)
-
     def _pick_font(candidates: list[str], size: int):
         for font_name in candidates:
             try:
@@ -4967,30 +5004,30 @@ def _build_register_user_banner_png(display_name: str, *, wrap_with_angles: bool
                 continue
         return ImageFont.load_default()
 
-    large_font = _pick_font(["arialbd.ttf", "Arial Bold.ttf", "DejaVuSans-Bold.ttf"], 128)
-    small_font = _pick_font(["arial.ttf", "Arial.ttf", "DejaVuSans.ttf"], 48)
+    draw = ImageDraw.Draw(base)
+    font_candidates = ["arialbi.ttf", "Arial Bold Italic.ttf", "DejaVuSans-BoldOblique.ttf", "arialbd.ttf", "Arial Bold.ttf", "DejaVuSans-Bold.ttf"]
+    font_size = 112
+    large_font = _pick_font(font_candidates, font_size)
 
     normalized_name = _safe_user_banner_name(display_name).upper()
     user_text = f"<{normalized_name}>" if wrap_with_angles else normalized_name
-    _draw_centered_text_with_outline(
-        draw,
+
+    while font_size > 64:
+        name_bbox = draw.textbbox((0, 0), user_text, font=large_font)
+        name_width = int(name_bbox[2] - name_bbox[0])
+        if name_width <= 700:
+            break
+        font_size -= 4
+        large_font = _pick_font(font_candidates, font_size)
+
+    _draw_centered_text_slanted(
+        base,
         user_text,
-        center_x=520,
-        y=86,
+        center_x=600,
+        y=78,
         font=large_font,
         fill=(255, 255, 255),
-        outline=(20, 20, 20),
-        stroke_width=4,
-    )
-    _draw_centered_text_with_outline(
-        draw,
-        "WHERE THE FUN STARTS",
-        center_x=500,
-        y=245,
-        font=small_font,
-        fill=(230, 230, 230),
-        outline=(35, 35, 35),
-        stroke_width=2,
+        shear=0.16,
     )
 
     output = io.BytesIO()
