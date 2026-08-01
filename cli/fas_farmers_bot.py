@@ -4885,6 +4885,10 @@ def _resolve_register_banner_template_file() -> str | None:
 
     candidate_paths.extend(
         [
+            os.path.join(BASE_DIR, "seedbalance_banner.png"),
+            os.path.join(BASE_DIR, "seed_balance_banner.png"),
+            os.path.join(BASE_DIR, "assets", "seedbalance_banner.png"),
+            os.path.join(BASE_DIR, "assets", "seed_balance_banner.png"),
             os.path.join(BASE_DIR, "FAS TEST (1).png"),
             os.path.join(BASE_DIR, "assets", "FAS TEST (1).png"),
             os.path.join(BASE_DIR, "fas test (1).png"),
