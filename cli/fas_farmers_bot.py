@@ -7223,15 +7223,6 @@ async def register(ctx: commands.Context, *, roblox_user: str):
     _set_registered_roblox_user(bank_data, ctx.author.id, username)
     _save_seed_bank(bank_data)
 
-    banner_png = _build_register_user_banner_png(ctx.author.display_name)
-    if banner_png is not None:
-        file = discord.File(fp=banner_png, filename="register_user_banner.png")
-        await ctx.send(
-            content=f"{ctx.author.mention} registered Roblox user: `{username}`",
-            file=file,
-        )
-        return
-
     await ctx.send(f"{ctx.author.mention} registered Roblox user: `{username}`")
 
 
