@@ -4709,24 +4709,35 @@ async def _fetch_stock_lines_and_next_restock() -> tuple[list[str], list[str], s
 
     next_restock_text: str | None = None
     next_restock_unix: int | None = None
+    restock_candidates: list[int] = []
+
     try:
         if isinstance(payload, dict) and isinstance(payload.get("stock"), list):
             seed_shop = next((shop for shop in payload["stock"] if shop.get("category") == "seed"), None)
             next_restock_at = seed_shop.get("nextRestockAt") if isinstance(seed_shop, dict) else None
             if next_restock_at:
                 dt = datetime.fromisoformat(str(next_restock_at).replace("Z", "+00:00"))
-                next_restock_unix = int(dt.timestamp())
-                next_restock_text = f"<t:{next_restock_unix}:R>"
+                restock_candidates.append(int(dt.timestamp()))
+
         if isinstance(payload, dict) and payload.get("schemaVersion"):
             rotation = payload.get("rotation", {})
             expires_at = rotation.get("expiresAt") if isinstance(rotation, dict) else None
             if expires_at:
                 dt = datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
-                next_restock_unix = int(dt.timestamp())
-                next_restock_text = f"<t:{next_restock_unix}:R>"
+                restock_candidates.append(int(dt.timestamp()))
     except Exception:
-        next_restock_text = None
-        next_restock_unix = None
+        restock_candidates = []
+
+    # Prefer the nearest future boundary from API data. If only stale values are provided,
+    # fall back to the next 5-minute cadence boundary so the timer never shows long-expired times.
+    future_candidates = [ts for ts in restock_candidates if int(ts) > now_unix]
+    if future_candidates:
+        next_restock_unix = min(future_candidates)
+    else:
+        refresh = max(60, int(SHOP_REFRESH_SECONDS))
+        next_restock_unix = now_unix + refresh
+
+    next_restock_text = f"<t:{next_restock_unix}:R>"
 
     return lines, gear_lines, next_restock_text, next_restock_unix, best_rarity, role_ping_keys, predictor_stock
 
