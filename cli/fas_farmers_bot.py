@@ -91,6 +91,12 @@ WEATHER_NOTIFIER_IMAGE_URL = (
     or os.getenv("FAS_WEATHER_BANNER_URL")
     or ""
 ).strip()
+PROPS_NOTIFIER_IMAGE_URL = (
+    os.getenv("FAS_PROPS_NOTIFIER_IMAGE_URL")
+    or os.getenv("PROPS_NOTIFIER_IMAGE_URL")
+    or os.getenv("FAS_PROPS_BANNER_URL")
+    or ""
+).strip()
 SUPPORT_PANEL_OPEN_BUTTON_CUSTOM_ID = "fas_ticket_open_button_v2"
 SUPPORT_PANEL_SELECT_CUSTOM_ID = "fas_ticket_type_select_v2"
 LEGACY_SUPPORT_PANEL_OPEN_BUTTON_CUSTOM_ID = "fas_ticket_open_button"
@@ -115,6 +121,7 @@ bot = commands.Bot(command_prefix="-", intents=intents, help_command=None)
 
 DATA_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "data"))
 SEED_SHOP_LIVE_FILE = os.path.join(DATA_DIR, "fas_seed_shop_live.json")
+PROPS_LIVE_FILE = os.path.join(DATA_DIR, "fas_props_live.json")
 SEED_DATA_DIR = os.path.abspath(os.getenv("SEED_DATA_DIR") or os.getenv("RENDER_DISK_PATH") or DATA_DIR)
 VOUCH_DATA_FILE = os.path.join(SEED_DATA_DIR, "fas_farmers_reports.json")
 VOUCH_DATA_BACKUP_FILE = os.path.join(SEED_DATA_DIR, "fas_farmers_reports.backup.json")
@@ -179,6 +186,7 @@ SELL_PRICE_LIVE_CHANNEL_ID = 1530414527739330650
 SELL_PRICE_2X_PING_ROLE_ID = 1530415834126745620
 SELL_PRICE_4X_PING_ROLE_ID = 1530416033721090170
 WEATHER_LIVE_CHANNEL_ID = int(os.getenv("FAS_WEATHER_LIVE_CHANNEL_ID") or "1530415028568588389")
+PROPS_LIVE_CHANNEL_ID = int(os.getenv("FAS_PROPS_LIVE_CHANNEL_ID") or "1533135971745529976")
 WEATHER_MEGA_MOON_ROLE_ID = 1532892324613460070
 WEATHER_AURORA_ROLE_ID = 1532934029974700032
 WEATHER_STARFALL_ROLE_ID = 1532934167136960703
@@ -384,6 +392,29 @@ GEAR_CONFIG = [
 
 GEAR_LOOKUP = {entry["key"]: entry for entry in GEAR_CONFIG}
 
+PROPS_ROLE_PINGS: dict[str, str] = {}
+
+PROPS_CONFIG = [
+    {"key": "teleporter pad crate", "name": "Teleporter Pad Crate", "emoji_name": "Teleporter_Pad_Crate", "rarity": "rare"},
+    {"key": "fence crate", "name": "Fence Crate", "emoji_name": "Fence_Crate", "rarity": "rare"},
+    {"key": "boombox crate", "name": "Boombox Crate", "emoji_name": "Boombox_Crate", "rarity": "rare"},
+    {"key": "owner door crate", "name": "Owner Door Crate", "emoji_name": "Owner_Door_Crate", "rarity": "rare"},
+    {"key": "bear trap crate", "name": "Bear Trap Crate", "emoji_name": "Bear_Trap_Crate", "rarity": "rare"},
+    {"key": "seesaw crate", "name": "Seesaw Crate", "emoji_name": "Seesaw_Crate", "rarity": "uncommon"},
+    {"key": "spring crate", "name": "Spring Crate", "emoji_name": "Spring_Crate", "rarity": "uncommon"},
+    {"key": "bridge crate", "name": "Bridge Crate", "emoji_name": "Bridge_Crate", "rarity": "rare"},
+    {"key": "conveyor crate", "name": "Conveyor Crate", "emoji_name": "Conveyor_Crate", "rarity": "rare"},
+    {"key": "picture frame crate", "name": "Picture Frame Crate", "emoji_name": "Picture_Frame_Crate", "rarity": "rare"},
+    {"key": "roleplay crate", "name": "Roleplay Crate", "emoji_name": "Roleplay_Crate", "rarity": "rare"},
+    {"key": "arch crate", "name": "Arch Crate", "emoji_name": "Arch_Crate", "rarity": "rare"},
+    {"key": "sign crate", "name": "Sign Crate", "emoji_name": "Sign_Crate", "rarity": "rare"},
+    {"key": "light crate", "name": "Light Crate", "emoji_name": "Light_Crate", "rarity": "uncommon"},
+    {"key": "bench crate", "name": "Bench Crate", "emoji_name": "Bench_Crate", "rarity": "uncommon"},
+    {"key": "ladder crate", "name": "Ladder Crate", "emoji_name": "Ladder_Crate", "rarity": "common"},
+]
+
+PROPS_LOOKUP = {entry["key"]: entry for entry in PROPS_CONFIG}
+
 SELL_PRICE_CONFIG = [
     {"name": "Ghost Pepper"},
     {"name": "Fire Fern"},
@@ -452,9 +483,12 @@ last_stock_signature: str | None = None
 last_sell_price_post_ts: int | None = None
 last_sell_price_signature: str | None = None
 last_weather_signature: str | None = None
+last_props_post_ts: int | None = None
+last_props_signature: str | None = None
 SEED_STOCK_EMBED_STYLE_VERSION = "v2"
 SELL_MULTIPLIER_EMBED_STYLE_VERSION = "v2"
 WEATHER_NOTIFIER_STYLE_VERSION = "v1"
+PROPS_NOTIFIER_STYLE_VERSION = "v1"
 SEED_STOCK_COMPONENTS_V2_ENABLED = (os.getenv("FAS_STOCK_COMPONENTS_V2") or "1").strip().lower() in {"1", "true", "yes", "on"}
 SEED_STOCK_LIVE_SEND_NEW_MESSAGES = True
 SEED_STOCK_COMPONENTS_V2_STRICT = (os.getenv("FAS_STOCK_COMPONENTS_V2_STRICT") or "1").strip().lower() in {"1", "true", "yes", "on"}
@@ -494,6 +528,9 @@ STOCK_COMMAND_NAMES = {
     "seedstock",
     "seedshoplive",
     "seedshopstop",
+    "propsstock",
+    "propslive",
+    "propsstop",
     "sellprice",
 }
 
@@ -744,6 +781,13 @@ def _ensure_live_file() -> None:
             json.dump({"channel_id": None, "message_id": None}, f, indent=2)
 
 
+def _ensure_props_live_file() -> None:
+    os.makedirs(DATA_DIR, exist_ok=True)
+    if not os.path.exists(PROPS_LIVE_FILE):
+        with open(PROPS_LIVE_FILE, "w", encoding="utf-8") as f:
+            json.dump({"channel_id": None, "message_id": None}, f, indent=2)
+
+
 def _ensure_seed_bank_file() -> None:
     os.makedirs(SEED_DATA_DIR, exist_ok=True)
     if not os.path.exists(SEED_BANK_FILE) and os.path.exists(LEGACY_SEED_BANK_FILE):
@@ -908,6 +952,16 @@ def _load_live_config() -> dict:
     return data
 
 
+def _load_props_live_config() -> dict:
+    _ensure_props_live_file()
+    with DATA_LOCK:
+        with open(PROPS_LIVE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    data.setdefault("channel_id", None)
+    data.setdefault("message_id", None)
+    return data
+
+
 def _load_predictor_v2_data() -> dict:
     client = _get_seed_redis_client()
     redis_data = None
@@ -1005,6 +1059,15 @@ def _save_live_config(data: dict) -> None:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
         os.replace(tmp, SEED_SHOP_LIVE_FILE)
+
+
+def _save_props_live_config(data: dict) -> None:
+    _ensure_props_live_file()
+    with DATA_LOCK:
+        tmp = PROPS_LIVE_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp, PROPS_LIVE_FILE)
 
 
 def _load_seed_bank() -> dict:
@@ -2933,7 +2996,10 @@ def _resolve_sell_query(query: str, rows: list[dict]) -> list[dict]:
 
 def _extract_items_by_category(payload: dict, category: str) -> list[dict]:
     if isinstance(payload, dict) and isinstance(payload.get("stock"), list):
-        shop = next((shop for shop in payload["stock"] if shop.get("category") == category), None)
+        category_candidates = [category]
+        if category == "crate":
+            category_candidates.append("crates")
+        shop = next((shop for shop in payload["stock"] if shop.get("category") in category_candidates), None)
         if isinstance(shop, dict) and isinstance(shop.get("items"), list):
             return shop["items"]
     if isinstance(payload, dict) and payload.get("schemaVersion"):
@@ -2944,9 +3010,15 @@ def _extract_items_by_category(payload: dict, category: str) -> list[dict]:
             return stock.get("seeds", [])
         if category == "gear":
             return stock.get("gear", [])
+        if category == "crate":
+            return stock.get("crate", []) or stock.get("crates", [])
         return []
     else:
-        return payload.get(category, []) if isinstance(payload, dict) else []
+        if not isinstance(payload, dict):
+            return []
+        if category == "crate":
+            return payload.get("crate", []) or payload.get("crates", [])
+        return payload.get(category, [])
 
 
 def _extract_seed_entries(payload: dict) -> list[dict]:
@@ -2955,6 +3027,21 @@ def _extract_seed_entries(payload: dict) -> list[dict]:
 
 def _extract_gear_entries(payload: dict) -> list[dict]:
     return _extract_items_by_category(payload, "gear")
+
+
+def _extract_props_entries(payload: dict) -> list[dict]:
+    return _extract_items_by_category(payload, "crate")
+
+
+def _resolve_custom_emoji_by_name(emoji_name: str) -> str | None:
+    target = re.sub(r"[^a-z0-9]+", "_", str(emoji_name or "").strip().lower()).strip("_")
+    if not target:
+        return None
+
+    for emoji in getattr(bot, "emojis", []):
+        if str(getattr(emoji, "name", "")).strip().lower() == target:
+            return str(emoji)
+    return None
 
 
 async def _get_http_session() -> aiohttp.ClientSession:
@@ -3434,8 +3521,9 @@ def _build_weather_components_v2_payload(event: dict) -> dict:
     ends_unix = event.get("ends_unix")
 
     effects_text, mutation_text = _weather_effects_and_mutations(event_key, str(event.get("effects_blurb", "") or ""))
+    mutation_lines = [part.strip() for part in str(mutation_text or "").split(",") if part.strip()]
     if event_key == "goldmoon":
-        mutation_text = f"Gold - {_format_weather_boost(event.get('boost'))}"
+        mutation_lines = [f"Gold - {_format_weather_boost(event.get('boost'))}"]
     start_line = "Unknown"
     end_line = "Unknown"
     if isinstance(starts_unix, int) and starts_unix > 0:
@@ -3491,7 +3579,7 @@ def _build_weather_components_v2_payload(event: dict) -> dict:
                     "## Effects:\n"
                     f"{effects_text}\n\n"
                     "🔬**Possible Mutations:**\n"
-                    f"{mutation_text}"
+                    + "\n".join(f"> {line}" for line in mutation_lines)
                 ),
             },
             {
@@ -5203,6 +5291,313 @@ def _build_seed_shop_components_v2_payload(
     return payload, banner_file_path
 
 
+async def _fetch_props_lines_and_next_restock() -> tuple[list[str], str | None, int | None, str | None, list[str], dict[str, int]]:
+    session = await _get_http_session()
+    now_unix = int(datetime.now(timezone.utc).timestamp())
+    headers = {
+        "Accept": "application/json,text/plain,*/*",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+        "Referer": "https://www.gag2.gg/stock",
+        "Origin": "https://www.gag2.gg",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+    }
+    async with session.get(STOCK_API_URL, headers=headers, params={"_": now_unix}) as resp:
+        if resp.status != 200:
+            raise RuntimeError(f"Stock API HTTP {resp.status}")
+        payload = await resp.json()
+
+    raw_props = _extract_props_entries(payload)
+    props_in_stock: dict[str, int] = {}
+    props_items: dict[str, dict] = {}
+    for item in raw_props:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name", "")).strip()
+        api_key = str(item.get("key", "")).strip()
+        qty = int(item.get("quantity", 0) or 0)
+        if not name or qty <= 0:
+            continue
+        canonical_key = _normalize_seed_name(name)
+        if not canonical_key:
+            canonical_key = _predictor_key_from_stock_item(name, api_key)
+        props_in_stock[canonical_key] = qty
+        props_items[canonical_key] = item
+
+        normalized_name = _normalize_seed_name(name)
+        if normalized_name and normalized_name not in props_in_stock:
+            props_in_stock[normalized_name] = qty
+            props_items[normalized_name] = item
+        normalized_api_key = _normalize_seed_name(api_key.replace("_", " ")) if api_key else ""
+        if normalized_api_key and normalized_api_key not in props_in_stock:
+            props_in_stock[normalized_api_key] = qty
+            props_items[normalized_api_key] = item
+
+    lines: list[str] = []
+    best_rarity: str | None = None
+    role_ping_keys: list[str] = []
+
+    for entry in PROPS_CONFIG:
+        key = entry["key"]
+        if key not in props_in_stock:
+            continue
+        item = props_items.get(key, {})
+        qty = props_in_stock[key]
+        rarity = str(item.get("rarity") or entry.get("rarity") or "").strip()
+        emoji_name = str(entry.get("emoji_name") or entry["name"].replace(" ", "_")).strip()
+        item_emoji = _resolve_custom_emoji_by_name(emoji_name) or f":{emoji_name}:"
+        ping_mention = PROPS_ROLE_PINGS.get(key)
+        rarity_key = rarity.lower()
+        rarity_label = rarity_key.title() if rarity_key else "Unknown"
+        rarity_emoji = RARITY_EMOJIS.get(rarity_key, "")
+        lines.append(
+            f"{item_emoji} **{entry['name']}**\n"
+            f"> Rairty: {rarity_label} {rarity_emoji}".rstrip()
+            + f"\n> Ammount in Stock: **{int(qty)}**\n"
+            + f"> Ping: {ping_mention or 'None'}"
+        )
+
+        if rarity and (best_rarity is None or RARITY_RANK.get(rarity_key, 0) > RARITY_RANK.get(str(best_rarity), 0)):
+            best_rarity = rarity_key
+
+        if key in PROPS_ROLE_PINGS:
+            role_ping_keys.append(key)
+
+    next_restock_text: str | None = None
+    next_restock_unix: int | None = None
+    restock_candidates: list[int] = []
+
+    try:
+        if isinstance(payload, dict) and isinstance(payload.get("stock"), list):
+            prop_shop = next((shop for shop in payload["stock"] if shop.get("category") in {"crate", "crates"}), None)
+            next_restock_at = prop_shop.get("nextRestockAt") if isinstance(prop_shop, dict) else None
+            if next_restock_at:
+                dt = datetime.fromisoformat(str(next_restock_at).replace("Z", "+00:00"))
+                restock_candidates.append(int(dt.timestamp()))
+
+        if isinstance(payload, dict) and payload.get("schemaVersion"):
+            rotation = payload.get("rotation", {})
+            expires_at = rotation.get("expiresAt") if isinstance(rotation, dict) else None
+            if expires_at:
+                dt = datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
+                restock_candidates.append(int(dt.timestamp()))
+    except Exception:
+        restock_candidates = []
+
+    future_candidates = [ts for ts in restock_candidates if int(ts) > now_unix]
+    if future_candidates:
+        next_restock_unix = min(future_candidates)
+    else:
+        refresh = max(60, int(SHOP_REFRESH_SECONDS))
+        next_restock_unix = now_unix + refresh
+
+    refresh = max(60, int(SHOP_REFRESH_SECONDS))
+    remainder = int(next_restock_unix) % refresh
+    if remainder != 0:
+        next_restock_unix = int(next_restock_unix) + (refresh - remainder)
+
+    next_restock_text = f"<t:{next_restock_unix}:R>"
+
+    return lines, next_restock_text, next_restock_unix, best_rarity, role_ping_keys, props_in_stock
+
+
+def _compose_props_embed(lines: list[str], next_restock_text: str | None, best_rarity: str | None) -> discord.Embed:
+    if not lines:
+        lines = ["No tracked props in stock right now."]
+
+    props_block = "\n\n".join(lines) if lines else "No tracked props in stock right now."
+
+    embed = discord.Embed(
+        title="Grow a Garden 2 Props",
+        description="# Props Notifer V2\n\n# Props\n\n" + props_block,
+        color=_color_for_best_rarity(best_rarity),
+        timestamp=datetime.now(timezone.utc),
+    )
+    if PROPS_NOTIFIER_IMAGE_URL:
+        embed.set_image(url=PROPS_NOTIFIER_IMAGE_URL)
+        embed.set_thumbnail(url=PROPS_NOTIFIER_IMAGE_URL)
+    if next_restock_text:
+        embed.add_field(name="Next Shop Refresh", value=next_restock_text, inline=False)
+    embed.set_footer(text=f"Posts when the shop refreshes (about every 5 minutes) | {PROPS_NOTIFIER_STYLE_VERSION.upper()}")
+    return embed
+
+
+def _build_props_components_v2_payload(lines: list[str], next_restock_text: str | None) -> dict:
+    props_block = "\n\n".join(lines) if lines else "No tracked props in stock right now."
+    children: list[dict] = []
+
+    if PROPS_NOTIFIER_IMAGE_URL:
+        children.append(
+            {
+                "type": 12,
+                "items": [
+                    {
+                        "media": {"url": PROPS_NOTIFIER_IMAGE_URL},
+                    }
+                ],
+            }
+        )
+        children.append({"type": 14})
+
+    children.extend(
+        [
+            {
+                "type": 10,
+                "content": _truncate_component_text("# Props Notifer V2"),
+            },
+            {
+                "type": 14,
+            },
+            {
+                "type": 10,
+                "content": _truncate_component_text(f"# Props\n\n{props_block}"),
+            },
+        ]
+    )
+
+    if next_restock_text:
+        children.append({"type": 14})
+        children.append(
+            {
+                "type": 10,
+                "content": _truncate_component_text(f"***Next Shop Refresh***\n{next_restock_text}"),
+            }
+        )
+
+    children.append({"type": 14})
+    children.append(_build_join_gag2_link_section())
+
+    return {
+        "flags": DISCORD_MESSAGE_FLAG_COMPONENTS_V2,
+        "components": [
+            {
+                "type": 17,
+                "components": children,
+            }
+        ],
+    }
+
+
+async def _resolve_props_live_channel() -> discord.TextChannel | None:
+    if PROPS_LIVE_CHANNEL_ID <= 0:
+        return None
+
+    channel = bot.get_channel(PROPS_LIVE_CHANNEL_ID)
+    if channel is None:
+        try:
+            channel = await bot.fetch_channel(PROPS_LIVE_CHANNEL_ID)
+        except Exception:
+            return None
+    return channel if isinstance(channel, discord.TextChannel) else None
+
+
+async def _send_or_edit_props_live_message(
+    channel: discord.TextChannel,
+    config: dict,
+    *,
+    embed: discord.Embed,
+    content: str | None,
+    components_v2_payload: dict | None = None,
+) -> int:
+    message_id = int(config.get("message_id", 0) or 0)
+
+    if components_v2_payload:
+        try:
+            return await _discord_api_send_or_edit_components_v2_message(
+                int(channel.id),
+                message_id,
+                components_v2_payload,
+                force_new_message=True,
+            )
+        except Exception as exc:
+            print(f"Props Components V2 post failed: {exc}")
+
+    if message_id > 0:
+        try:
+            existing_message = await channel.fetch_message(message_id)
+            await existing_message.edit(embed=embed, content=content)
+            return existing_message.id
+        except Exception:
+            pass
+
+    sent_message = await channel.send(embed=embed, content=content)
+    return sent_message.id
+
+
+async def _ensure_props_live_message_exists() -> None:
+    global last_props_post_ts, last_props_signature
+    config = _load_props_live_config()
+    config["channel_id"] = PROPS_LIVE_CHANNEL_ID
+
+    channel = await _resolve_props_live_channel()
+    if channel is None:
+        _save_props_live_config(config)
+        return
+
+    lines, next_restock_text, _next_restock_unix, best_rarity, _role_ping_keys, _props_stock = await _fetch_props_lines_and_next_restock()
+    embed = _compose_props_embed(lines, next_restock_text, best_rarity)
+    payload = _build_props_components_v2_payload(lines, next_restock_text)
+    config["message_id"] = await _send_or_edit_props_live_message(
+        channel,
+        config,
+        embed=embed,
+        content=None,
+        components_v2_payload=payload,
+    )
+    _save_props_live_config(config)
+    last_props_post_ts = int(datetime.now(timezone.utc).timestamp())
+    last_props_signature = f"{PROPS_NOTIFIER_STYLE_VERSION}|" + "\n".join(lines)
+
+
+async def _update_props_live_message() -> None:
+    global last_props_post_ts, last_props_signature
+    config = _load_props_live_config()
+    channel_id = int(config.get("channel_id") or 0)
+    if not channel_id:
+        return
+
+    channel = bot.get_channel(int(channel_id))
+    if channel is None:
+        try:
+            channel = await bot.fetch_channel(int(channel_id))
+        except Exception:
+            return
+
+    if not isinstance(channel, discord.TextChannel):
+        return
+
+    try:
+        lines, next_restock_text, _next_restock_unix, best_rarity, _role_ping_keys, _props_stock = await _fetch_props_lines_and_next_restock()
+        now_unix = int(datetime.now(timezone.utc).timestamp())
+
+        props_signature = f"{PROPS_NOTIFIER_STYLE_VERSION}|" + "\n".join(lines)
+        should_post = bool(props_signature and props_signature != last_props_signature)
+        if should_post and last_props_post_ts is not None and (now_unix - last_props_post_ts) < 2:
+            should_post = False
+
+        if not should_post:
+            if last_props_post_ts is None:
+                should_post = True
+            elif (now_unix - last_props_post_ts) >= SHOP_REFRESH_SECONDS:
+                should_post = True
+
+        if should_post:
+            embed = _compose_props_embed(lines, next_restock_text, best_rarity)
+            payload = _build_props_components_v2_payload(lines, next_restock_text)
+            config["message_id"] = await _send_or_edit_props_live_message(
+                channel,
+                config,
+                embed=embed,
+                content=None,
+                components_v2_payload=payload,
+            )
+            _save_props_live_config(config)
+            last_props_post_ts = now_unix
+            last_props_signature = props_signature
+    except Exception as exc:
+        print(f"Props live update failed: {exc}")
+
+
 async def _discord_api_send_or_edit_components_v2_message(
     channel_id: int,
     message_id: int,
@@ -5751,6 +6146,16 @@ async def weather_live_loop():
 
 @weather_live_loop.before_loop
 async def before_weather_live_loop():
+    await bot.wait_until_ready()
+
+
+@tasks.loop(seconds=POLL_SECONDS)
+async def props_live_loop():
+    await _update_props_live_message()
+
+
+@props_live_loop.before_loop
+async def before_props_live_loop():
     await bot.wait_until_ready()
 
 
@@ -6361,6 +6766,10 @@ async def on_ready():
         except Exception as exc:
             print(f"Failed to initialize live seed shop message: {exc}")
         try:
+            await _ensure_props_live_message_exists()
+        except Exception as exc:
+            print(f"Failed to initialize props notifier: {exc}")
+        try:
             await _update_sell_price_live_feed()
         except Exception as exc:
             print(f"Failed to initialize live sell multipliers: {exc}")
@@ -6374,6 +6783,8 @@ async def on_ready():
             print(f"Failed to post ticket support panel: {exc}")
         if not seed_shop_live_loop.is_running():
             seed_shop_live_loop.start()
+        if IS_MAIN_BOT_INSTANCE and not props_live_loop.is_running():
+            props_live_loop.start()
         if IS_MAIN_BOT_INSTANCE and not sell_price_live_loop.is_running():
             sell_price_live_loop.start()
         if IS_MAIN_BOT_INSTANCE and not weather_live_loop.is_running():
@@ -7412,6 +7823,26 @@ async def seedstock(ctx: commands.Context):
         await ctx.send(f"```⚠️ Command Failed ```\n-# Could not fetch live seed stock right now: {exc}")
 
 
+@bot.command(name="propsstock")
+async def propsstock(ctx: commands.Context):
+    try:
+        if not isinstance(ctx.channel, discord.TextChannel):
+            await ctx.send("```⚠️ Command Failed ```\n-# This command only works in server text channels.")
+            return
+
+        lines, next_restock_text, _next_restock_unix, best_rarity, _role_mentions, _ = await _fetch_props_lines_and_next_restock()
+        embed = _compose_props_embed(lines, next_restock_text, best_rarity)
+        payload = _build_props_components_v2_payload(lines, next_restock_text)
+        await _discord_api_send_or_edit_components_v2_message(
+            int(ctx.channel.id),
+            0,
+            payload,
+            force_new_message=True,
+        )
+    except Exception as exc:
+        await ctx.send(f"```⚠️ Command Failed ```\n-# Could not fetch live props right now: {exc}")
+
+
 @bot.command(name="seedshoplive")
 async def seedshoplive(ctx: commands.Context):
     channel = await _resolve_seed_shop_channel()
@@ -7444,10 +7875,43 @@ async def seedshoplive(ctx: commands.Context):
     await _update_seed_shop_live_message()
 
 
+@bot.command(name="propslive")
+async def propslive(ctx: commands.Context):
+    channel = await _resolve_props_live_channel()
+    if channel is None:
+        await ctx.send(f"```⚠️ Command Failed ```\n-# I could not access <#{PROPS_LIVE_CHANNEL_ID}>.")
+        return
+
+    try:
+        lines, next_restock_text, _next_restock_unix, best_rarity, _role_mentions, _ = await _fetch_props_lines_and_next_restock()
+        embed = _compose_props_embed(lines, next_restock_text, best_rarity)
+        payload = _build_props_components_v2_payload(lines, next_restock_text)
+    except Exception as exc:
+        await ctx.send(f"```⚠️ Command Failed ```\n-# Could not start live props notifier: {exc}")
+        return
+
+    message_id = await _send_or_edit_props_live_message(
+        channel,
+        {"message_id": 0},
+        embed=embed,
+        content=None,
+        components_v2_payload=payload,
+    )
+    _save_props_live_config({"channel_id": PROPS_LIVE_CHANNEL_ID, "message_id": message_id})
+    await ctx.send(f"Live props notifier started in <#{PROPS_LIVE_CHANNEL_ID}>. This message refreshes every 5 minutes.")
+    await _update_props_live_message()
+
+
 @bot.command(name="seedshopstop")
 async def seedshopstop(ctx: commands.Context):
     _save_live_config({"channel_id": None, "message_id": None})
     await ctx.send("Live seed shop updates stopped.")
+
+
+@bot.command(name="propsstop")
+async def propsstop(ctx: commands.Context):
+    _save_props_live_config({"channel_id": None, "message_id": None})
+    await ctx.send("Live props notifier updates stopped.")
 
 
 @bot.command(name="auction")
