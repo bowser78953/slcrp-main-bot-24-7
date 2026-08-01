@@ -4885,6 +4885,10 @@ def _resolve_register_banner_template_file() -> str | None:
 
     candidate_paths.extend(
         [
+            os.path.join(BASE_DIR, "FAS TEST (1).png"),
+            os.path.join(BASE_DIR, "assets", "FAS TEST (1).png"),
+            os.path.join(BASE_DIR, "fas test (1).png"),
+            os.path.join(BASE_DIR, "assets", "fas test (1).png"),
             os.path.join(BASE_DIR, "user_banner_template.png"),
             os.path.join(BASE_DIR, "assets", "user_banner_template.png"),
             os.path.join(BASE_DIR, "stock_notifier_banner.png"),
@@ -5006,29 +5010,24 @@ def _build_register_user_banner_png(display_name: str, *, wrap_with_angles: bool
 
     draw = ImageDraw.Draw(base)
     font_candidates = ["arialbi.ttf", "Arial Bold Italic.ttf", "DejaVuSans-BoldOblique.ttf", "arialbd.ttf", "Arial Bold.ttf", "DejaVuSans-Bold.ttf"]
-    font_size = 112
+    font_size = 124
     large_font = _pick_font(font_candidates, font_size)
 
     normalized_name = _safe_user_banner_name(display_name).upper()
     user_text = f"<{normalized_name}>" if wrap_with_angles else normalized_name
 
-    while font_size > 64:
+    while font_size > 72:
         name_bbox = draw.textbbox((0, 0), user_text, font=large_font)
         name_width = int(name_bbox[2] - name_bbox[0])
-        if name_width <= 700:
+        if name_width <= 640:
             break
         font_size -= 4
         large_font = _pick_font(font_candidates, font_size)
 
-    _draw_centered_text_slanted(
-        base,
-        user_text,
-        center_x=600,
-        y=78,
-        font=large_font,
-        fill=(255, 255, 255),
-        shear=0.16,
-    )
+    final_bbox = draw.textbbox((0, 0), user_text, font=large_font)
+    final_width = int(final_bbox[2] - final_bbox[0])
+    x = int(640 - (final_width // 2))
+    draw.text((x, 82), user_text, font=large_font, fill=(255, 255, 255))
 
     output = io.BytesIO()
     base.convert("RGB").save(output, format="PNG")
