@@ -4041,6 +4041,34 @@ def _parse_target_user_id(raw: str) -> int | None:
     return None
 
 
+async def _resolve_seed_balance_target_member(guild: discord.Guild | None, raw_target: str) -> discord.Member | None:
+    if guild is None:
+        return None
+
+    token = str(raw_target or "").strip()
+    if not token:
+        return None
+
+    user_id = _parse_target_user_id(token)
+    if user_id is not None:
+        member = guild.get_member(user_id)
+        if member is not None:
+            return member
+        try:
+            return await guild.fetch_member(user_id)
+        except Exception:
+            return None
+
+    lowered = token.lower()
+    for member in guild.members:
+        if member.name.lower() == lowered:
+            return member
+        if member.display_name.lower() == lowered:
+            return member
+
+    return None
+
+
 def _extract_reason_and_duration(raw: str) -> tuple[str, int] | None:
     text = str(raw or "").strip()
     if not text:
@@ -6756,11 +6784,57 @@ async def seedclaim(ctx: commands.Context):
     await ctx.send(f"{ctx.author.mention} claimed `{amount}` seeds{bonus_text}. You now have `{new_balance}` seeds.")
 
 
-@bot.command(name="seedbalance")
-async def seedbalance(ctx: commands.Context):
+@bot.command(name="seedbalance", aliases=["seedbalnce"])
+async def seedbalance(ctx: commands.Context, *, target: str | None = None):
     bank_data = _load_seed_bank()
-    balance = _get_seed_balance(bank_data, ctx.author.id)
-    await ctx.send(f"{ctx.author.mention} you currently have `{balance}` seeds.")
+
+    target_member: discord.Member | None = ctx.author if isinstance(ctx.author, discord.Member) else None
+    if target:
+        target_member = await _resolve_seed_balance_target_member(ctx.guild, target)
+        if target_member is None:
+            await ctx.send("Usage: -seedbalnce OR -seedbalnce <@user/user/user_id>")
+            return
+
+    if target_member is None:
+        await ctx.send("This command requires a server member context.")
+        return
+
+    now_unix = int(datetime.now(timezone.utc).timestamp())
+    balance = _get_seed_balance(bank_data, target_member.id)
+    next_claim_unix = _get_claim_cooldown_unix(bank_data, target_member.id)
+
+    ranking_rows = _seed_leaderboard_rows(bank_data)
+    rank_position: int | None = None
+    for index, (user_id, _amount) in enumerate(ranking_rows, start=1):
+        if int(user_id) == int(target_member.id):
+            rank_position = index
+            break
+
+    rank_text = f"#{rank_position}" if rank_position is not None else "Unranked"
+    claim_text = f"<t:{next_claim_unix}:R>" if next_claim_unix > now_unix else "Ready now"
+
+    embed = discord.Embed(
+        description=(
+            f"# {target_member.display_name} Seed Balance!\n\n"
+            "Ammount of Seeds:\n"
+            f"> `{balance}`\n\n"
+            "Server Ranking:\n"
+            f"> `{rank_text}`\n\n"
+            "Time tell next Seed Claim:\n"
+            f"> {claim_text}"
+        ),
+        color=discord.Color.dark_grey(),
+        timestamp=datetime.now(timezone.utc),
+    )
+
+    banner_png = _build_register_user_banner_png(target_member.display_name)
+    if banner_png is not None:
+        file = discord.File(fp=banner_png, filename="seed_balance_banner.png")
+        embed.set_image(url="attachment://seed_balance_banner.png")
+        await ctx.send(embed=embed, file=file)
+        return
+
+    await ctx.send(embed=embed)
 
 
 @bot.command(name="seeddebug")
