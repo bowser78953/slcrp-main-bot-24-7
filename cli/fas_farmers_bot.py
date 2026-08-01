@@ -76,6 +76,12 @@ MULTIPLIER_NOTIFIER_IMAGE_URL = (
 ).strip()
 if not MULTIPLIER_NOTIFIER_IMAGE_URL:
     MULTIPLIER_NOTIFIER_IMAGE_URL = "https://raw.githubusercontent.com/bowser78953/slcrp-main-bot-24-7/main/cli/multipliers_notifier_banner.png"
+WEATHER_NOTIFIER_IMAGE_URL = (
+    os.getenv("FAS_WEATHER_NOTIFIER_IMAGE_URL")
+    or os.getenv("WEATHER_NOTIFIER_IMAGE_URL")
+    or os.getenv("FAS_WEATHER_BANNER_URL")
+    or ""
+).strip()
 SUPPORT_PANEL_OPEN_BUTTON_CUSTOM_ID = "fas_ticket_open_button_v2"
 SUPPORT_PANEL_SELECT_CUSTOM_ID = "fas_ticket_type_select_v2"
 
@@ -151,6 +157,17 @@ CHANNEL_LOG_CHANNEL_ID = 1530291212819501076
 SELL_PRICE_LIVE_CHANNEL_ID = 1530414527739330650
 SELL_PRICE_2X_PING_ROLE_ID = 1530415834126745620
 SELL_PRICE_4X_PING_ROLE_ID = 1530416033721090170
+WEATHER_LIVE_CHANNEL_ID = int(os.getenv("FAS_WEATHER_LIVE_CHANNEL_ID") or "0")
+WEATHER_MEGA_MOON_ROLE_ID = 1532892324613460070
+WEATHER_AURORA_ROLE_ID = 1532934029974700032
+WEATHER_STARFALL_ROLE_ID = 1532934167136960703
+WEATHER_BLOODMOON_ROLE_ID = 1532934190738178160
+WEATHER_RAINBOW_MOON_ROLE_ID = 1532934192919478323
+WEATHER_RAINBOW_ROLE_ID = 1532934193586114591
+WEATHER_SNOWFALL_ROLE_ID = 1532934195444187228
+WEATHER_GOLDMOON_ROLE_ID = 1532934194769039400
+WEATHER_RAIN_ROLE_ID = 1532934748765290496
+WEATHER_LIGHTNING_ROLE_ID = 1532934751382405212
 VOICE_KICK_AUDIT_LOOKBACK_SECONDS = 90
 VOICE_KICK_AUDIT_RETRIES = 4
 VOICE_KICK_AUDIT_RETRY_DELAY_SECONDS = 1.0
@@ -177,6 +194,7 @@ SCAM_ROLE_3_ID = 1526215243334942803
 
 STOCK_API_URL = "https://api.gag2.gg/api/live/stock"
 SELL_PRICE_API_URL = "https://api.gag2.gg/api/live/sell"
+WEATHER_API_URL = "https://api.gag2.gg/api/live/weather"
 PREDICTIONS_API_URL = "https://api.gag2.gg/api/live/predictions/items"
 POLL_SECONDS = 10
 SHOP_REFRESH_SECONDS = 300
@@ -412,8 +430,10 @@ last_live_post_ts: int | None = None
 last_stock_signature: str | None = None
 last_sell_price_post_ts: int | None = None
 last_sell_price_signature: str | None = None
+last_weather_signature: str | None = None
 SEED_STOCK_EMBED_STYLE_VERSION = "v2"
 SELL_MULTIPLIER_EMBED_STYLE_VERSION = "v2"
+WEATHER_NOTIFIER_STYLE_VERSION = "v1"
 SEED_STOCK_COMPONENTS_V2_ENABLED = (os.getenv("FAS_STOCK_COMPONENTS_V2") or "1").strip().lower() in {"1", "true", "yes", "on"}
 SEED_STOCK_LIVE_SEND_NEW_MESSAGES = (os.getenv("FAS_STOCK_LIVE_SEND_NEW_MESSAGES") or "1").strip().lower() in {"1", "true", "yes", "on"}
 SEED_STOCK_COMPONENTS_V2_STRICT = (os.getenv("FAS_STOCK_COMPONENTS_V2_STRICT") or "1").strip().lower() in {"1", "true", "yes", "on"}
@@ -3186,16 +3206,6 @@ async def _update_sell_price_live_feed() -> None:
     if not should_post:
         return
 
-    ping_content = _build_sell_multiplier_ping_content(rows)
-    if ping_content:
-        try:
-            await channel.send(
-                content=ping_content,
-                allowed_mentions=discord.AllowedMentions(roles=True, users=False, everyone=False),
-            )
-        except Exception:
-            pass
-
     payload = _build_live_sell_multiplier_components_v2_payload(rows)
     try:
         await _discord_api_send_or_edit_components_v2_message(
@@ -3215,6 +3225,302 @@ async def _update_sell_price_live_feed() -> None:
         return
     last_sell_price_post_ts = now_unix
     last_sell_price_signature = signature
+
+
+def _normalize_weather_event_key(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
+
+
+def _weather_role_mention(event_key: str) -> str | None:
+    role_ids = {
+        "megamoon": WEATHER_MEGA_MOON_ROLE_ID,
+        "aurora": WEATHER_AURORA_ROLE_ID,
+        "starfall": WEATHER_STARFALL_ROLE_ID,
+        "bloodmoon": WEATHER_BLOODMOON_ROLE_ID,
+        "rainbowmoon": WEATHER_RAINBOW_MOON_ROLE_ID,
+        "rainbow": WEATHER_RAINBOW_ROLE_ID,
+        "snowfall": WEATHER_SNOWFALL_ROLE_ID,
+        "goldmoon": WEATHER_GOLDMOON_ROLE_ID,
+        "rain": WEATHER_RAIN_ROLE_ID,
+        "lightning": WEATHER_LIGHTNING_ROLE_ID,
+    }
+    role_id = int(role_ids.get(event_key, 0) or 0)
+    if role_id <= 0:
+        return None
+    return f"<@&{role_id}>"
+
+
+def _weather_event_emoji(event_key: str, default_emoji: str) -> str:
+    emoji_map = {
+        "megamoon": "<:Mega_Moon:1532933670866911272>",
+        "aurora": "<:Aurora:1532933230678900826>",
+        "starfall": "<:Starfall:1532933150773215342>",
+        "bloodmoon": "<:Blood_moon:1532932358326714529>",
+        "rainbowmoon": "<:RainbowMoon:1532893187243511858>",
+        "rainbow": "<:RainbowMoon:1532893187243511858>",
+        "snowfall": "<:Snowfall:1532932957440966877>",
+        "goldmoon": "<:Goldmoon:1519938570935210014>",
+        "rain": "<:Rain:1532932838754881588>",
+        "lightning": "<:Lightning:1532932767330078862>",
+    }
+    return emoji_map.get(event_key, default_emoji or "🌤️")
+
+
+def _weather_effects_and_mutations(event_key: str, fallback_blurb: str) -> tuple[str, str]:
+    info = {
+        "megamoon": (
+            "Rare mega moon weather window with boosted moon activity.",
+            "Moon mutations (event dependent)",
+        ),
+        "aurora": (
+            "Chance to apply Aurora mutation to random crops.",
+            "Aurora",
+        ),
+        "starfall": (
+            "Chance to apply Starstruck mutation.",
+            "Starstruck",
+        ),
+        "bloodmoon": (
+            "Chance for Bloodlit mutation during a rare night event.",
+            "Bloodlit",
+        ),
+        "rainbowmoon": (
+            "Can spawn Rainbow Seeds and Star-Powered steal bonus.",
+            "Rainbow, Star-Powered",
+        ),
+        "rainbow": (
+            "Higher chance for Rainbow mutation and temporary Rainbow Carpet access.",
+            "Rainbow",
+        ),
+        "snowfall": (
+            "Chance to apply Frozen mutation to random crops.",
+            "Frozen",
+        ),
+        "goldmoon": (
+            "Can spawn Golden Seeds and Midas-style steal bonus.",
+            "Gold",
+        ),
+        "rain": (
+            "2x plant growth speed and garden revival.",
+            "None guaranteed (growth boost event)",
+        ),
+        "lightning": (
+            "Chance to apply Electric mutation to crops.",
+            "Electric",
+        ),
+    }
+    if event_key in info:
+        return info[event_key]
+    return (fallback_blurb or "Live weather event in progress.", "Unknown")
+
+
+def _parse_iso_to_unix(value: str | None) -> int | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        return int(dt.timestamp())
+    except Exception:
+        return None
+
+
+async def _fetch_live_weather_event() -> dict | None:
+    session = await _get_http_session()
+    headers = {
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
+        "Referer": "https://www.gag2.gg/stock/weather",
+        "Origin": "https://www.gag2.gg",
+    }
+    params = {"_": str(int(datetime.now(timezone.utc).timestamp()))}
+
+    async with session.get(WEATHER_API_URL, headers=headers, params=params) as response:
+        response.raise_for_status()
+        payload = await response.json()
+
+    weather = payload.get("weather") if isinstance(payload, dict) else None
+    current = weather.get("current") if isinstance(weather, dict) else None
+    if not isinstance(current, dict):
+        return None
+
+    name = str(current.get("name", "")).strip()
+    raw_key = str(current.get("type", "")).strip() or name
+    if not name:
+        return None
+
+    event_key = _normalize_weather_event_key(raw_key)
+    starts_unix = _parse_iso_to_unix(current.get("startsAt"))
+    ends_unix = _parse_iso_to_unix(current.get("endsAt"))
+    return {
+        "name": name,
+        "event_key": event_key,
+        "emoji": _weather_event_emoji(event_key, str(current.get("emoji", "") or "")),
+        "ping": _weather_role_mention(event_key),
+        "effects_blurb": str(current.get("blurb", "") or "").strip(),
+        "starts_unix": starts_unix,
+        "ends_unix": ends_unix,
+    }
+
+
+def _build_weather_components_v2_payload(event: dict) -> dict:
+    name = str(event.get("name", "Weather Event") or "Weather Event")
+    event_key = str(event.get("event_key", "") or "")
+    emoji = str(event.get("emoji", "🌤️") or "🌤️")
+    role_mention = str(event.get("ping", "") or "")
+    starts_unix = event.get("starts_unix")
+    ends_unix = event.get("ends_unix")
+
+    effects_text, mutation_text = _weather_effects_and_mutations(event_key, str(event.get("effects_blurb", "") or ""))
+    start_line = "Unknown"
+    end_line = "Unknown"
+    if isinstance(starts_unix, int) and starts_unix > 0:
+        start_line = f"<t:{starts_unix}:t> (<t:{starts_unix}:R>)"
+    if isinstance(ends_unix, int) and ends_unix > 0:
+        end_line = f"<t:{ends_unix}:t> (<t:{ends_unix}:R>)"
+
+    children: list[dict] = []
+    if WEATHER_NOTIFIER_IMAGE_URL:
+        children.append(
+            {
+                "type": 12,
+                "items": [
+                    {
+                        "media": {"url": WEATHER_NOTIFIER_IMAGE_URL},
+                    }
+                ],
+            }
+        )
+        children.append({"type": 14})
+
+    children.extend(
+        [
+            {
+                "type": 10,
+                "content": _truncate_component_text("# Grow a Garden 2 Weather Notifier"),
+            },
+            {
+                "type": 14,
+            },
+            {
+                "type": 10,
+                "content": _truncate_component_text(f"# {emoji} {name}"),
+            },
+            {
+                "type": 14,
+            },
+            {
+                "type": 10,
+                "content": _truncate_component_text(
+                    "## Time:\n"
+                    f"> 🕛**Start Time:** {start_line}\n"
+                    f"> 🕒**Ends:** {end_line}"
+                ),
+            },
+            {
+                "type": 14,
+            },
+            {
+                "type": 10,
+                "content": _truncate_component_text(
+                    "## Effects:\n"
+                    f"{effects_text}\n\n"
+                    "🔬**Possible Mutations:**\n"
+                    f"{mutation_text}"
+                ),
+            },
+            {
+                "type": 14,
+            },
+            {
+                "type": 10,
+                "content": _truncate_component_text(role_mention or "N/A"),
+            },
+            {
+                "type": 14,
+            },
+            {
+                "type": 10,
+                "content": _truncate_component_text("Powerd by The [FAS] Farmers Bot 💪"),
+            },
+        ]
+    )
+
+    return {
+        "flags": DISCORD_MESSAGE_FLAG_COMPONENTS_V2,
+        "components": [
+            {
+                "type": 17,
+                "components": children,
+            }
+        ],
+    }
+
+
+async def _resolve_weather_live_channel() -> discord.TextChannel | None:
+    if WEATHER_LIVE_CHANNEL_ID <= 0:
+        return None
+
+    channel = bot.get_channel(WEATHER_LIVE_CHANNEL_ID)
+    if channel is None:
+        try:
+            channel = await bot.fetch_channel(WEATHER_LIVE_CHANNEL_ID)
+        except Exception:
+            return None
+    return channel if isinstance(channel, discord.TextChannel) else None
+
+
+async def _update_weather_live_feed() -> None:
+    global last_weather_signature
+
+    if not IS_MAIN_BOT_INSTANCE:
+        return
+    if BOT_MODE != "farmers":
+        return
+
+    channel = await _resolve_weather_live_channel()
+    if channel is None:
+        return
+
+    try:
+        event = await _fetch_live_weather_event()
+    except Exception as exc:
+        print(f"Weather live update failed: {exc}")
+        return
+
+    if event is None:
+        last_weather_signature = None
+        return
+
+    starts_unix = event.get("starts_unix")
+    ends_unix = event.get("ends_unix")
+    signature = (
+        f"{WEATHER_NOTIFIER_STYLE_VERSION}|"
+        f"{event.get('event_key', '')}|{int(starts_unix or 0)}|{int(ends_unix or 0)}"
+    )
+    if signature == last_weather_signature:
+        return
+
+    payload = _build_weather_components_v2_payload(event)
+    try:
+        await _discord_api_send_or_edit_components_v2_message(
+            int(channel.id),
+            0,
+            payload,
+            force_new_message=True,
+        )
+    except Exception as exc:
+        print(f"Weather Components V2 post failed: {exc}")
+        try:
+            await channel.send(
+                f"⚠️ Weather notifier V2 payload rejected: {str(exc)[:350]}",
+            )
+        except Exception:
+            pass
+        return
+
+    last_weather_signature = signature
 
 
 def _rainbow_color_value() -> int:
@@ -4447,7 +4753,6 @@ def _build_seed_shop_components_v2_payload(
     lines: list[str],
     gear_lines: list[str],
     next_restock_text: str | None,
-    ping_content: str | None = None,
 ) -> tuple[dict, str | None]:
     seed_block = "\n\n".join(lines) if lines else "No tracked seeds in stock right now."
     gear_block = "\n\n".join(gear_lines) if gear_lines else "No tracked gear in stock right now."
@@ -4937,21 +5242,18 @@ async def _ensure_seed_shop_live_message_exists() -> None:
         _save_live_config(config)
         return
 
-    lines, gear_lines, next_restock_text, _next_restock_unix, best_rarity, role_mentions, _ = await _fetch_stock_lines_and_next_restock()
+    lines, gear_lines, next_restock_text, _next_restock_unix, best_rarity, _role_mentions, _ = await _fetch_stock_lines_and_next_restock()
     embed = _compose_seed_shop_embed(lines, gear_lines, next_restock_text, best_rarity)
-    ping_content = _build_stock_ping_content(role_mentions)
     components_v2_payload, banner_file_path = _build_seed_shop_components_v2_payload(
         lines,
         gear_lines,
         next_restock_text,
-        ping_content=ping_content,
     )
-    await _send_transient_stock_role_ping(channel, ping_content)
     config["message_id"] = await _send_or_edit_seed_shop_live_message(
         channel,
         config,
         embed=embed,
-        content=ping_content,
+        content=None,
         components_v2_payload=components_v2_payload,
         components_v2_banner_file=banner_file_path,
     )
@@ -4978,7 +5280,7 @@ async def _update_seed_shop_live_message() -> None:
         return
 
     try:
-        lines, gear_lines, next_restock_text, _next_restock_unix, best_rarity, role_mentions, _ = await _fetch_stock_lines_and_next_restock()
+        lines, gear_lines, next_restock_text, _next_restock_unix, best_rarity, _role_mentions, _ = await _fetch_stock_lines_and_next_restock()
         now_unix = int(datetime.now(timezone.utc).timestamp())
 
         stock_signature = f"{SEED_STOCK_EMBED_STYLE_VERSION}|" + "\n".join(lines + ["---"] + gear_lines)
@@ -4995,19 +5297,16 @@ async def _update_seed_shop_live_message() -> None:
 
         if should_post:
             embed = _compose_seed_shop_embed(lines, gear_lines, next_restock_text, best_rarity)
-            ping_content = _build_stock_ping_content(role_mentions)
             components_v2_payload, banner_file_path = _build_seed_shop_components_v2_payload(
                 lines,
                 gear_lines,
                 next_restock_text,
-                ping_content=ping_content,
             )
-            await _send_transient_stock_role_ping(channel, ping_content)
             config["message_id"] = await _send_or_edit_seed_shop_live_message(
                 channel,
                 config,
                 embed=embed,
-                content=ping_content,
+                content=None,
                 components_v2_payload=components_v2_payload,
                 components_v2_banner_file=banner_file_path,
             )
@@ -5035,6 +5334,16 @@ async def sell_price_live_loop():
 
 @sell_price_live_loop.before_loop
 async def before_sell_price_live_loop():
+    await bot.wait_until_ready()
+
+
+@tasks.loop(seconds=POLL_SECONDS)
+async def weather_live_loop():
+    await _update_weather_live_feed()
+
+
+@weather_live_loop.before_loop
+async def before_weather_live_loop():
     await bot.wait_until_ready()
 
 
@@ -5639,6 +5948,10 @@ async def on_ready():
         except Exception as exc:
             print(f"Failed to initialize live sell multipliers: {exc}")
         try:
+            await _update_weather_live_feed()
+        except Exception as exc:
+            print(f"Failed to initialize weather notifier: {exc}")
+        try:
             await _post_ticket_support_panel()
         except Exception as exc:
             print(f"Failed to post ticket support panel: {exc}")
@@ -5646,6 +5959,8 @@ async def on_ready():
             seed_shop_live_loop.start()
         if IS_MAIN_BOT_INSTANCE and not sell_price_live_loop.is_running():
             sell_price_live_loop.start()
+        if IS_MAIN_BOT_INSTANCE and not weather_live_loop.is_running():
+            weather_live_loop.start()
     if not temp_ban_expiry_loop.is_running():
         temp_ban_expiry_loop.start()
     if not quarantine_expiry_loop.is_running():
@@ -6600,20 +6915,18 @@ async def seedstock(ctx: commands.Context):
             await ctx.send("```⚠️ Command Failed ```\n-# This command only works in server text channels.")
             return
 
-        lines, gear_lines, next_restock_text, _next_restock_unix, best_rarity, role_mentions, _ = await _fetch_stock_lines_and_next_restock()
+        lines, gear_lines, next_restock_text, _next_restock_unix, best_rarity, _role_mentions, _ = await _fetch_stock_lines_and_next_restock()
         embed = _compose_seed_shop_embed(lines, gear_lines, next_restock_text, best_rarity)
-        ping_content = _build_stock_ping_content(role_mentions)
         components_v2_payload, banner_file_path = _build_seed_shop_components_v2_payload(
             lines,
             gear_lines,
             next_restock_text,
-            ping_content=ping_content,
         )
         await _send_or_edit_seed_shop_live_message(
             ctx.channel,
             {"message_id": 0},
             embed=embed,
-            content=ping_content,
+            content=None,
             components_v2_payload=components_v2_payload,
             components_v2_banner_file=banner_file_path,
         )
@@ -6629,14 +6942,12 @@ async def seedshoplive(ctx: commands.Context):
         return
 
     try:
-        lines, gear_lines, next_restock_text, _next_restock_unix, best_rarity, role_mentions, _ = await _fetch_stock_lines_and_next_restock()
+        lines, gear_lines, next_restock_text, _next_restock_unix, best_rarity, _role_mentions, _ = await _fetch_stock_lines_and_next_restock()
         embed = _compose_seed_shop_embed(lines, gear_lines, next_restock_text, best_rarity)
-        ping_content = _build_stock_ping_content(role_mentions)
         components_v2_payload, banner_file_path = _build_seed_shop_components_v2_payload(
             lines,
             gear_lines,
             next_restock_text,
-            ping_content=ping_content,
         )
     except Exception as exc:
         await ctx.send(f"```⚠️ Command Failed ```\n-# Could not start live seed shop: {exc}")
@@ -6646,7 +6957,7 @@ async def seedshoplive(ctx: commands.Context):
         channel,
         {"message_id": 0},
         embed=embed,
-        content=ping_content,
+        content=None,
         components_v2_payload=components_v2_payload,
         components_v2_banner_file=banner_file_path,
     )
