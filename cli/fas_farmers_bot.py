@@ -3283,7 +3283,7 @@ def _weather_event_emoji(event_key: str, default_emoji: str) -> str:
         "rainbowmoon": "<:RainbowMoon:1532893187243511858>",
         "rainbow": "<:RainbowMoon:1532893187243511858>",
         "snowfall": "<:Snowfall:1532932957440966877>",
-        "goldmoon": "<:Goldmoon:1519938570935210014>",
+        "goldmoon": "<:Gold_Moon:1532893051008323654>",
         "rain": "<:Rain:1532932838754881588>",
         "lightning": "<:Lightning:1532932767330078862>",
     }
