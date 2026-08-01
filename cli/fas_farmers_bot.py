@@ -456,7 +456,7 @@ SEED_STOCK_EMBED_STYLE_VERSION = "v2"
 SELL_MULTIPLIER_EMBED_STYLE_VERSION = "v2"
 WEATHER_NOTIFIER_STYLE_VERSION = "v1"
 SEED_STOCK_COMPONENTS_V2_ENABLED = (os.getenv("FAS_STOCK_COMPONENTS_V2") or "1").strip().lower() in {"1", "true", "yes", "on"}
-SEED_STOCK_LIVE_SEND_NEW_MESSAGES = False
+SEED_STOCK_LIVE_SEND_NEW_MESSAGES = True
 SEED_STOCK_COMPONENTS_V2_STRICT = (os.getenv("FAS_STOCK_COMPONENTS_V2_STRICT") or "1").strip().lower() in {"1", "true", "yes", "on"}
 SEED_STOCK_COMPONENTS_V2_ALLOW_EMBED_FALLBACK = (os.getenv("FAS_STOCK_COMPONENTS_V2_ALLOW_EMBED_FALLBACK") or "0").strip().lower() in {"1", "true", "yes", "on"}
 # Discord message flag value for IsComponentsV2.
@@ -3357,6 +3357,22 @@ def _weather_effects_and_mutations(event_key: str, fallback_blurb: str) -> tuple
     return (fallback_blurb or "Live weather event in progress.", "Unknown")
 
 
+def _format_weather_boost(value: object) -> str:
+    if value is None:
+        return "Midas bonus"
+    if isinstance(value, (int, float)):
+        numeric = float(value)
+        if numeric <= 0:
+            return "Midas bonus"
+        if numeric < 1:
+            return f"{numeric * 100:.0f}%"
+        if numeric.is_integer():
+            return f"x{int(numeric)}"
+        return f"x{numeric:.2f}".rstrip("0").rstrip(".")
+    text = str(value).strip()
+    return text or "Midas bonus"
+
+
 def _parse_iso_to_unix(value: str | None) -> int | None:
     text = str(value or "").strip()
     if not text:
@@ -3403,6 +3419,7 @@ async def _fetch_live_weather_event() -> dict | None:
         "event_image_url": _weather_event_image_url(event_key),
         "ping": _weather_role_mention(event_key),
         "effects_blurb": str(current.get("blurb", "") or "").strip(),
+        "boost": current.get("boost"),
         "starts_unix": starts_unix,
         "ends_unix": ends_unix,
     }
@@ -3417,6 +3434,8 @@ def _build_weather_components_v2_payload(event: dict) -> dict:
     ends_unix = event.get("ends_unix")
 
     effects_text, mutation_text = _weather_effects_and_mutations(event_key, str(event.get("effects_blurb", "") or ""))
+    if event_key == "goldmoon":
+        mutation_text = f"Gold - {_format_weather_boost(event.get('boost'))}"
     start_line = "Unknown"
     end_line = "Unknown"
     if isinstance(starts_unix, int) and starts_unix > 0:
@@ -3482,13 +3501,8 @@ def _build_weather_components_v2_payload(event: dict) -> dict:
                 "type": 10,
                 "content": _truncate_component_text(role_mention or "N/A"),
             },
-            {
-                "type": 14,
-            },
         ]
     )
-    children.append({"type": 14})
-    children.append(_build_join_gag2_link_section())
 
     return {
         "flags": DISCORD_MESSAGE_FLAG_COMPONENTS_V2,
