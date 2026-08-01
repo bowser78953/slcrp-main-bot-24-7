@@ -4938,22 +4938,32 @@ def _draw_centered_text_with_outline(
 
 
 def _clean_register_banner_headline(base_image):
-    """Soft-remove STOCK/SUPPORT/MULTIPLIERS headline text baked into notifier templates."""
+    """Remove STOCK/SUPPORT/MULTIPLIERS headline text baked into notifier templates."""
     if ImageFilter is None:
         return base_image
 
     cleaned = base_image.copy()
+    width, height = cleaned.size
+
     # Main center headline area in the bundled banner templates.
-    x1, y1, x2, y2 = 170, 84, 980, 196
-    region = cleaned.crop((x1, y1, x2, y2)).convert("RGBA")
-    blurred = region.filter(ImageFilter.GaussianBlur(radius=18))
+    x1, y1, x2, y2 = 170, 76, 980, 198
+    x1 = max(0, min(x1, width - 1))
+    x2 = max(x1 + 1, min(x2, width))
+    y1 = max(0, min(y1, height - 1))
+    y2 = max(y1 + 1, min(y2, height))
 
-    mask = Image.new("L", region.size, 0)
+    sample_px = cleaned.getpixel((min(width - 1, 620), min(height - 1, 132)))
+    fill_color = (sample_px[0], sample_px[1], sample_px[2], 235)
+
+    panel = Image.new("RGBA", (x2 - x1, y2 - y1), fill_color)
+    panel = panel.filter(ImageFilter.GaussianBlur(radius=3))
+
+    mask = Image.new("L", panel.size, 0)
     mask_draw = ImageDraw.Draw(mask)
-    mask_draw.rectangle((0, 0, region.size[0], region.size[1]), fill=215)
-    mask = mask.filter(ImageFilter.GaussianBlur(radius=10))
+    mask_draw.rounded_rectangle((0, 0, panel.size[0] - 1, panel.size[1] - 1), radius=18, fill=255)
+    mask = mask.filter(ImageFilter.GaussianBlur(radius=8))
 
-    cleaned.paste(blurred, (x1, y1), mask)
+    cleaned.paste(panel, (x1, y1), mask)
     return cleaned
 
 
