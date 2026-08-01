@@ -628,6 +628,7 @@ COMMAND_DEFINITIONS = _load_command_definitions()
 
 NON_SEED_COMMAND_NAMES = {
     "ping",
+    "echo",
     "greroll",
     "genterlist",
     "forceend",
@@ -8307,6 +8308,23 @@ async def tempban(ctx: commands.Context, user: discord.Member, *, reason: str):
         expires_unix=expires_unix,
     )
     await ctx.send(f"Temporarily banned {user.mention} for `1d`. Their messages from the last 7 days were removed.")
+
+
+@bot.command(name="echo")
+async def echo(ctx: commands.Context, *, message: str | None = None):
+    if ctx.guild is None:
+        await ctx.send("This command can only be used in a server.")
+        return
+    if not _has_mod_command_role(ctx.author if isinstance(ctx.author, discord.Member) else None):
+        await ctx.send("```🔒 Command locked ```\n-# You are missing the required rank/role to use this command.")
+        return
+
+    text = str(message or "").strip()
+    if not text:
+        await ctx.send("Usage: -echo <message>")
+        return
+
+    await ctx.send(text)
 
 
 @bot.command(name="quarantine")
