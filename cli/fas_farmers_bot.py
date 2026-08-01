@@ -5697,6 +5697,19 @@ async def _discord_api_send_components_v2_message_with_file(
         "Authorization": f"Bot {TOKEN}",
     }
 
+    payload = dict(payload)
+    existing_attachments = payload.get("attachments")
+    if not isinstance(existing_attachments, list):
+        existing_attachments = []
+    payload["attachments"] = [
+        {"id": 0, "filename": filename},
+        *[
+            attachment
+            for attachment in existing_attachments
+            if isinstance(attachment, dict)
+        ],
+    ]
+
     form = aiohttp.FormData()
     form.add_field("payload_json", json.dumps(payload), content_type="application/json")
     form.add_field("files[0]", file_bytes, filename=filename, content_type="image/png")
