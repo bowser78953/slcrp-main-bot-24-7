@@ -3290,6 +3290,25 @@ def _weather_event_emoji(event_key: str, default_emoji: str) -> str:
     return emoji_map.get(event_key, default_emoji or "🌤️")
 
 
+def _weather_event_image_url(event_key: str) -> str | None:
+    image_key_map = {
+        "goldmoon": "goldmoon",
+        "bloodmoon": "bloodmoon",
+        "rainbowmoon": "rainbow_moon",
+        "rainbow": "rainbow",
+        "snowfall": "snowfall",
+        "rain": "rain",
+        "lightning": "lightning",
+        "starfall": "starfall",
+        "aurora": "aurora",
+        "megamoon": "mega_moon",
+    }
+    image_key = image_key_map.get(event_key)
+    if not image_key:
+        return None
+    return f"https://cdn.gag2.gg/weather/{image_key}.webp"
+
+
 def _weather_effects_and_mutations(event_key: str, fallback_blurb: str) -> tuple[str, str]:
     info = {
         "megamoon": (
@@ -3381,6 +3400,7 @@ async def _fetch_live_weather_event() -> dict | None:
         "name": name,
         "event_key": event_key,
         "emoji": _weather_event_emoji(event_key, str(current.get("emoji", "") or "")),
+        "event_image_url": _weather_event_image_url(event_key),
         "ping": _weather_role_mention(event_key),
         "effects_blurb": str(current.get("blurb", "") or "").strip(),
         "starts_unix": starts_unix,
@@ -3405,13 +3425,14 @@ def _build_weather_components_v2_payload(event: dict) -> dict:
         end_line = f"<t:{ends_unix}:t> (<t:{ends_unix}:R>)"
 
     children: list[dict] = []
-    if WEATHER_NOTIFIER_IMAGE_URL:
+    weather_image_url = str(WEATHER_NOTIFIER_IMAGE_URL or event.get("event_image_url") or "").strip()
+    if weather_image_url:
         children.append(
             {
                 "type": 12,
                 "items": [
                     {
-                        "media": {"url": WEATHER_NOTIFIER_IMAGE_URL},
+                        "media": {"url": weather_image_url},
                     }
                 ],
             }
@@ -3463,10 +3484,6 @@ def _build_weather_components_v2_payload(event: dict) -> dict:
             },
             {
                 "type": 14,
-            },
-            {
-                "type": 10,
-                "content": _truncate_component_text("Powerd by The [FAS] Farmers Bot 💪"),
             },
         ]
     )
@@ -4743,6 +4760,11 @@ async def _fetch_stock_lines_and_next_restock() -> tuple[list[str], list[str], s
     else:
         refresh = max(60, int(SHOP_REFRESH_SECONDS))
         next_restock_unix = now_unix + refresh
+
+    refresh = max(60, int(SHOP_REFRESH_SECONDS))
+    remainder = int(next_restock_unix) % refresh
+    if remainder != 0:
+        next_restock_unix = int(next_restock_unix) + (refresh - remainder)
 
     next_restock_text = f"<t:{next_restock_unix}:R>"
 
