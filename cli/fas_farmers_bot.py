@@ -91,6 +91,12 @@ WEATHER_NOTIFIER_IMAGE_URL = (
     or os.getenv("FAS_WEATHER_BANNER_URL")
     or ""
 ).strip()
+WEATHER_NOTIFIER_IMAGE_FILE = (
+    os.getenv("FAS_WEATHER_NOTIFIER_IMAGE_FILE")
+    or os.getenv("WEATHER_NOTIFIER_IMAGE_FILE")
+    or os.getenv("FAS_WEATHER_BANNER_FILE")
+    or "weather_notifier_banner copy.png"
+).strip()
 PROPS_NOTIFIER_IMAGE_URL = (
     os.getenv("FAS_PROPS_NOTIFIER_IMAGE_URL")
     or os.getenv("PROPS_NOTIFIER_IMAGE_URL")
@@ -3512,7 +3518,7 @@ async def _fetch_live_weather_event() -> dict | None:
     }
 
 
-def _build_weather_components_v2_payload(event: dict) -> dict:
+def _build_weather_components_v2_payload(event: dict) -> tuple[dict, str | None]:
     name = str(event.get("name", "Weather Event") or "Weather Event")
     event_key = str(event.get("event_key", "") or "")
     emoji = str(event.get("emoji", "🌤️") or "🌤️")
@@ -3532,7 +3538,10 @@ def _build_weather_components_v2_payload(event: dict) -> dict:
         end_line = f"<t:{ends_unix}:t> (<t:{ends_unix}:R>)"
 
     children: list[dict] = []
+    weather_banner_file_path = _resolve_weather_notifier_banner_file()
     weather_image_url = str(WEATHER_NOTIFIER_IMAGE_URL or event.get("event_image_url") or "").strip()
+    if weather_banner_file_path:
+        weather_image_url = f"attachment://{os.path.basename(weather_banner_file_path)}"
     if weather_image_url:
         children.append(
             {
@@ -3600,7 +3609,7 @@ def _build_weather_components_v2_payload(event: dict) -> dict:
                 "components": children,
             }
         ],
-    }
+    }, weather_banner_file_path
 
 
 async def _resolve_weather_live_channel() -> discord.TextChannel | None:
@@ -3647,14 +3656,23 @@ async def _update_weather_live_feed() -> None:
     if signature == last_weather_signature:
         return
 
-    payload = _build_weather_components_v2_payload(event)
+    payload, weather_banner_file_path = _build_weather_components_v2_payload(event)
     try:
-        await _discord_api_send_or_edit_components_v2_message(
-            int(channel.id),
-            0,
-            payload,
-            force_new_message=True,
-        )
+        if weather_banner_file_path:
+            with open(weather_banner_file_path, "rb") as banner_fp:
+                await _discord_api_send_components_v2_message_with_file(
+                    int(channel.id),
+                    payload,
+                    file_bytes=banner_fp.read(),
+                    filename=os.path.basename(weather_banner_file_path),
+                )
+        else:
+            await _discord_api_send_or_edit_components_v2_message(
+                int(channel.id),
+                0,
+                payload,
+                force_new_message=True,
+            )
     except Exception as exc:
         print(f"Weather Components V2 post failed: {exc}")
         try:
@@ -5206,6 +5224,42 @@ def _resolve_stock_notifier_banner_file() -> str | None:
                 continue
         except Exception as exc:
             print(f"Could not read stock notifier banner file size for {normalized}: {exc}")
+            continue
+        return normalized
+
+    return None
+
+
+def _resolve_weather_notifier_banner_file() -> str | None:
+    candidate_paths: list[str] = []
+    if WEATHER_NOTIFIER_IMAGE_FILE:
+        candidate_paths.append(WEATHER_NOTIFIER_IMAGE_FILE)
+        if not os.path.isabs(WEATHER_NOTIFIER_IMAGE_FILE):
+            candidate_paths.append(os.path.join(BASE_DIR, WEATHER_NOTIFIER_IMAGE_FILE))
+
+    candidate_paths.extend(
+        [
+            os.path.join(BASE_DIR, "weather_notifier_banner copy.png"),
+            os.path.join(BASE_DIR, "weather_notifier_banner.png"),
+            os.path.join(BASE_DIR, "assets", "weather_notifier_banner copy.png"),
+            os.path.join(BASE_DIR, "assets", "weather_notifier_banner.png"),
+        ]
+    )
+
+    seen_paths: set[str] = set()
+    for raw_path in candidate_paths:
+        normalized = os.path.abspath(raw_path)
+        if normalized in seen_paths:
+            continue
+        seen_paths.add(normalized)
+        if not os.path.isfile(normalized):
+            continue
+        try:
+            if os.path.getsize(normalized) <= 0:
+                print(f"Weather notifier banner file is empty and will be skipped: {normalized}")
+                continue
+        except Exception as exc:
+            print(f"Could not read weather notifier banner file size for {normalized}: {exc}")
             continue
         return normalized
 
