@@ -144,6 +144,7 @@ MOD_DATA_FILE = os.path.join(SEED_DATA_DIR, "fas_mod_actions.json")
 SEED_BANK_FILE = os.path.join(SEED_DATA_DIR, "fas_seed_bank.json")
 SEED_STORE_FILE = os.path.join(SEED_DATA_DIR, "fas_seed_store.json")
 AUCTION_DATA_FILE = os.path.join(SEED_DATA_DIR, "fas_auctions.json")
+CHANNEL_LOCK_SNAPSHOT_FILE = os.path.join(SEED_DATA_DIR, "fas_channel_lock_snapshot.json")
 LEGACY_SEED_BANK_FILE = os.path.join(DATA_DIR, "fas_seed_bank.json")
 LEGACY_SEED_STORE_FILE = os.path.join(DATA_DIR, "fas_seed_store.json")
 DATA_LOCK = Lock()
@@ -834,6 +835,39 @@ def _ensure_predictor_v2_file() -> None:
         except Exception:
             with open(PREDICTOR_V2_BACKUP_FILE, "w", encoding="utf-8") as f:
                 json.dump({"seeds": {}}, f, indent=2)
+
+
+def _ensure_channel_lock_snapshot_file() -> None:
+    os.makedirs(SEED_DATA_DIR, exist_ok=True)
+    if not os.path.exists(CHANNEL_LOCK_SNAPSHOT_FILE):
+        with open(CHANNEL_LOCK_SNAPSHOT_FILE, "w", encoding="utf-8") as f:
+            json.dump({"guilds": {}}, f, indent=2)
+
+
+def _load_channel_lock_snapshot_data() -> dict:
+    _ensure_channel_lock_snapshot_file()
+    with DATA_LOCK:
+        try:
+            with open(CHANNEL_LOCK_SNAPSHOT_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            data = {"guilds": {}}
+
+    if not isinstance(data, dict):
+        return {"guilds": {}}
+    guilds = data.get("guilds")
+    if not isinstance(guilds, dict):
+        data["guilds"] = {}
+    return data
+
+
+def _save_channel_lock_snapshot_data(data: dict) -> None:
+    payload = data if isinstance(data, dict) else {"guilds": {}}
+    if not isinstance(payload.get("guilds"), dict):
+        payload["guilds"] = {}
+    with DATA_LOCK:
+        with open(CHANNEL_LOCK_SNAPSHOT_FILE, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
 
 
 def _get_seed_redis_client():
@@ -8379,8 +8413,8 @@ async def _set_channel_chat_lock_state(
     channel: discord.TextChannel,
     target: discord.abc.Snowflake,
     *,
-    can_send_messages: bool,
-    can_add_reactions: bool,
+    can_send_messages: bool | None,
+    can_add_reactions: bool | None,
     reason: str,
 ) -> None:
     overwrite = channel.overwrites_for(target)
@@ -8432,9 +8466,25 @@ async def lockallchannels(ctx: commands.Context):
         return
 
     restricted_role = ctx.guild.get_role(QUARANTINE_REMOVE_ROLE_ID)
+    snapshot_channels: dict[str, dict] = {}
     updated_count = 0
     for channel in ctx.guild.text_channels:
         try:
+            default_before = channel.overwrites_for(ctx.guild.default_role)
+            channel_snapshot = {
+                "default": {
+                    "send_messages": default_before.send_messages,
+                    "add_reactions": default_before.add_reactions,
+                }
+            }
+            if restricted_role is not None:
+                restricted_before = channel.overwrites_for(restricted_role)
+                channel_snapshot["restricted"] = {
+                    "send_messages": restricted_before.send_messages,
+                    "add_reactions": restricted_before.add_reactions,
+                }
+            snapshot_channels[str(channel.id)] = channel_snapshot
+
             await _set_channel_chat_lock_state(
                 channel,
                 ctx.guild.default_role,
@@ -8453,6 +8503,15 @@ async def lockallchannels(ctx: commands.Context):
             updated_count += 1
         except Exception:
             continue
+
+    if updated_count > 0:
+        snapshot_data = _load_channel_lock_snapshot_data()
+        guilds = snapshot_data.setdefault("guilds", {})
+        guilds[str(ctx.guild.id)] = {
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "channels": snapshot_channels,
+        }
+        _save_channel_lock_snapshot_data(snapshot_data)
 
     if updated_count == 0:
         await ctx.send("```⚠️ Command Failed ```\n-# I could not lock any channels. Check my role permissions.")
@@ -8504,27 +8563,63 @@ async def unlockallchannel(ctx: commands.Context):
         return
 
     restricted_role = ctx.guild.get_role(QUARANTINE_REMOVE_ROLE_ID)
+    snapshot_data = _load_channel_lock_snapshot_data()
+    guild_snapshot = {}
+    guilds = snapshot_data.get("guilds") if isinstance(snapshot_data, dict) else None
+    if isinstance(guilds, dict):
+        candidate = guilds.get(str(ctx.guild.id))
+        if isinstance(candidate, dict):
+            guild_snapshot = candidate
+    snapshot_channels = guild_snapshot.get("channels") if isinstance(guild_snapshot, dict) else None
+    if not isinstance(snapshot_channels, dict):
+        snapshot_channels = {}
+
     updated_count = 0
     for channel in ctx.guild.text_channels:
         try:
+            channel_snapshot = snapshot_channels.get(str(channel.id))
+            default_send = True
+            default_react = True
+            restricted_send = True
+            restricted_react = True
+
+            if isinstance(channel_snapshot, dict):
+                default_block = channel_snapshot.get("default")
+                if isinstance(default_block, dict):
+                    if "send_messages" in default_block:
+                        default_send = default_block.get("send_messages")
+                    if "add_reactions" in default_block:
+                        default_react = default_block.get("add_reactions")
+
+                restricted_block = channel_snapshot.get("restricted")
+                if isinstance(restricted_block, dict):
+                    if "send_messages" in restricted_block:
+                        restricted_send = restricted_block.get("send_messages")
+                    if "add_reactions" in restricted_block:
+                        restricted_react = restricted_block.get("add_reactions")
+
             await _set_channel_chat_lock_state(
                 channel,
                 ctx.guild.default_role,
-                can_send_messages=True,
-                can_add_reactions=True,
+                can_send_messages=default_send,
+                can_add_reactions=default_react,
                 reason=f"Global channel unlock by {ctx.author} ({ctx.author.id})",
             )
             if restricted_role is not None:
                 await _set_channel_chat_lock_state(
                     channel,
                     restricted_role,
-                    can_send_messages=True,
-                    can_add_reactions=True,
+                    can_send_messages=restricted_send,
+                    can_add_reactions=restricted_react,
                     reason=f"Global channel unlock by {ctx.author} ({ctx.author.id})",
                 )
             updated_count += 1
         except Exception:
             continue
+
+    if updated_count > 0 and isinstance(guilds, dict) and str(ctx.guild.id) in guilds:
+        guilds.pop(str(ctx.guild.id), None)
+        _save_channel_lock_snapshot_data(snapshot_data)
 
     if updated_count == 0:
         await ctx.send("```⚠️ Command Failed ```\n-# I could not unlock any channels. Check my role permissions.")
