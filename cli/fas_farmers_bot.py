@@ -631,6 +631,8 @@ NON_SEED_COMMAND_NAMES = {
     "echo",
     "lockchannel",
     "lockallchannels",
+    "unlockchannel",
+    "unlockallchannel",
     "greroll",
     "genterlist",
     "forceend",
@@ -8351,6 +8353,28 @@ def _build_channel_lock_success_embed(guild: discord.Guild | None, locked_label:
     return embed
 
 
+def _build_channel_unlock_success_embed(guild: discord.Guild | None, unlocked_label: str) -> discord.Embed:
+    now_label = datetime.now().strftime("%I:%M %p").lstrip("0")
+    embed = discord.Embed(
+        description=(
+            "## [FAS] Farmers | Channel Unlocked System\n"
+            f"<:Tick:1533311914640408758>  Successfully unlocked {unlocked_label}"
+        ),
+        color=discord.Color.green(),
+    )
+
+    if guild is not None and guild.icon:
+        embed.set_thumbnail(url=guild.icon.url)
+        embed.set_footer(
+            text=f"[FAS] Farmers | Channel Unlocked System • {now_label}",
+            icon_url=guild.icon.url,
+        )
+    else:
+        embed.set_footer(text=f"[FAS] Farmers | Channel Unlocked System • {now_label}")
+
+    return embed
+
+
 @bot.command(name="lockchannel")
 async def lockchannel(ctx: commands.Context):
     if ctx.guild is None or not isinstance(ctx.channel, discord.TextChannel):
@@ -8417,6 +8441,74 @@ async def lockallchannels(ctx: commands.Context):
         return
 
     await ctx.send(embed=_build_channel_lock_success_embed(ctx.guild, "All Channels"))
+
+
+@bot.command(name="unlockchannel")
+async def unlockchannel(ctx: commands.Context):
+    if ctx.guild is None or not isinstance(ctx.channel, discord.TextChannel):
+        await ctx.send("This command can only be used in a server text channel.")
+        return
+    if not _has_mod_command_role(ctx.author if isinstance(ctx.author, discord.Member) else None):
+        await ctx.send("```🔒 Command locked ```\n-# You are missing the required rank/role to use this command.")
+        return
+
+    restricted_role = ctx.guild.get_role(QUARANTINE_REMOVE_ROLE_ID)
+    try:
+        await ctx.channel.set_permissions(
+            ctx.guild.default_role,
+            send_messages=True,
+            add_reactions=True,
+            reason=f"Channel unlock by {ctx.author} ({ctx.author.id})",
+        )
+        if restricted_role is not None:
+            await ctx.channel.set_permissions(
+                restricted_role,
+                send_messages=True,
+                add_reactions=True,
+                reason=f"Channel unlock by {ctx.author} ({ctx.author.id})",
+            )
+    except Exception as exc:
+        await ctx.send(f"```⚠️ Command Failed ```\n-# I could not unlock this channel: {exc}")
+        return
+
+    await ctx.send(embed=_build_channel_unlock_success_embed(ctx.guild, ctx.channel.mention))
+
+
+@bot.command(name="unlockallchannel")
+async def unlockallchannel(ctx: commands.Context):
+    if ctx.guild is None:
+        await ctx.send("This command can only be used in a server.")
+        return
+    if not _has_mod_command_role(ctx.author if isinstance(ctx.author, discord.Member) else None):
+        await ctx.send("```🔒 Command locked ```\n-# You are missing the required rank/role to use this command.")
+        return
+
+    restricted_role = ctx.guild.get_role(QUARANTINE_REMOVE_ROLE_ID)
+    updated_count = 0
+    for channel in ctx.guild.text_channels:
+        try:
+            await channel.set_permissions(
+                ctx.guild.default_role,
+                send_messages=True,
+                add_reactions=True,
+                reason=f"Global channel unlock by {ctx.author} ({ctx.author.id})",
+            )
+            if restricted_role is not None:
+                await channel.set_permissions(
+                    restricted_role,
+                    send_messages=True,
+                    add_reactions=True,
+                    reason=f"Global channel unlock by {ctx.author} ({ctx.author.id})",
+                )
+            updated_count += 1
+        except Exception:
+            continue
+
+    if updated_count == 0:
+        await ctx.send("```⚠️ Command Failed ```\n-# I could not unlock any channels. Check my role permissions.")
+        return
+
+    await ctx.send(embed=_build_channel_unlock_success_embed(ctx.guild, "All Channels"))
 
 
 @bot.command(name="quarantine")
