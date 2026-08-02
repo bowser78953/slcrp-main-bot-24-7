@@ -8375,6 +8375,20 @@ def _build_channel_unlock_success_embed(guild: discord.Guild | None, unlocked_la
     return embed
 
 
+async def _set_channel_chat_lock_state(
+    channel: discord.TextChannel,
+    target: discord.abc.Snowflake,
+    *,
+    can_send_messages: bool,
+    can_add_reactions: bool,
+    reason: str,
+) -> None:
+    overwrite = channel.overwrites_for(target)
+    overwrite.send_messages = can_send_messages
+    overwrite.add_reactions = can_add_reactions
+    await channel.set_permissions(target, overwrite=overwrite, reason=reason)
+
+
 @bot.command(name="lockchannel")
 async def lockchannel(ctx: commands.Context):
     if ctx.guild is None or not isinstance(ctx.channel, discord.TextChannel):
@@ -8386,17 +8400,19 @@ async def lockchannel(ctx: commands.Context):
 
     restricted_role = ctx.guild.get_role(QUARANTINE_REMOVE_ROLE_ID)
     try:
-        await ctx.channel.set_permissions(
+        await _set_channel_chat_lock_state(
+            ctx.channel,
             ctx.guild.default_role,
-            send_messages=False,
-            add_reactions=False,
+            can_send_messages=False,
+            can_add_reactions=False,
             reason=f"Channel lock by {ctx.author} ({ctx.author.id})",
         )
         if restricted_role is not None:
-            await ctx.channel.set_permissions(
+            await _set_channel_chat_lock_state(
+                ctx.channel,
                 restricted_role,
-                send_messages=False,
-                add_reactions=False,
+                can_send_messages=False,
+                can_add_reactions=False,
                 reason=f"Channel lock by {ctx.author} ({ctx.author.id})",
             )
     except Exception as exc:
@@ -8419,17 +8435,19 @@ async def lockallchannels(ctx: commands.Context):
     updated_count = 0
     for channel in ctx.guild.text_channels:
         try:
-            await channel.set_permissions(
+            await _set_channel_chat_lock_state(
+                channel,
                 ctx.guild.default_role,
-                send_messages=False,
-                add_reactions=False,
+                can_send_messages=False,
+                can_add_reactions=False,
                 reason=f"Global channel lock by {ctx.author} ({ctx.author.id})",
             )
             if restricted_role is not None:
-                await channel.set_permissions(
+                await _set_channel_chat_lock_state(
+                    channel,
                     restricted_role,
-                    send_messages=False,
-                    add_reactions=False,
+                    can_send_messages=False,
+                    can_add_reactions=False,
                     reason=f"Global channel lock by {ctx.author} ({ctx.author.id})",
                 )
             updated_count += 1
@@ -8454,17 +8472,19 @@ async def unlockchannel(ctx: commands.Context):
 
     restricted_role = ctx.guild.get_role(QUARANTINE_REMOVE_ROLE_ID)
     try:
-        await ctx.channel.set_permissions(
+        await _set_channel_chat_lock_state(
+            ctx.channel,
             ctx.guild.default_role,
-            send_messages=True,
-            add_reactions=True,
+            can_send_messages=True,
+            can_add_reactions=True,
             reason=f"Channel unlock by {ctx.author} ({ctx.author.id})",
         )
         if restricted_role is not None:
-            await ctx.channel.set_permissions(
+            await _set_channel_chat_lock_state(
+                ctx.channel,
                 restricted_role,
-                send_messages=True,
-                add_reactions=True,
+                can_send_messages=True,
+                can_add_reactions=True,
                 reason=f"Channel unlock by {ctx.author} ({ctx.author.id})",
             )
     except Exception as exc:
@@ -8487,17 +8507,19 @@ async def unlockallchannel(ctx: commands.Context):
     updated_count = 0
     for channel in ctx.guild.text_channels:
         try:
-            await channel.set_permissions(
+            await _set_channel_chat_lock_state(
+                channel,
                 ctx.guild.default_role,
-                send_messages=True,
-                add_reactions=True,
+                can_send_messages=True,
+                can_add_reactions=True,
                 reason=f"Global channel unlock by {ctx.author} ({ctx.author.id})",
             )
             if restricted_role is not None:
-                await channel.set_permissions(
+                await _set_channel_chat_lock_state(
+                    channel,
                     restricted_role,
-                    send_messages=True,
-                    add_reactions=True,
+                    can_send_messages=True,
+                    can_add_reactions=True,
                     reason=f"Global channel unlock by {ctx.author} ({ctx.author.id})",
                 )
             updated_count += 1
