@@ -8360,6 +8360,7 @@ async def lockchannel(ctx: commands.Context):
         await ctx.send("```🔒 Command locked ```\n-# You are missing the required rank/role to use this command.")
         return
 
+    restricted_role = ctx.guild.get_role(QUARANTINE_REMOVE_ROLE_ID)
     try:
         await ctx.channel.set_permissions(
             ctx.guild.default_role,
@@ -8367,6 +8368,13 @@ async def lockchannel(ctx: commands.Context):
             add_reactions=False,
             reason=f"Channel lock by {ctx.author} ({ctx.author.id})",
         )
+        if restricted_role is not None:
+            await ctx.channel.set_permissions(
+                restricted_role,
+                send_messages=False,
+                add_reactions=False,
+                reason=f"Channel lock by {ctx.author} ({ctx.author.id})",
+            )
     except Exception as exc:
         await ctx.send(f"```⚠️ Command Failed ```\n-# I could not lock this channel: {exc}")
         return
@@ -8383,6 +8391,7 @@ async def lockallchannels(ctx: commands.Context):
         await ctx.send("```🔒 Command locked ```\n-# You are missing the required rank/role to use this command.")
         return
 
+    restricted_role = ctx.guild.get_role(QUARANTINE_REMOVE_ROLE_ID)
     updated_count = 0
     for channel in ctx.guild.text_channels:
         try:
@@ -8392,6 +8401,13 @@ async def lockallchannels(ctx: commands.Context):
                 add_reactions=False,
                 reason=f"Global channel lock by {ctx.author} ({ctx.author.id})",
             )
+            if restricted_role is not None:
+                await channel.set_permissions(
+                    restricted_role,
+                    send_messages=False,
+                    add_reactions=False,
+                    reason=f"Global channel lock by {ctx.author} ({ctx.author.id})",
+                )
             updated_count += 1
         except Exception:
             continue
