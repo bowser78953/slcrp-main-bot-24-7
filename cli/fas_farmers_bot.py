@@ -662,6 +662,7 @@ NON_SEED_COMMAND_NAMES = {
     "sreport",
     "vouches",
     "vouchlist",
+    "removevouch",
     "vouchremove",
     "sreportremove",
     "tempban",
@@ -2560,14 +2561,67 @@ def _extract_report_proof(message: discord.Message, proof_hint: str | None = Non
     return None
 
 
+def _ensure_bucket_vouch_local_ids(bucket: dict) -> None:
+    vouches = bucket.get("vouches", [])
+    if not isinstance(vouches, list):
+        bucket["vouches"] = []
+        return
+
+    highest_local_id = 0
+    for item in vouches:
+        if not isinstance(item, dict):
+            continue
+        local_id = int(item.get("user_vouch_id", 0) or 0)
+        if local_id > highest_local_id:
+            highest_local_id = local_id
+
+    for item in vouches:
+        if not isinstance(item, dict):
+            continue
+        local_id = int(item.get("user_vouch_id", 0) or 0)
+        if local_id > 0:
+            continue
+        highest_local_id += 1
+        item["user_vouch_id"] = highest_local_id
+
+
+def _remove_user_vouch_by_local_id(*, data: dict, user_id: int, local_vouch_id: int) -> bool:
+    bucket = _get_user_bucket(data, user_id)
+    _ensure_bucket_vouch_local_ids(bucket)
+    vouches = bucket.get("vouches", [])
+    if not isinstance(vouches, list):
+        return False
+
+    removed = False
+    for idx, entry in enumerate(vouches):
+        if not isinstance(entry, dict):
+            continue
+        if int(entry.get("user_vouch_id", 0) or 0) == int(local_vouch_id):
+            del vouches[idx]
+            removed = True
+            break
+
+    if removed:
+        _update_bucket_trust_level(bucket)
+    return removed
+
+
 async def _add_vouch_entry(*, guild: discord.Guild | None, vouched_user: discord.Member, voucher: discord.Member, reason: str | None, jump_url: str | None = None) -> int:
     data = _load_data()
     bucket = _get_user_bucket(data, vouched_user.id)
+    _ensure_bucket_vouch_local_ids(bucket)
+    existing_local_ids = [
+        int(item.get("user_vouch_id", 0) or 0)
+        for item in bucket.get("vouches", [])
+        if isinstance(item, dict)
+    ]
+    next_user_vouch_id = (max(existing_local_ids) if existing_local_ids else 0) + 1
     entry_id = int(data.get("next_vouch_id", 1) or 1)
     data["next_vouch_id"] = entry_id + 1
     bucket["vouches"].append(
         {
             "id": entry_id,
+            "user_vouch_id": next_user_vouch_id,
             "by": voucher.id,
             "reason": _clean_vouch_reason(reason),
             "created_at": datetime.now(timezone.utc).isoformat(),
@@ -2626,6 +2680,85 @@ def _build_vouches_embed(*, guild: discord.Guild | None, target_user: discord.Me
     embed = discord.Embed(description=description[:4096], color=discord.Color.dark_grey())
     embed.set_footer(text=f"Page {page + 1}/{total_pages}")
     return embed, total_pages
+
+
+def _build_vouches_components_v2_payload(*, guild: discord.Guild | None, target_user: discord.Member, data: dict) -> dict:
+    bucket = _get_user_bucket(data, target_user.id)
+    _ensure_bucket_vouch_local_ids(bucket)
+    _update_bucket_trust_level(bucket)
+    vouches = list(bucket.get("vouches", [])) if isinstance(bucket.get("vouches", []), list) else []
+    vouches.sort(key=lambda item: _iso_to_unix(str(item.get("created_at", ""))), reverse=True)
+
+    rank = _vouch_rank_for_user(data, target_user.id)
+    unique_count = _count_unique_vouchers(guild, vouches)
+    first_unix = _iso_to_unix(str(vouches[-1].get("created_at", ""))) if vouches else 0
+    latest_unix = _iso_to_unix(str(vouches[0].get("created_at", ""))) if vouches else 0
+
+    stats_table = (
+        "```\n"
+        "Vouches  Unique Vouchers  Server Ranking\n"
+        f"{len(vouches):<7} {unique_count:<16} #{rank}\n"
+        "```"
+    )
+
+    first_text = f"<t:{first_unix}:D>" if first_unix > 0 else "N/A"
+    latest_text = f"<t:{latest_unix}:D>" if latest_unix > 0 else "N/A"
+
+    recent_rows = vouches[:10]
+    activity_lines: list[str] = []
+    for item in recent_rows:
+        vouch_id = int(item.get("user_vouch_id", 0) or 0)
+        created_unix = _iso_to_unix(str(item.get("created_at", "")))
+        jump_url = str(item.get("jump_url", "")).strip()
+        when_text = f"<t:{created_unix}:R>" if created_unix > 0 else "Unknown time"
+        jump_text = f"[↗ Jump]({jump_url})" if jump_url else "No jump link"
+        activity_lines.append(f"> 🎫 `#{vouch_id}` • {when_text} • {jump_text}")
+
+    if not activity_lines:
+        activity_lines.append("> No vouches yet.")
+
+    children: list[dict] = [
+        {
+            "type": 10,
+            "content": _truncate_component_text(f"# {target_user.mention} Vouches"),
+        },
+        {"type": 14},
+        {
+            "type": 10,
+            "content": _truncate_component_text(
+                "🎫 **Vouches**  ⭐ **Unique Vouchers**  🏅 **Server Ranking**\n" + stats_table
+            ),
+        },
+        {"type": 14},
+        {
+            "type": 10,
+            "content": _truncate_component_text(
+                "📩 **First Vouch**\n"
+                f"{first_text}\n\n"
+                "📤 **Latest Vouch**\n"
+                f"{latest_text}"
+            ),
+        },
+        {"type": 14},
+        {
+            "type": 10,
+            "content": _truncate_component_text(
+                "📋 **Recent Activity**\n"
+                + "\n".join(activity_lines)
+                + f"\n\n-# Showing {min(10, len(vouches))} of {len(vouches)} total vouches."
+            ),
+        },
+    ]
+
+    return {
+        "flags": DISCORD_MESSAGE_FLAG_COMPONENTS_V2,
+        "components": [
+            {
+                "type": 17,
+                "components": children,
+            }
+        ],
+    }
 
 
 class VouchJumpModal(discord.ui.Modal):
@@ -6824,6 +6957,31 @@ async def on_message(message: discord.Message):
                 normalized = normalized[1:].strip()
             lowered = normalized.lower()
 
+            remove_vouch_match = re.match(r"^remove\s+vouch\s+<@!?(\d+)>\s+(\d+)\s*$", lowered, flags=re.IGNORECASE)
+            if remove_vouch_match and isinstance(message.author, discord.Member):
+                user_id = int(remove_vouch_match.group(1))
+                local_id = int(remove_vouch_match.group(2))
+                target_member = message.guild.get_member(user_id)
+                if target_member is None:
+                    try:
+                        target_member = await message.guild.fetch_member(user_id)
+                    except Exception:
+                        target_member = None
+                if target_member is None:
+                    await message.channel.send("I could not find that member in this server.")
+                    return
+
+                data = _load_data()
+                removed = _remove_user_vouch_by_local_id(data=data, user_id=target_member.id, local_vouch_id=local_id)
+                if not removed:
+                    await message.channel.send(f"No vouch found for {target_member.mention} with user vouch ID `{local_id}`.")
+                    return
+                _save_data(data)
+                updated_bucket = _get_user_bucket(data, target_member.id)
+                await _sync_vouch_scam_roles(message.guild, target_member.id, updated_bucket)
+                await message.channel.send(f"Removed vouch `{local_id}` for {target_member.mention}.")
+                return
+
             if lowered.startswith("vouches"):
                 target_member = message.author if isinstance(message.author, discord.Member) else None
                 if message.mentions:
@@ -9578,17 +9736,25 @@ async def report(ctx: commands.Context, user: discord.Member, *, proof: str | No
 
 async def _send_vouches_panel(ctx: commands.Context, user: discord.Member):
     data = _load_data()
-    view = VouchesPagesView(author_id=ctx.author.id, target_user=user, data=data)
-    embed, total_pages = _build_vouches_embed(
+    payload = _build_vouches_components_v2_payload(
         guild=ctx.guild,
         target_user=user,
         data=data,
-        page_index=0,
-        per_page=view.per_page,
     )
-    view.total_pages = total_pages
-    view._sync_buttons()
-    await ctx.send(embed=embed, view=view)
+
+    if isinstance(ctx.channel, discord.TextChannel):
+        try:
+            await _discord_api_send_or_edit_components_v2_message(
+                int(ctx.channel.id),
+                0,
+                payload,
+                force_new_message=True,
+            )
+            return
+        except Exception as exc:
+            print(f"Vouches Components V2 post failed: {exc}")
+
+    await ctx.send(f"Vouches for {user.mention}: `{len((_get_user_bucket(data, user.id) or {}).get('vouches', []))}`")
 
 
 @bot.command(name="vouches", aliases=["vouchlist"])
@@ -9603,31 +9769,25 @@ async def vouches(ctx: commands.Context, user: discord.Member | None = None):
     await _send_vouches_panel(ctx, target_user)
 
 
-@bot.command(name="vouchremove")
-async def vouchremove(ctx: commands.Context, vouch_id: int):
-    data = _load_data()
-    users = data.get("users", {})
-
-    removed_for_user: int | None = None
-    for user_id, bucket in users.items():
-        vouches = bucket.get("vouches", [])
-        for idx, entry in enumerate(vouches):
-            if int(entry.get("id", -1)) == vouch_id:
-                del vouches[idx]
-                removed_for_user = int(user_id)
-                break
-        if removed_for_user is not None:
-            break
-
-    if removed_for_user is None:
-        await ctx.send(f"No vouch found with ID {vouch_id}.")
+@bot.command(name="removevouch", aliases=["vouchremove"])
+async def removevouch(ctx: commands.Context, user: discord.Member, vouch_number: int):
+    if not _in_allowed_channel(ctx, VOUCH_CHANNEL_ID):
+        await ctx.send(f"```🔒 Command locked ```\n-# This command can only be used in <#{VOUCH_CHANNEL_ID}>.")
+        return
+    if vouch_number <= 0:
+        await ctx.send("Usage: -removevouch <@user> <vouch number>")
         return
 
-    updated_bucket = _get_user_bucket(data, removed_for_user)
-    _update_bucket_trust_level(updated_bucket)
+    data = _load_data()
+    removed = _remove_user_vouch_by_local_id(data=data, user_id=user.id, local_vouch_id=vouch_number)
+    if not removed:
+        await ctx.send(f"No vouch found for {user.mention} with user vouch ID `{vouch_number}`.")
+        return
+
     _save_data(data)
-    await _sync_vouch_scam_roles(ctx.guild, removed_for_user, updated_bucket)
-    await ctx.send(f"Removed vouch ID {vouch_id} for {_mention_for_user(ctx.guild, removed_for_user)}.")
+    updated_bucket = _get_user_bucket(data, user.id)
+    await _sync_vouch_scam_roles(ctx.guild, user.id, updated_bucket)
+    await ctx.send(f"Removed vouch `{vouch_number}` for {user.mention}.")
 
 
 @bot.command(name="sreportremove")
