@@ -2669,9 +2669,18 @@ class VouchesPagesView(discord.ui.View):
         self._sync_buttons()
 
     def _sync_buttons(self) -> None:
-        prev_btn = self.get_item("vouches_prev")
-        next_btn = self.get_item("vouches_next")
-        jump_btn = self.get_item("vouches_jump")
+        prev_btn = None
+        next_btn = None
+        jump_btn = None
+        for child in self.children:
+            if not isinstance(child, discord.ui.Button):
+                continue
+            if child.custom_id == "vouches_prev":
+                prev_btn = child
+            elif child.custom_id == "vouches_next":
+                next_btn = child
+            elif child.custom_id == "vouches_jump":
+                jump_btn = child
         if isinstance(prev_btn, discord.ui.Button):
             prev_btn.disabled = self.page_index <= 0
         if isinstance(next_btn, discord.ui.Button):
