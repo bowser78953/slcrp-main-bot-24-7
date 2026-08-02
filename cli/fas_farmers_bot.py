@@ -3707,6 +3707,25 @@ def _build_live_sell_multiplier_components_v2_payload(rows: list[dict]) -> dict:
     if not lines:
         lines = ["No live sell multiplier data available."]
 
+    line_groups: list[list[str]] = []
+    current_group: list[str] = []
+    current_size = 0
+    # Keep each text section safely below component text limits.
+    max_group_size = 3200
+    for line in lines:
+        line_size = len(line) + 2
+        if current_group and (current_size + line_size) > max_group_size:
+            line_groups.append(current_group)
+            current_group = []
+            current_size = 0
+        current_group.append(line)
+        current_size += line_size
+    if current_group:
+        line_groups.append(current_group)
+
+    if not line_groups:
+        line_groups = [["No live sell multiplier data available."]]
+
     children: list[dict] = []
     if MULTIPLIER_NOTIFIER_IMAGE_URL:
         children.append(
@@ -3730,12 +3749,22 @@ def _build_live_sell_multiplier_components_v2_payload(rows: list[dict]) -> dict:
             {
                 "type": 14,
             },
-            {
-                "type": 10,
-                "content": _truncate_component_text("### LIVE SEED SELL MULTIPLIERS\n\n" + "\n\n".join(lines)),
-            },
         ]
     )
+
+    for index, group in enumerate(line_groups, start=1):
+        section_title = "### LIVE SEED SELL MULTIPLIERS"
+        if len(line_groups) > 1:
+            section_title += f" ({index}/{len(line_groups)})"
+        children.append(
+            {
+                "type": 10,
+                "content": _truncate_component_text(section_title + "\n\n" + "\n\n".join(group)),
+            }
+        )
+        if index < len(line_groups):
+            children.append({"type": 14})
+
     children.append({"type": 14})
     children.append(_build_join_gag2_link_section())
 
@@ -5991,7 +6020,7 @@ def _compose_props_embed(lines: list[str], next_restock_text: str | None, best_r
 
     embed = discord.Embed(
         title="Grow a Garden 2 Props",
-        description="# Props Notifer V2\n\n# Props\n\n" + props_block,
+        description="# Prop Notifier V2\n\n# Props\n\n" + props_block,
         color=_color_for_best_rarity(best_rarity),
         timestamp=datetime.now(timezone.utc),
     )
@@ -6025,7 +6054,7 @@ def _build_props_components_v2_payload(lines: list[str], next_restock_text: str 
         [
             {
                 "type": 10,
-                "content": _truncate_component_text("# Props Notifer V2"),
+                "content": _truncate_component_text("# Prop Notifier V2"),
             },
             {
                 "type": 14,
