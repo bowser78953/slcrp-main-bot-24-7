@@ -6828,6 +6828,13 @@ async def on_message(message: discord.Message):
                     await _send_vouches_panel(ctx, target_member)
                     return
 
+            # Mention-aware fallback for clients that alter mention formatting.
+            if content.lower().startswith("vouches") and message.mentions:
+                target_member = next((m for m in message.mentions if m.id != message.author.id), message.mentions[0])
+                ctx = await bot.get_context(message)
+                await _send_vouches_panel(ctx, target_member)
+                return
+
             vouch_match = re.match(r"^vouch\s+<@!?(\d+)>(?:\s+(.*))?$", content, flags=re.IGNORECASE)
             if not vouch_match:
                 vouch_match = re.match(r"^<@!?(\d+)>\s+vouch(?:\s+(.*))?$", content, flags=re.IGNORECASE)
@@ -6841,6 +6848,9 @@ async def on_message(message: discord.Message):
                     except Exception:
                         target_member = None
                 if target_member is not None and isinstance(message.author, discord.Member):
+                    if target_member.id == message.author.id:
+                        await message.channel.send("```⚠️ Command Failed ```\n-# You cannot vouch yourself.")
+                        return
                     reason = str(vouch_match.group(2) or "").strip()
                     await _add_vouch_entry(
                         guild=message.guild,
@@ -6851,6 +6861,24 @@ async def on_message(message: discord.Message):
                     )
                     await message.channel.send(f"<:Tick:1533311914640408758> You have vouched {target_member.mention}!")
                     return
+
+            # Mention-aware fallback for "vouch @user [reason]" and "@user vouch [reason]".
+            if message.mentions and isinstance(message.author, discord.Member) and re.search(r"\bvouch\b", content, flags=re.IGNORECASE):
+                target_member = next((m for m in message.mentions if m.id != message.author.id), message.mentions[0])
+                if target_member.id == message.author.id:
+                    await message.channel.send("```⚠️ Command Failed ```\n-# You cannot vouch yourself.")
+                    return
+                reason = re.sub(r"<@!?\d+>", "", content)
+                reason = re.sub(r"\bvouch\b", "", reason, flags=re.IGNORECASE).strip()
+                await _add_vouch_entry(
+                    guild=message.guild,
+                    vouched_user=target_member,
+                    voucher=message.author,
+                    reason=reason,
+                    jump_url=message.jump_url,
+                )
+                await message.channel.send(f"<:Tick:1533311914640408758> You have vouched {target_member.mention}!")
+                return
 
         if message.channel.id == SCAM_REPORT_CHANNEL_ID and content and not content.startswith("-"):
             report_match = re.match(r"^report\s+<@!?(\d+)>(?:\s+(.*))?$", content, flags=re.IGNORECASE)
@@ -6869,8 +6897,38 @@ async def on_message(message: discord.Message):
                 if target_member is None:
                     await message.channel.send("I could not find that member in this server.")
                     return
+                if target_member.id == message.author.id:
+                    await message.channel.send("```⚠️ Command Failed ```\n-# You cannot report yourself.")
+                    return
 
                 proof_hint = str(report_match.group(2) or "").strip()
+                proof_url = _extract_report_proof(message, proof_hint)
+                if not proof_url:
+                    await message.channel.send("Usage: report <@user> <image proof> (attach an image or include an image URL).")
+                    return
+
+                posted = await _post_report_for_review(
+                    guild=message.guild,
+                    reporter=message.author,
+                    reported_user=target_member,
+                    proof_url=proof_url,
+                )
+                if not posted:
+                    await message.channel.send(f"I could not access <#{SCAM_REPORT_REVIEW_CHANNEL_ID}> to post the report message.")
+                    return
+
+                await message.channel.send(f"<:Tick:1533311914640408758> Your report for{target_member.mention} has been posted for review.")
+                return
+
+            # Mention-aware fallback for "report @user [proof]" and "@user report [proof]".
+            if message.mentions and isinstance(message.author, discord.Member) and re.search(r"\breport\b", content, flags=re.IGNORECASE):
+                target_member = next((m for m in message.mentions if m.id != message.author.id), message.mentions[0])
+                if target_member.id == message.author.id:
+                    await message.channel.send("```⚠️ Command Failed ```\n-# You cannot report yourself.")
+                    return
+
+                proof_hint = re.sub(r"<@!?\d+>", "", content)
+                proof_hint = re.sub(r"\breport\b", "", proof_hint, flags=re.IGNORECASE).strip()
                 proof_url = _extract_report_proof(message, proof_hint)
                 if not proof_url:
                     await message.channel.send("Usage: report <@user> <image proof> (attach an image or include an image URL).")
@@ -9479,6 +9537,9 @@ async def vouch(ctx: commands.Context, user: discord.Member, *, reason: str | No
     if not _in_allowed_channel(ctx, VOUCH_CHANNEL_ID):
         await ctx.send(f"```🔒 Command locked ```\n-# This command can only be used in <#{VOUCH_CHANNEL_ID}>.")
         return
+    if user.id == ctx.author.id:
+        await ctx.send("```⚠️ Command Failed ```\n-# You cannot vouch yourself.")
+        return
 
     await _add_vouch_entry(
         guild=ctx.guild,
@@ -9494,6 +9555,9 @@ async def vouch(ctx: commands.Context, user: discord.Member, *, reason: str | No
 async def addvouch(ctx: commands.Context, user: discord.Member, voucher: discord.Member, *, reason: str):
     if not _in_allowed_channel(ctx, VOUCH_CHANNEL_ID):
         await ctx.send(f"```🔒 Command locked ```\n-# This command can only be used in <#{VOUCH_CHANNEL_ID}>.")
+        return
+    if user.id == voucher.id:
+        await ctx.send("```⚠️ Command Failed ```\n-# You cannot vouch yourself.")
         return
 
     await _add_vouch_entry(
@@ -9554,6 +9618,9 @@ async def _post_report_for_review(*, guild: discord.Guild | None, reporter: disc
 async def report(ctx: commands.Context, user: discord.Member, *, proof: str | None = None):
     if not _in_allowed_channel(ctx, SCAM_REPORT_CHANNEL_ID):
         await ctx.send(f"This command can only be used in <#{SCAM_REPORT_CHANNEL_ID}>.")
+        return
+    if user.id == ctx.author.id:
+        await ctx.send("```⚠️ Command Failed ```\n-# You cannot report yourself.")
         return
 
     proof_url = _extract_report_proof(ctx.message, proof)
