@@ -118,6 +118,18 @@ SEED_BALANCE_NOTIFIER_IMAGE_URL = (
 if not SEED_BALANCE_NOTIFIER_IMAGE_URL:
     SEED_BALANCE_NOTIFIER_IMAGE_URL = STOCK_NOTIFIER_IMAGE_URL
 
+SEED_BALANCE_SPECIAL_USER_ID = 866957916933455912
+SEED_BALANCE_SPECIAL_BANNER_URL = (
+    os.getenv("FAS_SEED_BALANCE_SPECIAL_BANNER_URL")
+    or os.getenv("SEED_BALANCE_SPECIAL_BANNER_URL")
+    or ""
+).strip()
+SEED_BALANCE_SPECIAL_BANNER_FILE = (
+    os.getenv("FAS_SEED_BALANCE_SPECIAL_BANNER_FILE")
+    or os.getenv("SEED_BALANCE_SPECIAL_BANNER_FILE")
+    or "seedbalance_special_866957916933455912_banner.png"
+).strip()
+
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
@@ -4983,8 +4995,22 @@ def _build_seed_balance_components_v2_payload(
     seed_balance: int,
     rank_text: str,
     claim_text: str,
+    banner_image_url: str | None = None,
 ) -> dict:
     children: list[dict] = []
+
+    if banner_image_url:
+        children.append(
+            {
+                "type": 12,
+                "items": [
+                    {
+                        "media": {"url": banner_image_url},
+                    }
+                ],
+            }
+        )
+        children.append({"type": 14})
 
     children.extend(
         [
@@ -5018,6 +5044,32 @@ def _build_seed_balance_components_v2_payload(
             }
         ],
     }
+
+
+def _resolve_seed_balance_special_banner_file() -> str | None:
+    candidate_paths: list[str] = []
+    if SEED_BALANCE_SPECIAL_BANNER_FILE:
+        candidate_paths.append(SEED_BALANCE_SPECIAL_BANNER_FILE)
+        if not os.path.isabs(SEED_BALANCE_SPECIAL_BANNER_FILE):
+            candidate_paths.append(os.path.join(BASE_DIR, SEED_BALANCE_SPECIAL_BANNER_FILE))
+
+    candidate_paths.extend(
+        [
+            os.path.join(BASE_DIR, "seedbalance_special_866957916933455912_banner.png"),
+            os.path.join(BASE_DIR, "assets", "seedbalance_special_866957916933455912_banner.png"),
+        ]
+    )
+
+    seen: set[str] = set()
+    for raw_path in candidate_paths:
+        normalized = os.path.abspath(raw_path)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        if os.path.isfile(normalized):
+            return normalized
+
+    return None
 
 
 def _resolve_register_banner_template_file() -> str | None:
@@ -7555,21 +7607,41 @@ async def seedbalance(ctx: commands.Context, *, target: str | None = None):
 
     user_name = str(target_member.name or f"User {target_member.id}")
 
+    special_banner_url: str | None = None
+    special_banner_file_path: str | None = None
+    if int(target_member.id) == SEED_BALANCE_SPECIAL_USER_ID:
+        if SEED_BALANCE_SPECIAL_BANNER_URL:
+            special_banner_url = SEED_BALANCE_SPECIAL_BANNER_URL
+        else:
+            special_banner_file_path = _resolve_seed_balance_special_banner_file()
+            if special_banner_file_path:
+                special_banner_url = f"attachment://{os.path.basename(special_banner_file_path)}"
+
     payload = _build_seed_balance_components_v2_payload(
         user_name=user_name,
         seed_balance=balance,
         rank_text=rank_text,
         claim_text=claim_text,
+        banner_image_url=special_banner_url,
     )
 
     if isinstance(ctx.channel, discord.TextChannel):
         try:
-            await _discord_api_send_or_edit_components_v2_message(
-                int(ctx.channel.id),
-                0,
-                payload,
-                force_new_message=True,
-            )
+            if special_banner_file_path and special_banner_url:
+                with open(special_banner_file_path, "rb") as banner_fp:
+                    await _discord_api_send_components_v2_message_with_file(
+                        int(ctx.channel.id),
+                        payload,
+                        file_bytes=banner_fp.read(),
+                        filename=os.path.basename(special_banner_file_path),
+                    )
+            else:
+                await _discord_api_send_or_edit_components_v2_message(
+                    int(ctx.channel.id),
+                    0,
+                    payload,
+                    force_new_message=True,
+                )
             return
         except Exception as exc:
             print(f"Seed balance Components V2 post failed: {exc}")
@@ -7588,6 +7660,15 @@ async def seedbalance(ctx: commands.Context, *, target: str | None = None):
         color=discord.Color.dark_grey(),
         timestamp=datetime.now(timezone.utc),
     )
+    if special_banner_url and special_banner_url.startswith("attachment://") and special_banner_file_path:
+        embed.set_image(url=special_banner_url)
+        await ctx.send(
+            embed=embed,
+            file=discord.File(special_banner_file_path, filename=os.path.basename(special_banner_file_path)),
+        )
+        return
+    if special_banner_url:
+        embed.set_image(url=special_banner_url)
     await ctx.send(embed=embed)
 
 
