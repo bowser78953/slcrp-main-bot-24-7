@@ -3699,29 +3699,16 @@ def _build_live_sell_multiplier_components_v2_payload(rows: list[dict]) -> dict:
         multiplier = float(row.get("multiplier", 0.0) or 0.0)
         emoji = _sell_row_emoji(name, key)
         lines.append(
-            f"{emoji} **{name}**\n"
-            f"> Sell Multiplier: {_format_multiplier_x(multiplier)}\n"
-            f"> Ping: {_row_ping_text(multiplier)}"
+            f"{emoji} **{name}** - {_format_multiplier_x(multiplier)} | Ping: {_row_ping_text(multiplier)}"
         )
 
     if not lines:
         lines = ["No live sell multiplier data available."]
 
     line_groups: list[list[str]] = []
-    current_group: list[str] = []
-    current_size = 0
-    # Keep each text section safely below component text limits.
-    max_group_size = 3200
-    for line in lines:
-        line_size = len(line) + 2
-        if current_group and (current_size + line_size) > max_group_size:
-            line_groups.append(current_group)
-            current_group = []
-            current_size = 0
-        current_group.append(line)
-        current_size += line_size
-    if current_group:
-        line_groups.append(current_group)
+    rows_per_group = 8
+    for index in range(0, len(lines), rows_per_group):
+        line_groups.append(lines[index:index + rows_per_group])
 
     if not line_groups:
         line_groups = [["No live sell multiplier data available."]]
@@ -3759,7 +3746,7 @@ def _build_live_sell_multiplier_components_v2_payload(rows: list[dict]) -> dict:
         children.append(
             {
                 "type": 10,
-                "content": _truncate_component_text(section_title + "\n\n" + "\n\n".join(group)),
+                "content": _truncate_component_text(section_title + "\n\n" + "\n".join(group), limit=1800),
             }
         )
         if index < len(line_groups):
