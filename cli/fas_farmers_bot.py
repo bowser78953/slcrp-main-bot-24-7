@@ -6809,66 +6809,27 @@ async def on_message(message: discord.Message):
                 return
 
     if message.guild is not None and isinstance(message.channel, discord.TextChannel) and BOT_MODE == "farmers":
-        if message.channel.id == VOUCH_CHANNEL_ID and content and not content.startswith("-"):
-            # Allow natural commands: "vouch @user [reason]", "@user vouch [reason]", and "vouches [@user]".
-            vouches_match = re.match(r"^vouches(?:\s+<@!?(\d+)>)?\s*$", content, flags=re.IGNORECASE)
-            if vouches_match:
+        if message.channel.id == VOUCH_CHANNEL_ID and content:
+            normalized = content.strip()
+            if normalized.startswith("-"):
+                normalized = normalized[1:].strip()
+            lowered = normalized.lower()
+
+            if lowered.startswith("vouches"):
                 target_member = message.author if isinstance(message.author, discord.Member) else None
-                raw_user_id = str(vouches_match.group(1) or "").strip()
-                if raw_user_id.isdigit():
-                    parsed_user_id = int(raw_user_id)
-                    target_member = message.guild.get_member(parsed_user_id)
-                    if target_member is None:
-                        try:
-                            target_member = await message.guild.fetch_member(parsed_user_id)
-                        except Exception:
-                            target_member = None
+                if message.mentions:
+                    target_member = next((m for m in message.mentions if m.id != message.author.id), message.mentions[0])
                 if target_member is not None:
                     ctx = await bot.get_context(message)
                     await _send_vouches_panel(ctx, target_member)
                     return
 
-            # Mention-aware fallback for clients that alter mention formatting.
-            if content.lower().startswith("vouches") and message.mentions:
-                target_member = next((m for m in message.mentions if m.id != message.author.id), message.mentions[0])
-                ctx = await bot.get_context(message)
-                await _send_vouches_panel(ctx, target_member)
-                return
-
-            vouch_match = re.match(r"^vouch\s+<@!?(\d+)>(?:\s+(.*))?$", content, flags=re.IGNORECASE)
-            if not vouch_match:
-                vouch_match = re.match(r"^<@!?(\d+)>\s+vouch(?:\s+(.*))?$", content, flags=re.IGNORECASE)
-            if vouch_match:
-                raw_user_id = str(vouch_match.group(1) or "").strip()
-                target_user_id = int(raw_user_id) if raw_user_id.isdigit() else 0
-                target_member = message.guild.get_member(target_user_id) if target_user_id > 0 else None
-                if target_member is None and target_user_id > 0:
-                    try:
-                        target_member = await message.guild.fetch_member(target_user_id)
-                    except Exception:
-                        target_member = None
-                if target_member is not None and isinstance(message.author, discord.Member):
-                    if target_member.id == message.author.id:
-                        await message.channel.send("```⚠️ Command Failed ```\n-# You cannot vouch yourself.")
-                        return
-                    reason = str(vouch_match.group(2) or "").strip()
-                    await _add_vouch_entry(
-                        guild=message.guild,
-                        vouched_user=target_member,
-                        voucher=message.author,
-                        reason=reason,
-                        jump_url=message.jump_url,
-                    )
-                    await message.channel.send(f"<:Tick:1533311914640408758> You have vouched {target_member.mention}!")
-                    return
-
-            # Mention-aware fallback for "vouch @user [reason]" and "@user vouch [reason]".
-            if message.mentions and isinstance(message.author, discord.Member) and re.search(r"\bvouch\b", content, flags=re.IGNORECASE):
+            if message.mentions and isinstance(message.author, discord.Member) and re.search(r"\bvouch\b", lowered):
                 target_member = next((m for m in message.mentions if m.id != message.author.id), message.mentions[0])
                 if target_member.id == message.author.id:
                     await message.channel.send("```⚠️ Command Failed ```\n-# You cannot vouch yourself.")
                     return
-                reason = re.sub(r"<@!?\d+>", "", content)
+                reason = re.sub(r"<@!?\d+>", "", normalized)
                 reason = re.sub(r"\bvouch\b", "", reason, flags=re.IGNORECASE).strip()
                 await _add_vouch_entry(
                     guild=message.guild,
@@ -6880,54 +6841,19 @@ async def on_message(message: discord.Message):
                 await message.channel.send(f"<:Tick:1533311914640408758> You have vouched {target_member.mention}!")
                 return
 
-        if message.channel.id == SCAM_REPORT_CHANNEL_ID and content and not content.startswith("-"):
-            report_match = re.match(r"^report\s+<@!?(\d+)>(?:\s+(.*))?$", content, flags=re.IGNORECASE)
-            if not report_match:
-                report_match = re.match(r"^<@!?(\d+)>\s+report(?:\s+(.*))?$", content, flags=re.IGNORECASE)
+        if message.channel.id == SCAM_REPORT_CHANNEL_ID and content and message.mentions and isinstance(message.author, discord.Member):
+            normalized = content.strip()
+            if normalized.startswith("-"):
+                normalized = normalized[1:].strip()
+            lowered = normalized.lower()
 
-            if report_match and isinstance(message.author, discord.Member):
-                raw_user_id = str(report_match.group(1) or "").strip()
-                target_user_id = int(raw_user_id) if raw_user_id.isdigit() else 0
-                target_member = message.guild.get_member(target_user_id) if target_user_id > 0 else None
-                if target_member is None and target_user_id > 0:
-                    try:
-                        target_member = await message.guild.fetch_member(target_user_id)
-                    except Exception:
-                        target_member = None
-                if target_member is None:
-                    await message.channel.send("I could not find that member in this server.")
-                    return
-                if target_member.id == message.author.id:
-                    await message.channel.send("```⚠️ Command Failed ```\n-# You cannot report yourself.")
-                    return
-
-                proof_hint = str(report_match.group(2) or "").strip()
-                proof_url = _extract_report_proof(message, proof_hint)
-                if not proof_url:
-                    await message.channel.send("Usage: report <@user> <image proof> (attach an image or include an image URL).")
-                    return
-
-                posted = await _post_report_for_review(
-                    guild=message.guild,
-                    reporter=message.author,
-                    reported_user=target_member,
-                    proof_url=proof_url,
-                )
-                if not posted:
-                    await message.channel.send(f"I could not access <#{SCAM_REPORT_REVIEW_CHANNEL_ID}> to post the report message.")
-                    return
-
-                await message.channel.send(f"<:Tick:1533311914640408758> Your report for{target_member.mention} has been posted for review.")
-                return
-
-            # Mention-aware fallback for "report @user [proof]" and "@user report [proof]".
-            if message.mentions and isinstance(message.author, discord.Member) and re.search(r"\breport\b", content, flags=re.IGNORECASE):
+            if re.search(r"\breport\b", lowered):
                 target_member = next((m for m in message.mentions if m.id != message.author.id), message.mentions[0])
                 if target_member.id == message.author.id:
                     await message.channel.send("```⚠️ Command Failed ```\n-# You cannot report yourself.")
                     return
 
-                proof_hint = re.sub(r"<@!?\d+>", "", content)
+                proof_hint = re.sub(r"<@!?\d+>", "", normalized)
                 proof_hint = re.sub(r"\breport\b", "", proof_hint, flags=re.IGNORECASE).strip()
                 proof_url = _extract_report_proof(message, proof_hint)
                 if not proof_url:
