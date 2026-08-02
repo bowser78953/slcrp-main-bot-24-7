@@ -629,6 +629,8 @@ COMMAND_DEFINITIONS = _load_command_definitions()
 NON_SEED_COMMAND_NAMES = {
     "ping",
     "echo",
+    "lockchannel",
+    "lockallchannels",
     "greroll",
     "genterlist",
     "forceend",
@@ -8325,6 +8327,80 @@ async def echo(ctx: commands.Context, *, message: str | None = None):
         return
 
     await ctx.send(text)
+
+
+def _build_channel_lock_success_embed(guild: discord.Guild | None, locked_label: str) -> discord.Embed:
+    now_label = datetime.now().strftime("%I:%M %p").lstrip("0")
+    embed = discord.Embed(
+        description=(
+            "## [FAS] Farmers | Channel Locked System\n"
+            f"<:Tick:1533311914640408758>  Successfully locked {locked_label}"
+        ),
+        color=discord.Color.green(),
+    )
+
+    if guild is not None and guild.icon:
+        embed.set_thumbnail(url=guild.icon.url)
+        embed.set_footer(
+            text=f"[FAS] Farmers | Channel Locked System • {now_label}",
+            icon_url=guild.icon.url,
+        )
+    else:
+        embed.set_footer(text=f"[FAS] Farmers | Channel Locked System • {now_label}")
+
+    return embed
+
+
+@bot.command(name="lockchannel")
+async def lockchannel(ctx: commands.Context):
+    if ctx.guild is None or not isinstance(ctx.channel, discord.TextChannel):
+        await ctx.send("This command can only be used in a server text channel.")
+        return
+    if not _has_mod_command_role(ctx.author if isinstance(ctx.author, discord.Member) else None):
+        await ctx.send("```🔒 Command locked ```\n-# You are missing the required rank/role to use this command.")
+        return
+
+    try:
+        await ctx.channel.set_permissions(
+            ctx.guild.default_role,
+            send_messages=False,
+            add_reactions=False,
+            reason=f"Channel lock by {ctx.author} ({ctx.author.id})",
+        )
+    except Exception as exc:
+        await ctx.send(f"```⚠️ Command Failed ```\n-# I could not lock this channel: {exc}")
+        return
+
+    await ctx.send(embed=_build_channel_lock_success_embed(ctx.guild, ctx.channel.mention))
+
+
+@bot.command(name="lockallchannels")
+async def lockallchannels(ctx: commands.Context):
+    if ctx.guild is None:
+        await ctx.send("This command can only be used in a server.")
+        return
+    if not _has_mod_command_role(ctx.author if isinstance(ctx.author, discord.Member) else None):
+        await ctx.send("```🔒 Command locked ```\n-# You are missing the required rank/role to use this command.")
+        return
+
+    updated_count = 0
+    for channel in ctx.guild.text_channels:
+        try:
+            await channel.set_permissions(
+                ctx.guild.default_role,
+                send_messages=False,
+                add_reactions=False,
+                reason=f"Global channel lock by {ctx.author} ({ctx.author.id})",
+            )
+            updated_count += 1
+        except Exception:
+            continue
+
+    if updated_count == 0:
+        await ctx.send("```⚠️ Command Failed ```\n-# I could not lock any channels. Check my role permissions.")
+        return
+
+    await ctx.send(embed=_build_channel_lock_success_embed(ctx.guild, "All Channels"))
 
 
 @bot.command(name="quarantine")
