@@ -168,6 +168,7 @@ AUCTION_TASKS: dict[int, asyncio.Task] = {}
 
 VOUCH_CHANNEL_ID = 1524283822512799824
 SCAM_REPORT_CHANNEL_ID = 1525702427263631411
+SCAM_REPORT_REVIEW_CHANNEL_ID = 1525694980750966985
 RECRUITMENT_AD_CHANNEL_ID = 1525257278939205804
 AUCTION_CHANNEL_ID = 1526641481086140618
 AUCTION_ROLE_PING_ID = 1528497373741842452
@@ -195,6 +196,12 @@ TICKET_PANEL_CHANNEL_ID = 1529991811085500587
 TICKET_LOG_CHANNEL_ID = 1530006660238672174
 TICKET_GENERAL_STAFF_ROLE_ID = 1529987760356593784
 TICKET_ELDER_ROLE_ID = 1521774545835659338
+UNIQUE_VOUCHER_ROLE_IDS = {
+    1521774545835659338,
+    1524484949363785818,
+    1521775843863433356,
+    1521774515959631872,
+}
 VOICE_LOG_CHANNEL_ID = 1530260787980144690
 MEMBER_LEAVE_LOG_CHANNEL_ID = 1530260828035748020
 MEMBER_JOIN_LOG_CHANNEL_ID = 1530260865754992691
@@ -651,7 +658,9 @@ NON_SEED_COMMAND_NAMES = {
     "forceend",
     "vouch",
     "addvouch",
+    "report",
     "sreport",
+    "vouches",
     "vouchlist",
     "vouchremove",
     "sreportremove",
@@ -2479,6 +2488,292 @@ class CompleteSellView(discord.ui.View):
         self.completed = True
         self._disable_action_buttons()
         await interaction.response.edit_message(embed=embed, view=self)
+
+
+def _clean_vouch_reason(reason: str | None) -> str:
+    cleaned = str(reason or "").strip()
+    return cleaned if cleaned else "No reason provided."
+
+
+def _iso_to_unix(raw: str | None) -> int:
+    text = str(raw or "").strip()
+    if not text:
+        return 0
+    try:
+        dt = datetime.fromisoformat(text)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return int(dt.timestamp())
+    except Exception:
+        return 0
+
+
+def _vouch_rank_for_user(data: dict, user_id: int) -> int:
+    users = data.get("users", {}) if isinstance(data, dict) else {}
+    rows: list[tuple[int, int]] = []
+    if isinstance(users, dict):
+        for raw_user_id, bucket in users.items():
+            try:
+                parsed_user_id = int(raw_user_id)
+            except Exception:
+                continue
+            if not isinstance(bucket, dict):
+                continue
+            rows.append((parsed_user_id, len(bucket.get("vouches", []) if isinstance(bucket.get("vouches", []), list) else [])))
+
+    rows.sort(key=lambda row: row[1], reverse=True)
+    for idx, (row_user_id, _count) in enumerate(rows, start=1):
+        if int(row_user_id) == int(user_id):
+            return idx
+    return len(rows) + 1
+
+
+def _count_unique_vouchers(guild: discord.Guild | None, vouches: list[dict]) -> int:
+    if guild is None:
+        return 0
+    unique_count = 0
+    for item in vouches:
+        if not isinstance(item, dict):
+            continue
+        voucher_id = int(item.get("by", 0) or 0)
+        if voucher_id <= 0:
+            continue
+        member = guild.get_member(voucher_id)
+        if member is None:
+            continue
+        if any(role.id in UNIQUE_VOUCHER_ROLE_IDS for role in member.roles):
+            unique_count += 1
+    return unique_count
+
+
+def _extract_report_proof(message: discord.Message, proof_hint: str | None = None) -> str | None:
+    if message.attachments:
+        for attachment in message.attachments:
+            content_type = str(attachment.content_type or "").lower()
+            file_name = str(attachment.filename or "").lower()
+            if content_type.startswith("image/") or file_name.endswith((".png", ".jpg", ".jpeg", ".webp", ".gif")):
+                return str(attachment.url)
+
+    text = str(proof_hint or "").strip()
+    if text.startswith("http://") or text.startswith("https://"):
+        return text
+    return None
+
+
+async def _add_vouch_entry(*, guild: discord.Guild | None, vouched_user: discord.Member, voucher: discord.Member, reason: str | None, jump_url: str | None = None) -> int:
+    data = _load_data()
+    bucket = _get_user_bucket(data, vouched_user.id)
+    entry_id = int(data.get("next_vouch_id", 1) or 1)
+    data["next_vouch_id"] = entry_id + 1
+    bucket["vouches"].append(
+        {
+            "id": entry_id,
+            "by": voucher.id,
+            "reason": _clean_vouch_reason(reason),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "jump_url": str(jump_url or "").strip(),
+        }
+    )
+    _update_bucket_trust_level(bucket)
+    _save_data(data)
+    await _sync_vouch_scam_roles(guild, vouched_user.id, bucket)
+    return entry_id
+
+
+def _build_vouches_embed(*, guild: discord.Guild | None, target_user: discord.Member, data: dict, page_index: int, per_page: int = 7) -> tuple[discord.Embed, int]:
+    bucket = _get_user_bucket(data, target_user.id)
+    _update_bucket_trust_level(bucket)
+    vouches = list(bucket.get("vouches", [])) if isinstance(bucket.get("vouches", []), list) else []
+    vouches.sort(key=lambda item: _iso_to_unix(str(item.get("created_at", ""))), reverse=True)
+
+    total = len(vouches)
+    total_pages = max(1, math.ceil(total / per_page))
+    page = max(0, min(page_index, total_pages - 1))
+    start = page * per_page
+    page_rows = vouches[start:start + per_page]
+
+    rank = _vouch_rank_for_user(data, target_user.id)
+    unique_count = _count_unique_vouchers(guild, vouches)
+    first_unix = _iso_to_unix(str(vouches[-1].get("created_at", ""))) if vouches else 0
+    latest_unix = _iso_to_unix(str(vouches[0].get("created_at", ""))) if vouches else 0
+
+    activity_lines: list[str] = []
+    for item in page_rows:
+        vouch_id = int(item.get("id", 0) or 0)
+        created_unix = _iso_to_unix(str(item.get("created_at", "")))
+        jump_url = str(item.get("jump_url", "")).strip()
+        when_text = f"<t:{created_unix}:R>" if created_unix > 0 else "Unknown time"
+        jump_text = f"[↗ Jump]({jump_url})" if jump_url else "No jump link"
+        activity_lines.append(f"> 🎫`#{vouch_id}` • {when_text} • {jump_text}")
+
+    if not activity_lines:
+        activity_lines.append("> No vouches yet.")
+
+    description = (
+        f"# {target_user.mention} Vouches\n"
+        "━━━━━━━━━━━━━━━━\n"
+        "🎫**Vouches**  ⭐**Unique Vouchers**  🏅**Server Ranking**\n"
+        f"`{len(vouches)}`\n"
+        f"`{unique_count}`\n"
+        f"`#{rank}`\n\n"
+        "📩**First Vouch**  📤**Latest Vouch**\n"
+        f"`{f'<t:{first_unix}:D>' if first_unix > 0 else 'N/A'}`\n"
+        f"`{f'<t:{latest_unix}:D>' if latest_unix > 0 else 'N/A'}`\n\n"
+        "📋**Recent Activity**\n"
+        + "\n".join(activity_lines)
+    )
+
+    embed = discord.Embed(description=description[:4096], color=discord.Color.dark_grey())
+    embed.set_footer(text=f"Page {page + 1}/{total_pages}")
+    return embed, total_pages
+
+
+class VouchJumpModal(discord.ui.Modal):
+    def __init__(self, view: "VouchesPagesView"):
+        super().__init__(title="Jump to Page")
+        self._view = view
+        self.page_input = discord.ui.TextInput(label="Page Number", placeholder=f"1-{view.total_pages}", required=True, max_length=5)
+        self.add_item(self.page_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        raw = str(self.page_input.value or "").strip()
+        if not raw.isdigit():
+            await interaction.response.send_message("Enter a valid page number.", ephemeral=True)
+            return
+        target_page = int(raw)
+        if target_page < 1 or target_page > self._view.total_pages:
+            await interaction.response.send_message(f"Page must be between 1 and {self._view.total_pages}.", ephemeral=True)
+            return
+        self._view.page_index = target_page - 1
+        embed, total_pages = _build_vouches_embed(
+            guild=interaction.guild,
+            target_user=self._view.target_user,
+            data=self._view.data,
+            page_index=self._view.page_index,
+            per_page=self._view.per_page,
+        )
+        self._view.total_pages = total_pages
+        self._view._sync_buttons()
+        await interaction.response.edit_message(embed=embed, view=self._view)
+
+
+class VouchesPagesView(discord.ui.View):
+    def __init__(self, *, author_id: int, target_user: discord.Member, data: dict, page_index: int = 0, per_page: int = 7):
+        super().__init__(timeout=300)
+        self.author_id = int(author_id)
+        self.target_user = target_user
+        self.data = data
+        self.page_index = int(page_index)
+        self.per_page = int(per_page)
+        self.total_pages = 1
+        self._sync_buttons()
+
+    def _sync_buttons(self) -> None:
+        prev_btn = self.get_item("vouches_prev")
+        next_btn = self.get_item("vouches_next")
+        jump_btn = self.get_item("vouches_jump")
+        if isinstance(prev_btn, discord.ui.Button):
+            prev_btn.disabled = self.page_index <= 0
+        if isinstance(next_btn, discord.ui.Button):
+            next_btn.disabled = self.page_index >= (self.total_pages - 1)
+        if isinstance(jump_btn, discord.ui.Button):
+            jump_btn.label = f"Jump to #{self.page_index + 1}"
+
+    async def _deny_if_not_author(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("Only the command user can control this pager.", ephemeral=True)
+            return True
+        return False
+
+    @discord.ui.button(label="←", style=discord.ButtonStyle.secondary, custom_id="vouches_prev")
+    async def previous_page(self, interaction: discord.Interaction, _button: discord.ui.Button):
+        if await self._deny_if_not_author(interaction):
+            return
+        self.page_index = max(0, self.page_index - 1)
+        embed, total_pages = _build_vouches_embed(
+            guild=interaction.guild,
+            target_user=self.target_user,
+            data=self.data,
+            page_index=self.page_index,
+            per_page=self.per_page,
+        )
+        self.total_pages = total_pages
+        self._sync_buttons()
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    @discord.ui.button(label="Jump to #1", style=discord.ButtonStyle.secondary, custom_id="vouches_jump")
+    async def jump_page(self, interaction: discord.Interaction, _button: discord.ui.Button):
+        if await self._deny_if_not_author(interaction):
+            return
+        await interaction.response.send_modal(VouchJumpModal(self))
+
+    @discord.ui.button(label="→", style=discord.ButtonStyle.secondary, custom_id="vouches_next")
+    async def next_page(self, interaction: discord.Interaction, _button: discord.ui.Button):
+        if await self._deny_if_not_author(interaction):
+            return
+        self.page_index = min(self.total_pages - 1, self.page_index + 1)
+        embed, total_pages = _build_vouches_embed(
+            guild=interaction.guild,
+            target_user=self.target_user,
+            data=self.data,
+            page_index=self.page_index,
+            per_page=self.per_page,
+        )
+        self.total_pages = total_pages
+        self._sync_buttons()
+        await interaction.response.edit_message(embed=embed, view=self)
+
+
+class ReportReviewView(discord.ui.View):
+    def __init__(self, *, reported_user_id: int, reporter_user_id: int):
+        super().__init__(timeout=None)
+        self.reported_user_id = int(reported_user_id)
+        self.reporter_user_id = int(reporter_user_id)
+        self.completed = False
+
+    def _can_review(self, member: discord.Member | None) -> bool:
+        if member is None:
+            return False
+        member_role_ids = {role.id for role in member.roles}
+        if MOD_COMMAND_ROLE_ID in member_role_ids:
+            return True
+        return bool(member_role_ids & UNIQUE_VOUCHER_ROLE_IDS)
+
+    async def _finalize(self, interaction: discord.Interaction, *, approved: bool) -> None:
+        if self.completed:
+            await interaction.response.send_message("This report is already reviewed.", ephemeral=True)
+            return
+        if not self._can_review(interaction.user if isinstance(interaction.user, discord.Member) else None):
+            await interaction.response.send_message("You do not have permission to review this report.", ephemeral=True)
+            return
+
+        self.completed = True
+        for child in self.children:
+            if isinstance(child, discord.ui.Button):
+                child.disabled = True
+
+        message = interaction.message
+        embed = message.embeds[0].copy() if message and message.embeds else discord.Embed(color=discord.Color.dark_grey())
+        status_text = "Approved" if approved else "Denied"
+        status_color = discord.Color.green() if approved else discord.Color.red()
+        embed.color = status_color
+        reviewed_by = interaction.user.mention if interaction.user else "Unknown"
+        if not embed.description:
+            embed.description = ""
+        embed.description += f"\n\n**Review Status:** {status_text} by {reviewed_by}"
+
+        if interaction.response.is_done():
+            await interaction.edit_original_response(embed=embed, view=self)
+        else:
+            await interaction.response.edit_message(embed=embed, view=self)
+
+    @discord.ui.button(label="Approve", style=discord.ButtonStyle.success)
+    async def approve_report(self, interaction: discord.Interaction, _button: discord.ui.Button):
+        await self._finalize(interaction, approved=True)
+
+    @discord.ui.button(label="Deny", style=discord.ButtonStyle.danger)
+    async def deny_report(self, interaction: discord.Interaction, _button: discord.ui.Button):
+        await self._finalize(interaction, approved=False)
 
     @discord.ui.button(label="Deny Sale", style=discord.ButtonStyle.danger, custom_id="fas_deny_sell")
     async def deny_sell(self, first, second):
@@ -6513,6 +6808,87 @@ async def on_message(message: discord.Message):
                 )
                 return
 
+    if message.guild is not None and isinstance(message.channel, discord.TextChannel) and BOT_MODE == "farmers":
+        if message.channel.id == VOUCH_CHANNEL_ID and content and not content.startswith("-"):
+            # Allow natural commands: "vouch @user [reason]", "@user vouch [reason]", and "vouches [@user]".
+            vouches_match = re.match(r"^vouches(?:\s+<@!?(\d+)>)?\s*$", content, flags=re.IGNORECASE)
+            if vouches_match:
+                target_member = message.author if isinstance(message.author, discord.Member) else None
+                raw_user_id = str(vouches_match.group(1) or "").strip()
+                if raw_user_id.isdigit():
+                    parsed_user_id = int(raw_user_id)
+                    target_member = message.guild.get_member(parsed_user_id)
+                    if target_member is None:
+                        try:
+                            target_member = await message.guild.fetch_member(parsed_user_id)
+                        except Exception:
+                            target_member = None
+                if target_member is not None:
+                    ctx = await bot.get_context(message)
+                    await _send_vouches_panel(ctx, target_member)
+                    return
+
+            vouch_match = re.match(r"^vouch\s+<@!?(\d+)>(?:\s+(.*))?$", content, flags=re.IGNORECASE)
+            if not vouch_match:
+                vouch_match = re.match(r"^<@!?(\d+)>\s+vouch(?:\s+(.*))?$", content, flags=re.IGNORECASE)
+            if vouch_match:
+                raw_user_id = str(vouch_match.group(1) or "").strip()
+                target_user_id = int(raw_user_id) if raw_user_id.isdigit() else 0
+                target_member = message.guild.get_member(target_user_id) if target_user_id > 0 else None
+                if target_member is None and target_user_id > 0:
+                    try:
+                        target_member = await message.guild.fetch_member(target_user_id)
+                    except Exception:
+                        target_member = None
+                if target_member is not None and isinstance(message.author, discord.Member):
+                    reason = str(vouch_match.group(2) or "").strip()
+                    await _add_vouch_entry(
+                        guild=message.guild,
+                        vouched_user=target_member,
+                        voucher=message.author,
+                        reason=reason,
+                        jump_url=message.jump_url,
+                    )
+                    await message.channel.send(f"<:Tick:1533311914640408758> You have vouched {target_member.mention}!")
+                    return
+
+        if message.channel.id == SCAM_REPORT_CHANNEL_ID and content and not content.startswith("-"):
+            report_match = re.match(r"^report\s+<@!?(\d+)>(?:\s+(.*))?$", content, flags=re.IGNORECASE)
+            if not report_match:
+                report_match = re.match(r"^<@!?(\d+)>\s+report(?:\s+(.*))?$", content, flags=re.IGNORECASE)
+
+            if report_match and isinstance(message.author, discord.Member):
+                raw_user_id = str(report_match.group(1) or "").strip()
+                target_user_id = int(raw_user_id) if raw_user_id.isdigit() else 0
+                target_member = message.guild.get_member(target_user_id) if target_user_id > 0 else None
+                if target_member is None and target_user_id > 0:
+                    try:
+                        target_member = await message.guild.fetch_member(target_user_id)
+                    except Exception:
+                        target_member = None
+                if target_member is None:
+                    await message.channel.send("I could not find that member in this server.")
+                    return
+
+                proof_hint = str(report_match.group(2) or "").strip()
+                proof_url = _extract_report_proof(message, proof_hint)
+                if not proof_url:
+                    await message.channel.send("Usage: report <@user> <image proof> (attach an image or include an image URL).")
+                    return
+
+                posted = await _post_report_for_review(
+                    guild=message.guild,
+                    reporter=message.author,
+                    reported_user=target_member,
+                    proof_url=proof_url,
+                )
+                if not posted:
+                    await message.channel.send(f"I could not access <#{SCAM_REPORT_REVIEW_CHANNEL_ID}> to post the report message.")
+                    return
+
+                await message.channel.send(f"<:Tick:1533311914640408758> Your report for{target_member.mention} has been posted for review.")
+                return
+
     await bot.process_commands(message)
 
 
@@ -9099,20 +9475,19 @@ async def untimeout(ctx: commands.Context, user: discord.Member):
 
 
 @bot.command(name="vouch")
-async def vouch(ctx: commands.Context, user: discord.Member, *, reason: str):
+async def vouch(ctx: commands.Context, user: discord.Member, *, reason: str | None = None):
     if not _in_allowed_channel(ctx, VOUCH_CHANNEL_ID):
         await ctx.send(f"```🔒 Command locked ```\n-# This command can only be used in <#{VOUCH_CHANNEL_ID}>.")
         return
 
-    data = _load_data()
-    bucket = _get_user_bucket(data, user.id)
-    entry_id = int(data.get("next_vouch_id", 1))
-    data["next_vouch_id"] = entry_id + 1
-    bucket["vouches"].append({"id": entry_id, "by": ctx.author.id, "reason": reason.strip(), "created_at": datetime.now(timezone.utc).isoformat()})
-    _update_bucket_trust_level(bucket)
-    _save_data(data)
-    await _sync_vouch_scam_roles(ctx.guild, user.id, bucket)
-    await ctx.send(f"Added vouch for {user.mention}. Vouch ID: {entry_id}")
+    await _add_vouch_entry(
+        guild=ctx.guild,
+        vouched_user=user,
+        voucher=ctx.author,
+        reason=reason,
+        jump_url=ctx.message.jump_url if ctx.message else None,
+    )
+    await ctx.send(f"<:Tick:1533311914640408758> You have vouched {user.mention}!")
 
 
 @bot.command(name="addvouch")
@@ -9121,107 +9496,109 @@ async def addvouch(ctx: commands.Context, user: discord.Member, voucher: discord
         await ctx.send(f"```🔒 Command locked ```\n-# This command can only be used in <#{VOUCH_CHANNEL_ID}>.")
         return
 
+    await _add_vouch_entry(
+        guild=ctx.guild,
+        vouched_user=user,
+        voucher=voucher,
+        reason=reason,
+        jump_url=ctx.message.jump_url if ctx.message else None,
+    )
+    await ctx.send(f"<:Tick:1533311914640408758> You have vouched {user.mention}!")
+
+
+async def _post_report_for_review(*, guild: discord.Guild | None, reporter: discord.Member, reported_user: discord.Member, proof_url: str) -> bool:
+    if guild is None:
+        return False
+
     data = _load_data()
-    bucket = _get_user_bucket(data, user.id)
-    entry_id = int(data.get("next_vouch_id", 1))
-    data["next_vouch_id"] = entry_id + 1
-    bucket["vouches"].append({
-        "id": entry_id,
-        "by": voucher.id,
-        "reason": reason.strip(),
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    })
+    bucket = _get_user_bucket(data, reported_user.id)
+    entry_id = int(data.get("next_scam_id", 1) or 1)
+    data["next_scam_id"] = entry_id + 1
+    bucket["scams"].append(
+        {
+            "id": entry_id,
+            "reported_by": reporter.id,
+            "reason": f"Proof: {proof_url}",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "proof_url": proof_url,
+        }
+    )
     _update_bucket_trust_level(bucket)
     _save_data(data)
-    await _sync_vouch_scam_roles(ctx.guild, user.id, bucket)
-    await ctx.send(f"Added vouch for {user.mention} from {voucher.mention}. Vouch ID: {entry_id}")
+    await _sync_vouch_scam_roles(guild, reported_user.id, bucket)
+
+    review_channel = guild.get_channel(SCAM_REPORT_REVIEW_CHANNEL_ID)
+    if review_channel is None:
+        try:
+            review_channel = await guild.fetch_channel(SCAM_REPORT_REVIEW_CHANNEL_ID)
+        except Exception:
+            review_channel = None
+
+    if not isinstance(review_channel, discord.TextChannel):
+        return False
+
+    embed = discord.Embed(
+        description=(
+            f"{reporter.mention} Has reported {reported_user.mention} Proof:\n"
+            f"-# <@&{TICKET_ELDER_ROLE_ID}>"
+        ),
+        color=discord.Color.dark_grey(),
+    )
+    embed.set_image(url=proof_url)
+    view = ReportReviewView(reported_user_id=reported_user.id, reporter_user_id=reporter.id)
+    await review_channel.send(content=f"<@&{TICKET_ELDER_ROLE_ID}>", embed=embed, view=view)
+    return True
 
 
-@bot.command(name="sreport")
-async def sreport(ctx: commands.Context, user: discord.Member, *, reason: str):
+@bot.command(name="report", aliases=["sreport"])
+async def report(ctx: commands.Context, user: discord.Member, *, proof: str | None = None):
     if not _in_allowed_channel(ctx, SCAM_REPORT_CHANNEL_ID):
         await ctx.send(f"This command can only be used in <#{SCAM_REPORT_CHANNEL_ID}>.")
         return
 
-    data = _load_data()
-    bucket = _get_user_bucket(data, user.id)
-    entry_id = int(data.get("next_scam_id", 1))
-    data["next_scam_id"] = entry_id + 1
-    bucket["scams"].append({"id": entry_id, "reported_by": ctx.author.id, "reason": reason.strip(), "created_at": datetime.now(timezone.utc).isoformat()})
-    _update_bucket_trust_level(bucket)
-    _save_data(data)
-    await _sync_vouch_scam_roles(ctx.guild, user.id, bucket)
-
-    report_message = f"{ctx.author.mention} has reported {user.mention} for {reason.strip()}"
-    scam_channel = bot.get_channel(SCAM_REPORT_CHANNEL_ID)
-    if isinstance(scam_channel, discord.TextChannel):
-        await scam_channel.send(report_message)
-    else:
-        await ctx.send(f"I could not access <#{SCAM_REPORT_CHANNEL_ID}> to post the report message.")
+    proof_url = _extract_report_proof(ctx.message, proof)
+    if not proof_url:
+        await ctx.send("Usage: -report <@user> <image proof> (attach an image or include an image URL).")
         return
 
-    await ctx.send(f"Scam report added for {user.mention}. Scam ID: {entry_id}")
-
-
-@bot.command(name="vouchlist")
-async def vouchlist(ctx: commands.Context, user: discord.Member):
-    data = _load_data()
-    bucket = _get_user_bucket(data, user.id)
-    _update_bucket_trust_level(bucket)
-    vouches = bucket.get("vouches", [])
-    scams = bucket.get("scams", [])
-
-    vouch_lines = []
-    for index, item in enumerate(vouches, start=1):
-        by_user_id = int(item.get("by", 0))
-        by_user_mention = _mention_for_user(ctx.guild, by_user_id) if by_user_id else "Unknown User"
-        reason = str(item.get("reason", "No reason provided"))
-        item_id = item.get("id", "?")
-        vouch_lines.append(f"{index}. {by_user_mention} {reason} <ID: {item_id}>")
-
-    scam_lines = []
-    for index, item in enumerate(scams, start=1):
-        by_user_id = int(item.get("reported_by", 0))
-        by_user_mention = _mention_for_user(ctx.guild, by_user_id) if by_user_id else "Unknown User"
-        reason = str(item.get("reason", "No reason provided"))
-        item_id = item.get("id", "?")
-        scam_lines.append(f"{index}. {by_user_mention} {reason} <ID: {item_id}>")
-
-    vouch_text = "\n".join(vouch_lines) if vouch_lines else "None"
-    scam_text = "\n".join(scam_lines) if scam_lines else "None"
-
-    saved_level = str(bucket.get("trust_level", "")).strip().lower()
-    saved_role_id = int(bucket.get("trust_role_id", 0) or 0)
-    if saved_level == "negative" and saved_role_id > 0:
-        trust_level_text = (
-            f"<:Lowest:1526219034876579930> This users highest trusted role is in the negatives and is: <@&{saved_role_id}>"
-        )
-    else:
-        positive_role_id = saved_role_id if saved_role_id > 0 else _highest_positive_trust_role_id(len(vouches))
-        trust_level_text = (
-            f"<:Highest:1526219072541556746> This users highest trust level is: <@&{positive_role_id}>"
-        )
-
-    embed = discord.Embed(title=f"{user.display_name} Vouch and Scam Reports", color=discord.Color.green())
-    embed.description = (
-        f"User: {user.mention}\n\n"
-        f"<:vouch_list:1525700827426066472>Vouch Reports: {len(vouches)}\n\n"
-        f"<:Scam_list:1525701001858908251>Scam Reports: {len(scams)}\n\n"
-        f"{trust_level_text}\n\n"
-        f"Vouch list,\n{vouch_text}\n\n"
-        f"Scam List,\n{scam_text}"
+    posted = await _post_report_for_review(
+        guild=ctx.guild,
+        reporter=ctx.author,
+        reported_user=user,
+        proof_url=proof_url,
     )
+    if not posted:
+        await ctx.send(f"I could not access <#{SCAM_REPORT_REVIEW_CHANNEL_ID}> to post the report message.")
+        return
 
-    if len(embed.description) > 4096:
-        embed.description = (
-            f"User: {user.mention}\n\n"
-            f"<:vouch_list:1525700827426066472>Vouch Reports: {len(vouches)}\n\n"
-            f"<:Scam_list:1525701001858908251>Scam Reports: {len(scams)}\n\n"
-            f"{trust_level_text}\n\n"
-            "List is too long to display in one embed."
-        )
+    await ctx.send(f"<:Tick:1533311914640408758> Your report for{user.mention} has been posted for review.")
 
-    await ctx.send(embed=embed)
+
+async def _send_vouches_panel(ctx: commands.Context, user: discord.Member):
+    data = _load_data()
+    view = VouchesPagesView(author_id=ctx.author.id, target_user=user, data=data)
+    embed, total_pages = _build_vouches_embed(
+        guild=ctx.guild,
+        target_user=user,
+        data=data,
+        page_index=0,
+        per_page=view.per_page,
+    )
+    view.total_pages = total_pages
+    view._sync_buttons()
+    await ctx.send(embed=embed, view=view)
+
+
+@bot.command(name="vouches", aliases=["vouchlist"])
+async def vouches(ctx: commands.Context, user: discord.Member | None = None):
+    if not _in_allowed_channel(ctx, VOUCH_CHANNEL_ID):
+        await ctx.send(f"```🔒 Command locked ```\n-# This command can only be used in <#{VOUCH_CHANNEL_ID}>.")
+        return
+    target_user = user if user is not None else (ctx.author if isinstance(ctx.author, discord.Member) else None)
+    if target_user is None:
+        await ctx.send("Usage: -vouches OR -vouches <@user>")
+        return
+    await _send_vouches_panel(ctx, target_user)
 
 
 @bot.command(name="vouchremove")
