@@ -7081,8 +7081,11 @@ async def on_message(message: discord.Message):
                 if message.mentions:
                     target_member = next((m for m in message.mentions if m.id != message.author.id), message.mentions[0])
                 if target_member is not None:
-                    ctx = await bot.get_context(message)
-                    await _send_vouches_panel(ctx, target_member)
+                    await _send_vouches_panel_to_channel(
+                        channel=message.channel,
+                        guild=message.guild,
+                        target_user=target_member,
+                    )
                     return
 
             if message.mentions and isinstance(message.author, discord.Member) and re.search(r"\bvouch\b", lowered):
@@ -9831,18 +9834,23 @@ async def report(ctx: commands.Context, user: discord.Member, *, proof: str | No
     await ctx.send(f"<:Tick:1533311914640408758> Your report for{user.mention} has been posted for review.")
 
 
-async def _send_vouches_panel(ctx: commands.Context, user: discord.Member):
+async def _send_vouches_panel_to_channel(
+    *,
+    channel: discord.abc.Messageable,
+    guild: discord.Guild | None,
+    target_user: discord.Member,
+):
     data = _load_data()
     payload = _build_vouches_components_v2_payload(
-        guild=ctx.guild,
-        target_user=user,
+        guild=guild,
+        target_user=target_user,
         data=data,
     )
 
-    if isinstance(ctx.channel, discord.TextChannel):
+    if isinstance(channel, discord.TextChannel):
         try:
             await _discord_api_send_or_edit_components_v2_message(
-                int(ctx.channel.id),
+                int(channel.id),
                 0,
                 payload,
                 force_new_message=True,
@@ -9852,7 +9860,15 @@ async def _send_vouches_panel(ctx: commands.Context, user: discord.Member):
             print(f"Vouches Components V2 post failed: {exc}")
 
     # Fallback only when V2 cannot be posted.
-    await ctx.send(f"Vouches for {user.mention}: `{len((_get_user_bucket(data, user.id) or {}).get('vouches', []))}`")
+    await channel.send(f"Vouches for {target_user.mention}: `{len((_get_user_bucket(data, target_user.id) or {}).get('vouches', []))}`")
+
+
+async def _send_vouches_panel(ctx: commands.Context, user: discord.Member):
+    await _send_vouches_panel_to_channel(
+        channel=ctx.channel,
+        guild=ctx.guild,
+        target_user=user,
+    )
 
 
 @bot.command(name="vouches", aliases=["vouchlist"])
