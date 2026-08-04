@@ -2652,6 +2652,8 @@ def _build_vouches_embed(*, guild: discord.Guild | None, target_user: discord.Me
     unique_count = _count_unique_vouchers(guild, vouches)
     first_unix = _iso_to_unix(str(vouches[-1].get("created_at", ""))) if vouches else 0
     latest_unix = _iso_to_unix(str(vouches[0].get("created_at", ""))) if vouches else 0
+    first_text = f"<t:{first_unix}:R>" if first_unix > 0 else "N/A"
+    latest_text = f"<t:{latest_unix}:R>" if latest_unix > 0 else "N/A"
 
     activity_lines: list[str] = []
     for item in page_rows:
@@ -2676,9 +2678,6 @@ def _build_vouches_embed(*, guild: discord.Guild | None, target_user: discord.Me
         f"📩 **First Vouch**\n{first_text}\n"
         f"📤 **Latest Vouch**\n{latest_text}"
     )
-
-    first_text = f"<t:{first_unix}:R>" if first_unix > 0 else "N/A"
-    latest_text = f"<t:{latest_unix}:R>" if latest_unix > 0 else "N/A"
 
     description = (
         f"{target_user.mention} | {len(vouches)} vouches\n\n"
@@ -2713,6 +2712,14 @@ def _build_vouches_components_v2_payload(*, guild: discord.Guild | None, target_
 
     first_text = f"<t:{first_unix}:R>" if first_unix > 0 else "N/A"
     latest_text = f"<t:{latest_unix}:R>" if latest_unix > 0 else "N/A"
+    stats_block = (
+        "🎫 **Vouches**      ⭐ **Unique Vouchers**      🏅 **Server Rank**\n"
+        f"`{len(vouches)}`                 `{unique_count}`                         `#{rank}`"
+    )
+    time_block = (
+        "📩 **First Vouch**      📤 **Latest Vouch**\n"
+        f"{first_text}      {latest_text}"
+    )
 
     activity_rows: list[dict] = []
     for item in vouches:
@@ -9853,14 +9860,14 @@ async def _send_vouches_panel_to_channel(
     target_user: discord.Member,
 ):
     data = _load_data()
-    payload = _build_vouches_components_v2_payload(
-        guild=guild,
-        target_user=target_user,
-        data=data,
-    )
+    try:
+        payload = _build_vouches_components_v2_payload(
+            guild=guild,
+            target_user=target_user,
+            data=data,
+        )
 
-    if isinstance(channel, discord.TextChannel):
-        try:
+        if isinstance(channel, discord.TextChannel):
             await _discord_api_send_or_edit_components_v2_message(
                 int(channel.id),
                 0,
@@ -9868,11 +9875,17 @@ async def _send_vouches_panel_to_channel(
                 force_new_message=True,
             )
             return
-        except Exception as exc:
-            print(f"Vouches Components V2 post failed: {exc}")
+    except Exception as exc:
+        print(f"Vouches Components V2 post failed: {exc}")
 
-    # Fallback only when V2 cannot be posted.
-    await channel.send(f"Vouches for {target_user.mention}: `{len((_get_user_bucket(data, target_user.id) or {}).get('vouches', []))}`")
+    # Fallback when V2 cannot be posted or payload build fails.
+    embed, _ = _build_vouches_embed(
+        guild=guild,
+        target_user=target_user,
+        data=data,
+        page_index=0,
+    )
+    await channel.send(embed=embed)
 
 
 async def _send_vouches_panel(ctx: commands.Context, user: discord.Member):
