@@ -2704,20 +2704,6 @@ def _build_vouches_components_v2_payload(*, guild: discord.Guild | None, target_
     first_text = f"<t:{first_unix}:R>" if first_unix > 0 else "N/A"
     latest_text = f"<t:{latest_unix}:R>" if latest_unix > 0 else "N/A"
 
-    stats_table = (
-        "```\n"
-        "Vouches   Unique Vouchers   Server Rank\n"
-        f"{len(vouches):<8} {unique_count:<17} #{rank}\n"
-        "```"
-    )
-
-    time_table = (
-        "```\n"
-        "First Vouch        Latest Vouch\n"
-        f"{first_text:<18} {latest_text}\n"
-        "```"
-    )
-
     activity_rows: list[dict] = []
     for item in vouches:
         activity_rows.append(
@@ -2776,10 +2762,9 @@ def _build_vouches_components_v2_payload(*, guild: discord.Guild | None, target_
             "type": 10,
             "content": _truncate_component_text(
                 "🎫 **Vouches**  ⭐ **Unique Vouchers**  🏅 **Server Rank**\n"
-                + stats_table
-                + "\n"
-                + "📩 **First Vouch**  📤 **Latest Vouch**\n"
-                + time_table
+                f"`{len(vouches)}`      `{unique_count}`      `#{rank}`\n\n"
+                "📩 **First Vouch**  📤 **Latest Vouch**\n"
+                f"{first_text}      {latest_text}"
             ),
         },
         {"type": 14},
