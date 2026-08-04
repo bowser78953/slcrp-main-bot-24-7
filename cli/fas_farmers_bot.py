@@ -3698,20 +3698,62 @@ def _build_live_sell_multiplier_components_v2_payload(rows: list[dict]) -> dict:
         key = str(row.get("key", "") or "")
         multiplier = float(row.get("multiplier", 0.0) or 0.0)
         emoji = _sell_row_emoji(name, key)
-        lines.append(
-            f"{emoji} **{name}** - {_format_multiplier_x(multiplier)} | Ping: {_row_ping_text(multiplier)}"
-        )
+        ping_marker = ""
+        if multiplier >= 4.0:
+            ping_marker = " • 4x"
+        elif multiplier >= 2.0:
+            ping_marker = " • 2x"
+        lines.append(f"{emoji} {name} {_format_multiplier_x(multiplier)}{ping_marker}")
 
     if not lines:
         lines = ["No live sell multiplier data available."]
 
-    line_groups: list[list[str]] = []
-    rows_per_group = 8
-    for index in range(0, len(lines), rows_per_group):
-        line_groups.append(lines[index:index + rows_per_group])
+    # Discord Components V2 enforces a 4000 displayable-text cap per message.
+    # Keep body compact and split into at most 2 sections.
+    max_total_body_chars = 2400
+    max_section_chars = 1200
 
-    if not line_groups:
-        line_groups = [["No live sell multiplier data available."]]
+    compact_lines: list[str] = []
+    body_len = 0
+    omitted_count = 0
+    for line in lines:
+        projected = body_len + len(line) + 1
+        if projected > max_total_body_chars:
+            omitted_count += 1
+            continue
+        compact_lines.append(line)
+        body_len = projected
+
+    if not compact_lines:
+        compact_lines = ["No live sell multiplier data available."]
+
+    first_group: list[str] = []
+    second_group: list[str] = []
+    first_size = 0
+    second_size = 0
+
+    for line in compact_lines:
+        line_size = len(line) + 1
+        if first_size + line_size <= max_section_chars:
+            first_group.append(line)
+            first_size += line_size
+            continue
+        if second_size + line_size <= max_section_chars:
+            second_group.append(line)
+            second_size += line_size
+            continue
+        omitted_count += 1
+
+    line_groups: list[list[str]] = [first_group]
+    if second_group:
+        line_groups.append(second_group)
+
+    if omitted_count > 0:
+        overflow_line = f"... and {omitted_count} more seeds"
+        if len(line_groups) == 1:
+            line_groups[0].append(overflow_line)
+        else:
+            line_groups[-1].append(overflow_line)
 
     children: list[dict] = []
     if MULTIPLIER_NOTIFIER_IMAGE_URL:
@@ -3746,7 +3788,7 @@ def _build_live_sell_multiplier_components_v2_payload(rows: list[dict]) -> dict:
         children.append(
             {
                 "type": 10,
-                "content": _truncate_component_text(section_title + "\n\n" + "\n".join(group), limit=1800),
+                "content": _truncate_component_text(section_title + "\n\n" + "\n".join(group), limit=1300),
             }
         )
         if index < len(line_groups):
