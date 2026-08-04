@@ -2670,24 +2670,24 @@ def _build_vouches_embed(*, guild: discord.Guild | None, target_user: discord.Me
         activity_lines.append("> No vouches yet.")
 
     stats_block = (
-        f"🎫 **Vouches**\n`{len(vouches)}`\n"
-        f"⭐ **Unique Vouchers**\n`{unique_count}`\n"
-        f"🏅 **Server Rank**\n`#{rank}`"
+        f"🎫 **Vouches:** `{len(vouches)}`\n"
+        f"⭐ **Unique Vouchers:** `{unique_count}`\n"
+        f"🏅 **Server Rank:** `#{rank}`"
     )
     time_block = (
-        f"📩 **First Vouch**\n{first_text}\n"
-        f"📤 **Latest Vouch**\n{latest_text}"
+        f"📩 **First Vouch:** {first_text}\n"
+        f"📤 **Latest Vouch:** {latest_text}"
     )
 
     description = (
         f"{target_user.mention} | {len(vouches)} vouches\n\n"
         f"> 🎫 **{len(vouches)} vouches from {unique_count} unique members**\n"
         f"> ⚠️ **{len(scams)} scam reports on record**\n\n"
-        "🎫 **Vouches**      ⭐ **Unique Vouchers**      🏅 **Server Rank**\n"
-        f"`{len(vouches)}`                 `{unique_count}`                         `#{rank}`\n\n"
-        "📩 **First Vouch**      📤 **Latest Vouch**\n"
-        f"{first_text}      {latest_text}\n\n"
-        f"📋 **Activity • Page {page + 1}/{total_pages}**\n"
+        + stats_block
+        + "\n\n"
+        + time_block
+        + "\n\n"
+        + f"📋 **Activity • Page {page + 1}/{total_pages}**\n"
         + "\n".join(activity_lines)
     )
 
@@ -2713,12 +2713,13 @@ def _build_vouches_components_v2_payload(*, guild: discord.Guild | None, target_
     first_text = f"<t:{first_unix}:R>" if first_unix > 0 else "N/A"
     latest_text = f"<t:{latest_unix}:R>" if latest_unix > 0 else "N/A"
     stats_block = (
-        "🎫 **Vouches**      ⭐ **Unique Vouchers**      🏅 **Server Rank**\n"
-        f"`{len(vouches)}`                 `{unique_count}`                         `#{rank}`"
+        f"🎫 **Vouches:** `{len(vouches)}`\n"
+        f"⭐ **Unique Vouchers:** `{unique_count}`\n"
+        f"🏅 **Server Rank:** `#{rank}`"
     )
     time_block = (
-        "📩 **First Vouch**      📤 **Latest Vouch**\n"
-        f"{first_text}      {latest_text}"
+        f"📩 **First Vouch:** {first_text}\n"
+        f"📤 **Latest Vouch:** {latest_text}"
     )
 
     activity_rows: list[dict] = []
@@ -2745,18 +2746,21 @@ def _build_vouches_components_v2_payload(*, guild: discord.Guild | None, target_
     recent_rows = activity_rows[:12]
 
     activity_lines: list[str] = []
-    for display_index, item in enumerate(recent_rows, start=1):
+    for item in recent_rows:
         created_unix = int(item.get("created_unix", 0) or 0)
         jump_url = str(item.get("jump_url", "")).strip()
         kind = str(item.get("kind", "vouch"))
+        entry_id = int(item.get("id", 0) or 0)
         proof_url = str(item.get("proof_url", "")).strip()
         when_text = f"<t:{created_unix}:R>" if created_unix > 0 else "Unknown time"
         jump_link = jump_url or proof_url
         jump_text = f"[↗ Jump]({jump_link})" if jump_link else "↗ Jump"
         if kind == "scam":
-            activity_lines.append(f"> ⚠️ `#{display_index}` • {when_text} • {jump_text}")
+            scam_label = f"Scam #{entry_id}" if entry_id > 0 else "Scam"
+            activity_lines.append(f"> ⚠️ **{scam_label}** • {when_text} • {jump_text}")
         else:
-            activity_lines.append(f"> 🎫 `#{display_index}` • {when_text} • {jump_text}")
+            vouch_label = f"Vouch #{entry_id}" if entry_id > 0 else "Vouch"
+            activity_lines.append(f"> 🎫 **{vouch_label}** • {when_text} • {jump_text}")
 
     if not activity_lines:
         activity_lines.append("> No vouches yet.")
