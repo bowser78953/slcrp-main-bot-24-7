@@ -2704,6 +2704,20 @@ def _build_vouches_components_v2_payload(*, guild: discord.Guild | None, target_
     first_text = f"<t:{first_unix}:R>" if first_unix > 0 else "N/A"
     latest_text = f"<t:{latest_unix}:R>" if latest_unix > 0 else "N/A"
 
+    stats_table = (
+        "```\n"
+        "Vouches   Unique Vouchers   Server Rank\n"
+        f"{len(vouches):<8} {unique_count:<17} #{rank}\n"
+        "```"
+    )
+
+    time_table = (
+        "```\n"
+        "First Vouch        Latest Vouch\n"
+        f"{first_text:<18} {latest_text}\n"
+        "```"
+    )
+
     activity_rows: list[dict] = []
     for item in vouches:
         activity_rows.append(
@@ -2721,23 +2735,25 @@ def _build_vouches_components_v2_payload(*, guild: discord.Guild | None, target_
                 "id": int(item.get("id", 0) or 0),
                 "created_unix": _iso_to_unix(str(item.get("created_at", ""))),
                 "jump_url": str(item.get("jump_url", "")).strip(),
+                "proof_url": str(item.get("proof_url", "")).strip(),
             }
         )
     activity_rows.sort(key=lambda row: int(row.get("created_unix", 0) or 0), reverse=True)
     recent_rows = activity_rows[:12]
 
     activity_lines: list[str] = []
-    for item in recent_rows:
-        row_id = int(item.get("id", 0) or 0)
+    for display_index, item in enumerate(recent_rows, start=1):
         created_unix = int(item.get("created_unix", 0) or 0)
         jump_url = str(item.get("jump_url", "")).strip()
         kind = str(item.get("kind", "vouch"))
+        proof_url = str(item.get("proof_url", "")).strip()
         when_text = f"<t:{created_unix}:R>" if created_unix > 0 else "Unknown time"
-        jump_text = f"[↗ Jump]({jump_url})" if jump_url else "↗ Jump"
+        jump_link = jump_url or proof_url
+        jump_text = f"[↗ Jump]({jump_link})" if jump_link else "↗ Jump"
         if kind == "scam":
-            activity_lines.append(f"> ⚠️ `#{row_id}` • {when_text} • {jump_text}")
+            activity_lines.append(f"> ⚠️ `#{display_index}` • {when_text} • {jump_text}")
         else:
-            activity_lines.append(f"> 🎫 `#{row_id}` • {when_text} • {jump_text}")
+            activity_lines.append(f"> 🎫 `#{display_index}` • {when_text} • {jump_text}")
 
     if not activity_lines:
         activity_lines.append("> No vouches yet.")
@@ -2759,10 +2775,11 @@ def _build_vouches_components_v2_payload(*, guild: discord.Guild | None, target_
         {
             "type": 10,
             "content": _truncate_component_text(
-                "🎫 **Vouches**      ⭐ **Unique Vouchers**      🏅 **Server Rank**\n"
-                f"`{len(vouches)}`                 `{unique_count}`                         `#{rank}`\n\n"
-                "📩 **First Vouch**      📤 **Latest Vouch**\n"
-                f"{first_text}      {latest_text}"
+                "🎫 **Vouches**  ⭐ **Unique Vouchers**  🏅 **Server Rank**\n"
+                + stats_table
+                + "\n"
+                + "📩 **First Vouch**  📤 **Latest Vouch**\n"
+                + time_table
             ),
         },
         {"type": 14},
@@ -9750,23 +9767,6 @@ async def _post_report_for_review(*, guild: discord.Guild | None, reporter: disc
     if guild is None:
         return False
 
-    data = _load_data()
-    bucket = _get_user_bucket(data, reported_user.id)
-    entry_id = int(data.get("next_scam_id", 1) or 1)
-    data["next_scam_id"] = entry_id + 1
-    bucket["scams"].append(
-        {
-            "id": entry_id,
-            "reported_by": reporter.id,
-            "reason": f"Proof: {proof_url}",
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "proof_url": proof_url,
-        }
-    )
-    _update_bucket_trust_level(bucket)
-    _save_data(data)
-    await _sync_vouch_scam_roles(guild, reported_user.id, bucket)
-
     review_channel = guild.get_channel(SCAM_REPORT_REVIEW_CHANNEL_ID)
     if review_channel is None:
         try:
@@ -9786,7 +9786,27 @@ async def _post_report_for_review(*, guild: discord.Guild | None, reporter: disc
     )
     embed.set_image(url=proof_url)
     view = ReportReviewView(reported_user_id=reported_user.id, reporter_user_id=reporter.id)
-    await review_channel.send(content=f"<@&{TICKET_ELDER_ROLE_ID}>", embed=embed, view=view)
+
+    review_message = await review_channel.send(content=f"<@&{TICKET_ELDER_ROLE_ID}>", embed=embed, view=view)
+
+    data = _load_data()
+    bucket = _get_user_bucket(data, reported_user.id)
+    entry_id = int(data.get("next_scam_id", 1) or 1)
+    data["next_scam_id"] = entry_id + 1
+    bucket["scams"].append(
+        {
+            "id": entry_id,
+            "reported_by": reporter.id,
+            "reason": f"Proof: {proof_url}",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "proof_url": proof_url,
+            "jump_url": review_message.jump_url,
+        }
+    )
+    _update_bucket_trust_level(bucket)
+    _save_data(data)
+    await _sync_vouch_scam_roles(guild, reported_user.id, bucket)
+
     return True
 
 
