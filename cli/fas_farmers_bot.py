@@ -2636,8 +2636,10 @@ async def _add_vouch_entry(*, guild: discord.Guild | None, vouched_user: discord
 
 def _build_vouches_embed(*, guild: discord.Guild | None, target_user: discord.Member, data: dict, page_index: int, per_page: int = 7) -> tuple[discord.Embed, int]:
     bucket = _get_user_bucket(data, target_user.id)
+    _ensure_bucket_vouch_local_ids(bucket)
     _update_bucket_trust_level(bucket)
     vouches = list(bucket.get("vouches", [])) if isinstance(bucket.get("vouches", []), list) else []
+    scams = list(bucket.get("scams", [])) if isinstance(bucket.get("scams", []), list) else []
     vouches.sort(key=lambda item: _iso_to_unix(str(item.get("created_at", ""))), reverse=True)
 
     total = len(vouches)
@@ -2653,32 +2655,35 @@ def _build_vouches_embed(*, guild: discord.Guild | None, target_user: discord.Me
 
     activity_lines: list[str] = []
     for item in page_rows:
-        vouch_id = int(item.get("id", 0) or 0)
+        vouch_id = int(item.get("user_vouch_id", 0) or 0)
+        voucher_id = int(item.get("by", 0) or 0)
         created_unix = _iso_to_unix(str(item.get("created_at", "")))
         jump_url = str(item.get("jump_url", "")).strip()
         when_text = f"<t:{created_unix}:R>" if created_unix > 0 else "Unknown time"
-        jump_text = f"[↗ Jump]({jump_url})" if jump_url else "No jump link"
-        activity_lines.append(f"> 🎫`#{vouch_id}` • {when_text} • {jump_text}")
+        voucher_text = _mention_for_user(guild, voucher_id) if voucher_id > 0 else "Unknown"
+        jump_text = f"[↗ Jump]({jump_url})" if jump_url else "No jump"
+        activity_lines.append(f"> 🎫 **#{vouch_id}** @ {voucher_text} - {when_text} - {jump_text}")
 
     if not activity_lines:
         activity_lines.append("> No vouches yet.")
 
+    first_text = f"<t:{first_unix}:R>" if first_unix > 0 else "N/A"
+    latest_text = f"<t:{latest_unix}:R>" if latest_unix > 0 else "N/A"
+
     description = (
-        f"# {target_user.mention} Vouches\n"
-        "━━━━━━━━━━━━━━━━\n"
-        "🎫**Vouches**  ⭐**Unique Vouchers**  🏅**Server Ranking**\n"
-        f"`{len(vouches)}`\n"
-        f"`{unique_count}`\n"
-        f"`#{rank}`\n\n"
-        "📩**First Vouch**  📤**Latest Vouch**\n"
-        f"`{f'<t:{first_unix}:D>' if first_unix > 0 else 'N/A'}`\n"
-        f"`{f'<t:{latest_unix}:D>' if latest_unix > 0 else 'N/A'}`\n\n"
-        "📋**Recent Activity**\n"
+        f"{target_user.mention} | {len(vouches)} vouches\n\n"
+        f"> 🎫 **{len(vouches)} vouches from {unique_count} unique members**\n"
+        f"> ⚠️ **{len(scams)} scam reports on record**\n\n"
+        "🎫 **Vouches**      ⭐ **Unique Vouchers**      🏅 **Server Rank**\n"
+        f"`{len(vouches)}`                 `{unique_count}`                         `#{rank}`\n\n"
+        "📩 **First Vouch**      📤 **Latest Vouch**\n"
+        f"{first_text}      {latest_text}\n\n"
+        f"📋 **Activity • Page {page + 1}/{total_pages}**\n"
         + "\n".join(activity_lines)
     )
 
-    embed = discord.Embed(description=description[:4096], color=discord.Color.dark_grey())
-    embed.set_footer(text=f"Page {page + 1}/{total_pages}")
+    embed = discord.Embed(description=_truncate_component_text(description, limit=3900), color=discord.Color.dark_grey())
+    embed.set_footer(text="Vouch System")
     return embed, total_pages
 
 
@@ -9794,25 +9799,17 @@ async def report(ctx: commands.Context, user: discord.Member, *, proof: str | No
 
 async def _send_vouches_panel(ctx: commands.Context, user: discord.Member):
     data = _load_data()
-    payload = _build_vouches_components_v2_payload(
+    view = VouchesPagesView(author_id=ctx.author.id, target_user=user, data=data)
+    embed, total_pages = _build_vouches_embed(
         guild=ctx.guild,
         target_user=user,
         data=data,
+        page_index=0,
+        per_page=view.per_page,
     )
-
-    if isinstance(ctx.channel, discord.TextChannel):
-        try:
-            await _discord_api_send_or_edit_components_v2_message(
-                int(ctx.channel.id),
-                0,
-                payload,
-                force_new_message=True,
-            )
-            return
-        except Exception as exc:
-            print(f"Vouches Components V2 post failed: {exc}")
-
-    await ctx.send(f"Vouches for {user.mention}: `{len((_get_user_bucket(data, user.id) or {}).get('vouches', []))}`")
+    view.total_pages = total_pages
+    view._sync_buttons()
+    await ctx.send(embed=embed, view=view)
 
 
 @bot.command(name="vouches", aliases=["vouchlist"])
