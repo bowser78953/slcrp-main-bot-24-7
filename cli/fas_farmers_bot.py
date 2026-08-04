@@ -2692,32 +2692,52 @@ def _build_vouches_components_v2_payload(*, guild: discord.Guild | None, target_
     _ensure_bucket_vouch_local_ids(bucket)
     _update_bucket_trust_level(bucket)
     vouches = list(bucket.get("vouches", [])) if isinstance(bucket.get("vouches", []), list) else []
+    scams = list(bucket.get("scams", [])) if isinstance(bucket.get("scams", []), list) else []
     vouches.sort(key=lambda item: _iso_to_unix(str(item.get("created_at", ""))), reverse=True)
+    scams.sort(key=lambda item: _iso_to_unix(str(item.get("created_at", ""))), reverse=True)
 
     rank = _vouch_rank_for_user(data, target_user.id)
     unique_count = _count_unique_vouchers(guild, vouches)
     first_unix = _iso_to_unix(str(vouches[-1].get("created_at", ""))) if vouches else 0
     latest_unix = _iso_to_unix(str(vouches[0].get("created_at", ""))) if vouches else 0
 
-    stats_table = (
-        "```\n"
-        "Vouches  Unique Vouchers  Server Ranking\n"
-        f"{len(vouches):<7} {unique_count:<16} #{rank}\n"
-        "```"
-    )
+    first_text = f"<t:{first_unix}:R>" if first_unix > 0 else "N/A"
+    latest_text = f"<t:{latest_unix}:R>" if latest_unix > 0 else "N/A"
 
-    first_text = f"<t:{first_unix}:D>" if first_unix > 0 else "N/A"
-    latest_text = f"<t:{latest_unix}:D>" if latest_unix > 0 else "N/A"
+    activity_rows: list[dict] = []
+    for item in vouches:
+        activity_rows.append(
+            {
+                "kind": "vouch",
+                "id": int(item.get("user_vouch_id", 0) or 0),
+                "created_unix": _iso_to_unix(str(item.get("created_at", ""))),
+                "jump_url": str(item.get("jump_url", "")).strip(),
+            }
+        )
+    for item in scams:
+        activity_rows.append(
+            {
+                "kind": "scam",
+                "id": int(item.get("id", 0) or 0),
+                "created_unix": _iso_to_unix(str(item.get("created_at", ""))),
+                "jump_url": str(item.get("jump_url", "")).strip(),
+            }
+        )
+    activity_rows.sort(key=lambda row: int(row.get("created_unix", 0) or 0), reverse=True)
+    recent_rows = activity_rows[:12]
 
-    recent_rows = vouches[:10]
     activity_lines: list[str] = []
     for item in recent_rows:
-        vouch_id = int(item.get("user_vouch_id", 0) or 0)
-        created_unix = _iso_to_unix(str(item.get("created_at", "")))
+        row_id = int(item.get("id", 0) or 0)
+        created_unix = int(item.get("created_unix", 0) or 0)
         jump_url = str(item.get("jump_url", "")).strip()
+        kind = str(item.get("kind", "vouch"))
         when_text = f"<t:{created_unix}:R>" if created_unix > 0 else "Unknown time"
-        jump_text = f"[↗ Jump]({jump_url})" if jump_url else "No jump link"
-        activity_lines.append(f"> 🎫 `#{vouch_id}` • {when_text} • {jump_text}")
+        jump_text = f"[↗ Jump]({jump_url})" if jump_url else "↗ Jump"
+        if kind == "scam":
+            activity_lines.append(f"> ⚠️ `#{row_id}` • {when_text} • {jump_text}")
+        else:
+            activity_lines.append(f"> 🎫 `#{row_id}` • {when_text} • {jump_text}")
 
     if not activity_lines:
         activity_lines.append("> No vouches yet.")
@@ -2731,17 +2751,18 @@ def _build_vouches_components_v2_payload(*, guild: discord.Guild | None, target_
         {
             "type": 10,
             "content": _truncate_component_text(
-                "🎫 **Vouches**  ⭐ **Unique Vouchers**  🏅 **Server Ranking**\n" + stats_table
+                f"> 🎫 **{len(vouches)} vouches from {unique_count} unique members**\n"
+                f"> ⚠️ **{len(scams)} scam reports on record**"
             ),
         },
         {"type": 14},
         {
             "type": 10,
             "content": _truncate_component_text(
-                "📩 **First Vouch**\n"
-                f"{first_text}\n\n"
-                "📤 **Latest Vouch**\n"
-                f"{latest_text}"
+                "🎫 **Vouches**      ⭐ **Unique Vouchers**      🏅 **Server Rank**\n"
+                f"`{len(vouches)}`                 `{unique_count}`                         `#{rank}`\n\n"
+                "📩 **First Vouch**      📤 **Latest Vouch**\n"
+                f"{first_text}      {latest_text}"
             ),
         },
         {"type": 14},
@@ -2750,7 +2771,6 @@ def _build_vouches_components_v2_payload(*, guild: discord.Guild | None, target_
             "content": _truncate_component_text(
                 "📋 **Recent Activity**\n"
                 + "\n".join(activity_lines)
-                + f"\n\n-# Showing {min(10, len(vouches))} of {len(vouches)} total vouches."
             ),
         },
     ]
@@ -9799,17 +9819,26 @@ async def report(ctx: commands.Context, user: discord.Member, *, proof: str | No
 
 async def _send_vouches_panel(ctx: commands.Context, user: discord.Member):
     data = _load_data()
-    view = VouchesPagesView(author_id=ctx.author.id, target_user=user, data=data)
-    embed, total_pages = _build_vouches_embed(
+    payload = _build_vouches_components_v2_payload(
         guild=ctx.guild,
         target_user=user,
         data=data,
-        page_index=0,
-        per_page=view.per_page,
     )
-    view.total_pages = total_pages
-    view._sync_buttons()
-    await ctx.send(embed=embed, view=view)
+
+    if isinstance(ctx.channel, discord.TextChannel):
+        try:
+            await _discord_api_send_or_edit_components_v2_message(
+                int(ctx.channel.id),
+                0,
+                payload,
+                force_new_message=True,
+            )
+            return
+        except Exception as exc:
+            print(f"Vouches Components V2 post failed: {exc}")
+
+    # Fallback only when V2 cannot be posted.
+    await ctx.send(f"Vouches for {user.mention}: `{len((_get_user_bucket(data, user.id) or {}).get('vouches', []))}`")
 
 
 @bot.command(name="vouches", aliases=["vouchlist"])
