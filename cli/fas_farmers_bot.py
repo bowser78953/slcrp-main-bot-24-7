@@ -2667,6 +2667,10 @@ def _build_vouches_embed(*, guild: discord.Guild | None, target_user: discord.Me
     if not activity_lines:
         activity_lines.append("> No vouches yet.")
 
+    spacer = "ㅤ"
+    stats_line = f"`{len(vouches)}`{spacer * 10}`{unique_count}`{spacer * 10}`#{rank}`"
+    time_line = f"{first_text}{spacer * 6}{latest_text}"
+
     first_text = f"<t:{first_unix}:R>" if first_unix > 0 else "N/A"
     latest_text = f"<t:{latest_unix}:R>" if latest_unix > 0 else "N/A"
 
@@ -2762,9 +2766,10 @@ def _build_vouches_components_v2_payload(*, guild: discord.Guild | None, target_
             "type": 10,
             "content": _truncate_component_text(
                 "🎫 **Vouches**  ⭐ **Unique Vouchers**  🏅 **Server Rank**\n"
-                f"`{len(vouches)}`      `{unique_count}`      `#{rank}`\n\n"
+                + stats_line
+                + "\n\n"
                 "📩 **First Vouch**  📤 **Latest Vouch**\n"
-                f"{first_text}      {latest_text}"
+                + time_line
             ),
         },
         {"type": 14},
