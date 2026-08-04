@@ -7044,12 +7044,24 @@ async def on_message(message: discord.Message):
                 )
                 return
 
-    if message.guild is not None and isinstance(message.channel, discord.TextChannel) and BOT_MODE == "farmers":
-        if message.channel.id == VOUCH_CHANNEL_ID and content:
+    if message.guild is not None and BOT_MODE == "farmers":
+        channel_id = int(getattr(message.channel, "id", 0) or 0)
+        parent_channel_id = int(getattr(message.channel, "parent_id", 0) or 0)
+        channel_name = str(getattr(message.channel, "name", "") or "").lower()
+        parent_name = str(getattr(getattr(message.channel, "parent", None), "name", "") or "").lower()
+        name_looks_like_vouch_channel = "vouch" in channel_name or "vouch" in parent_name
+        in_vouch_channel = (
+            channel_id == VOUCH_CHANNEL_ID
+            or parent_channel_id == VOUCH_CHANNEL_ID
+            or name_looks_like_vouch_channel
+        )
+
+        if in_vouch_channel and content:
             normalized = content.strip()
-            if normalized.startswith("-"):
+            while normalized.startswith(("-", "!", ".")):
                 normalized = normalized[1:].strip()
             lowered = normalized.lower()
+            first_word = lowered.split(maxsplit=1)[0] if lowered else ""
 
             remove_vouch_match = re.match(r"^remove\s+vouch\s+<@!?(\d+)>\s+(\d+)\s*$", lowered, flags=re.IGNORECASE)
             if remove_vouch_match and isinstance(message.author, discord.Member):
@@ -7076,7 +7088,7 @@ async def on_message(message: discord.Message):
                 await message.channel.send(f"Removed vouch `{local_id}` for {target_member.mention}.")
                 return
 
-            if lowered.startswith("vouches"):
+            if first_word in {"vouches", "vouchlist"}:
                 target_member = message.author if isinstance(message.author, discord.Member) else None
                 if message.mentions:
                     target_member = next((m for m in message.mentions if m.id != message.author.id), message.mentions[0])
@@ -7105,7 +7117,7 @@ async def on_message(message: discord.Message):
                 await message.channel.send(f"<:Tick:1533311914640408758> You have vouched {target_member.mention}!")
                 return
 
-        if message.channel.id == SCAM_REPORT_CHANNEL_ID and content and message.mentions and isinstance(message.author, discord.Member):
+        if channel_id == SCAM_REPORT_CHANNEL_ID and content and message.mentions and isinstance(message.author, discord.Member):
             normalized = content.strip()
             if normalized.startswith("-"):
                 normalized = normalized[1:].strip()
