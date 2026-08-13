@@ -295,6 +295,8 @@ last_message_seed_role_sync = 0
 UNDER_DEVELOPMENT_MODE = False
 UNDER_DEVELOPMENT_TITLE = "⛔Under Development ⚠️"
 UNDER_DEVELOPMENT_DESCRIPTION = "Under Development. Please do not use any commands!"
+UNDER_DEV_PREV_STATUS: discord.Status | None = None
+UNDER_DEV_PREV_ACTIVITY: discord.BaseActivity | None = None
 
 RARITY_EMOJIS = {
     "common": "<:common:1525708045450084473>",
@@ -2133,14 +2135,22 @@ def _start_background_processes() -> None:
 
 
 async def _apply_underdev_presence(enabled: bool) -> None:
+    global UNDER_DEV_PREV_STATUS, UNDER_DEV_PREV_ACTIVITY
     try:
         if enabled:
+            if UNDER_DEV_PREV_STATUS is None:
+                UNDER_DEV_PREV_STATUS = getattr(bot, "status", discord.Status.online)
+                UNDER_DEV_PREV_ACTIVITY = getattr(bot, "activity", None)
             await bot.change_presence(
                 status=discord.Status.idle,
                 activity=discord.CustomActivity(name=f"{UNDER_DEVELOPMENT_TITLE} | {UNDER_DEVELOPMENT_DESCRIPTION}"),
             )
         else:
-            await bot.change_presence(status=discord.Status.online, activity=None)
+            restore_status = UNDER_DEV_PREV_STATUS if UNDER_DEV_PREV_STATUS is not None else discord.Status.online
+            restore_activity = UNDER_DEV_PREV_ACTIVITY
+            await bot.change_presence(status=restore_status, activity=restore_activity)
+            UNDER_DEV_PREV_STATUS = None
+            UNDER_DEV_PREV_ACTIVITY = None
     except Exception as exc:
         print(f"Failed to update underdev presence: {exc}")
 
