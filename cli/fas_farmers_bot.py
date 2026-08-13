@@ -7049,23 +7049,39 @@ async def on_message(message: discord.Message):
     content = (message.content or "").strip()
 
     lowered_content = content.lower()
-    if lowered_content in {"?underdev", "?underdevoff"}:
+    lowered_content = lowered_content.replace("—", "-").replace("–", "-").replace("−", "-")
+    tokens = lowered_content.split()
+    command_token = tokens[0] if tokens else ""
+    if command_token.startswith("<@") and len(tokens) > 1:
+        command_token = tokens[1]
+    command_token = command_token.strip().rstrip(",.;:")
+
+    main_dev_commands = {"-underdev", "-startdev", "-stopdev", "-underdevoff"}
+    bot2_dev_commands = {"s-underdev", "s-startdev", "s-stopdev", "s-underdevoff"}
+    all_dev_commands = main_dev_commands | bot2_dev_commands
+
+    if command_token in all_dev_commands:
         requester = message.author if isinstance(message.author, discord.Member) else None
         if not _can_manage_underdev(requester):
             await message.channel.send(f"You must have <@&{MOD_COMMAND_ROLE_ID}> to use this command.")
             return
 
-        if lowered_content == "?underdev":
+        is_bot2_command = command_token in bot2_dev_commands
+        is_main_command = command_token in main_dev_commands
+
+        if is_main_command and not IS_MAIN_BOT_INSTANCE:
+            return
+        if is_bot2_command and IS_MAIN_BOT_INSTANCE:
+            return
+
+        enable_dev_mode = command_token in {"-underdev", "-startdev", "s-underdev", "s-startdev"}
+
+        if enable_dev_mode:
             if UNDER_DEVELOPMENT_MODE:
-                await message.channel.send(
-                    f"{UNDER_DEVELOPMENT_TITLE}\n{UNDER_DEVELOPMENT_DESCRIPTION}\n-# Maintenance mode is already enabled."
-                )
+                await message.channel.send("⚙️Bot Development Started")
                 return
-            stopped_loops, cancelled_auctions = await _set_underdev_mode(True)
-            await message.channel.send(
-                f"{UNDER_DEVELOPMENT_TITLE}\n{UNDER_DEVELOPMENT_DESCRIPTION}\n"
-                f"-# Stopped loops: `{stopped_loops}` | Cancelled auction tasks: `{cancelled_auctions}`"
-            )
+            await _set_underdev_mode(True)
+            await message.channel.send("⚙️Bot Development Started")
             return
 
         if not UNDER_DEVELOPMENT_MODE:
@@ -7073,7 +7089,7 @@ async def on_message(message: discord.Message):
             return
 
         await _set_underdev_mode(False)
-        await message.channel.send("Under development mode disabled. Background processes resumed.")
+        await message.channel.send("✅ Bot Development Stopped. All bot systems restarted.")
         return
 
     if UNDER_DEVELOPMENT_MODE:
