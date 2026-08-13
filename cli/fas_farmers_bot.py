@@ -330,6 +330,15 @@ FUNNY_FALLBACK_REPLIES = [
     "If this breaks reality, we call it a feature and ship it.",
 ]
 
+AI_QUICK_GREET_REPLIES = {
+    "hi": ["hi", "hey", "yo yo", "hi there"],
+    "hello": ["hello", "hey hey", "heyo"],
+    "hey": ["hey", "hey there", "yo"],
+    "yo": ["yo", "yo yo", "hey"],
+    "sup": ["sup", "not much, just vibing", "sup gang"],
+    "wassup": ["wassup", "chilling, you?", "yo wassup"],
+}
+
 STOCK_ROLE_PINGS = {
     "bamboo": "<@&1524530163155603677>",
     "cactus": "<@&1524530211453141132>",
@@ -2201,10 +2210,59 @@ def _pick_funny_gif_for_message(message_text: str) -> str:
     return random.choice(FUNNY_GIF_POOL)
 
 
+def _quick_ai_reply(user_message: str) -> str | None:
+    cleaned = str(user_message or "").strip().lower()
+    if not cleaned:
+        return None
+
+    plain = re.sub(r"[^a-z\s]", "", cleaned).strip()
+    words = plain.split()
+    if not words:
+        return None
+
+    if len(words) <= 3:
+        first = words[0]
+        if first in AI_QUICK_GREET_REPLIES:
+            return random.choice(AI_QUICK_GREET_REPLIES[first])
+
+    if plain in {"gn", "good night"}:
+        return "good night, sleep easy"
+    if plain in {"gm", "good morning"}:
+        return "good morning, hope your day slaps"
+    if plain in {"thanks", "thank you", "ty"}:
+        return "anytime 😎"
+
+    return None
+
+
+def _should_include_gif(message_text: str, ai_reply: str) -> bool:
+    lowered = str(message_text or "").lower()
+    reply_lowered = str(ai_reply or "").lower()
+
+    # Prefer gifs for high-energy moments or obvious mood keywords.
+    if any(word in lowered for word in ["lol", "lmao", "hype", "win", "pog", "sad", "cry", "angry"]):
+        return random.random() < 0.70
+
+    # Questions are a medium chance.
+    if "?" in lowered or any(word in lowered for word in ["why", "how", "what", "help"]):
+        return random.random() < 0.35
+
+    # Simple greeting echoes should usually stay text-only.
+    if reply_lowered in {"hi", "hello", "hey", "yo", "sup", "heyo", "hi there", "hey there", "yo yo"}:
+        return random.random() < 0.12
+
+    # General chat gets occasional gif spice.
+    return random.random() < 0.25
+
+
 async def _fetch_funny_ai_reply(user_message: str) -> str:
     cleaned = str(user_message or "").strip()
     if not cleaned:
         return random.choice(FUNNY_FALLBACK_REPLIES)
+
+    quick_reply = _quick_ai_reply(cleaned)
+    if quick_reply:
+        return quick_reply
 
     chatbot_url = "https://api.affiliateplus.xyz/api/chatbot"
     params = {
@@ -2244,16 +2302,23 @@ async def _handle_ai_chat_channel_message(message: discord.Message) -> bool:
     try:
         async with message.channel.typing():
             ai_reply = await _fetch_funny_ai_reply(text)
-            gif_url = _pick_funny_gif_for_message(text)
-            await message.channel.send(f"{ai_reply}\n\nGIF energy: {gif_url}")
+            if _should_include_gif(text, ai_reply):
+                gif_url = _pick_funny_gif_for_message(text)
+                await message.channel.send(f"{ai_reply}\n\nGIF energy: {gif_url}")
+            else:
+                await message.channel.send(ai_reply)
     except Exception as exc:
         print(f"AI chat channel response failed: {exc}")
         try:
-            await message.channel.send(
-                random.choice(FUNNY_FALLBACK_REPLIES)
-                + "\n\n"
-                + f"GIF energy: {_pick_funny_gif_for_message(text)}"
-            )
+            fallback_reply = random.choice(FUNNY_FALLBACK_REPLIES)
+            if _should_include_gif(text, fallback_reply):
+                await message.channel.send(
+                    fallback_reply
+                    + "\n\n"
+                    + f"GIF energy: {_pick_funny_gif_for_message(text)}"
+                )
+            else:
+                await message.channel.send(fallback_reply)
         except Exception:
             pass
 
