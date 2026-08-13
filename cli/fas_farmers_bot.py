@@ -292,6 +292,9 @@ WARN_TIMEOUT_SECONDS = 86400
 WARN_TEMPBAN_SECONDS = 3 * 86400
 
 last_message_seed_role_sync = 0
+UNDER_DEVELOPMENT_MODE = False
+UNDER_DEVELOPMENT_TITLE = "⛔Under Development ⚠️"
+UNDER_DEVELOPMENT_DESCRIPTION = "Under Development. Please do not use any commands!"
 
 RARITY_EMOJIS = {
     "common": "<:common:1525708045450084473>",
@@ -2071,6 +2074,88 @@ def _has_mod_command_role(member: discord.Member | None) -> bool:
     if member is None:
         return False
     return any(role.id == MOD_COMMAND_ROLE_ID for role in member.roles)
+
+
+def _can_manage_underdev(member: discord.Member | None) -> bool:
+    if member is None:
+        return False
+    if _has_mod_command_role(member):
+        return True
+    return int(member.id) in SEED_CLAIM_WIPE_ADMINS
+
+
+def _stop_background_processes() -> tuple[int, int]:
+    loops = [
+        seed_shop_live_loop,
+        props_live_loop,
+        sell_price_live_loop,
+        weather_live_loop,
+        temp_ban_expiry_loop,
+        quarantine_expiry_loop,
+    ]
+    stopped_loops = 0
+    for loop_task in loops:
+        try:
+            if loop_task.is_running():
+                loop_task.stop()
+                stopped_loops += 1
+        except Exception:
+            pass
+
+    cancelled_auctions = 0
+    for auction_task in list(AUCTION_TASKS.values()):
+        try:
+            if auction_task is not None and not auction_task.done():
+                auction_task.cancel()
+                cancelled_auctions += 1
+        except Exception:
+            pass
+    AUCTION_TASKS.clear()
+
+    return stopped_loops, cancelled_auctions
+
+
+def _start_background_processes() -> None:
+    if BOT_MODE == "farmers":
+        if not seed_shop_live_loop.is_running():
+            seed_shop_live_loop.start()
+        if IS_MAIN_BOT_INSTANCE and not props_live_loop.is_running():
+            props_live_loop.start()
+        if IS_MAIN_BOT_INSTANCE and not sell_price_live_loop.is_running():
+            sell_price_live_loop.start()
+        if IS_MAIN_BOT_INSTANCE and not weather_live_loop.is_running():
+            weather_live_loop.start()
+
+    if not temp_ban_expiry_loop.is_running():
+        temp_ban_expiry_loop.start()
+    if not quarantine_expiry_loop.is_running():
+        quarantine_expiry_loop.start()
+
+
+async def _apply_underdev_presence(enabled: bool) -> None:
+    try:
+        if enabled:
+            await bot.change_presence(
+                status=discord.Status.idle,
+                activity=discord.CustomActivity(name=f"{UNDER_DEVELOPMENT_TITLE} | {UNDER_DEVELOPMENT_DESCRIPTION}"),
+            )
+        else:
+            await bot.change_presence(status=discord.Status.online, activity=None)
+    except Exception as exc:
+        print(f"Failed to update underdev presence: {exc}")
+
+
+async def _set_underdev_mode(enabled: bool) -> tuple[int, int]:
+    global UNDER_DEVELOPMENT_MODE
+    UNDER_DEVELOPMENT_MODE = bool(enabled)
+    if UNDER_DEVELOPMENT_MODE:
+        stopped_loops, cancelled_auctions = _stop_background_processes()
+        await _apply_underdev_presence(True)
+        return stopped_loops, cancelled_auctions
+
+    _start_background_processes()
+    await _apply_underdev_presence(False)
+    return 0, 0
 
 
 def _highest_seed_balances(bank_data: dict, top_n: int = 3) -> list[int]:
@@ -6963,6 +7048,39 @@ async def on_message(message: discord.Message):
 
     content = (message.content or "").strip()
 
+    lowered_content = content.lower()
+    if lowered_content in {"?underdev", "?underdevoff"}:
+        requester = message.author if isinstance(message.author, discord.Member) else None
+        if not _can_manage_underdev(requester):
+            await message.channel.send(f"You must have <@&{MOD_COMMAND_ROLE_ID}> to use this command.")
+            return
+
+        if lowered_content == "?underdev":
+            if UNDER_DEVELOPMENT_MODE:
+                await message.channel.send(
+                    f"{UNDER_DEVELOPMENT_TITLE}\n{UNDER_DEVELOPMENT_DESCRIPTION}\n-# Maintenance mode is already enabled."
+                )
+                return
+            stopped_loops, cancelled_auctions = await _set_underdev_mode(True)
+            await message.channel.send(
+                f"{UNDER_DEVELOPMENT_TITLE}\n{UNDER_DEVELOPMENT_DESCRIPTION}\n"
+                f"-# Stopped loops: `{stopped_loops}` | Cancelled auction tasks: `{cancelled_auctions}`"
+            )
+            return
+
+        if not UNDER_DEVELOPMENT_MODE:
+            await message.channel.send("Under development mode is not currently enabled.")
+            return
+
+        await _set_underdev_mode(False)
+        await message.channel.send("Under development mode disabled. Background processes resumed.")
+        return
+
+    if UNDER_DEVELOPMENT_MODE:
+        if content.startswith(("-", "/", "?", "!", ".")):
+            await message.channel.send(UNDER_DEVELOPMENT_DESCRIPTION)
+        return
+
     if message.guild is not None and BOT_MODE == "farmers" and message.channel.id == PREDICTOR_V2_CHANNEL_ID and content and not content.startswith("-"):
         embed, error_message = await _build_predictor_v2_response(content, message.guild)
         if embed is not None:
@@ -7565,7 +7683,7 @@ async def on_ready():
                 print(f"Pycord slash sync attempt {attempt}/5 failed: {exc}")
                 if attempt < 5:
                     await asyncio.sleep(attempt * 2)
-    if BOT_MODE == "farmers":
+    if BOT_MODE == "farmers" and not UNDER_DEVELOPMENT_MODE:
         try:
             await _ensure_seed_shop_live_message_exists()
         except Exception as exc:
@@ -7586,21 +7704,29 @@ async def on_ready():
             await _post_ticket_support_panel()
         except Exception as exc:
             print(f"Failed to post ticket support panel: {exc}")
-        if not seed_shop_live_loop.is_running():
-            seed_shop_live_loop.start()
-        if IS_MAIN_BOT_INSTANCE and not props_live_loop.is_running():
-            props_live_loop.start()
-        if IS_MAIN_BOT_INSTANCE and not sell_price_live_loop.is_running():
-            sell_price_live_loop.start()
-        if IS_MAIN_BOT_INSTANCE and not weather_live_loop.is_running():
-            weather_live_loop.start()
-    if not temp_ban_expiry_loop.is_running():
-        temp_ban_expiry_loop.start()
-    if not quarantine_expiry_loop.is_running():
-        quarantine_expiry_loop.start()
+    if UNDER_DEVELOPMENT_MODE:
+        _stop_background_processes()
+        await _apply_underdev_presence(True)
+    else:
+        _start_background_processes()
 
 
 if app_commands is not None:
+    @bot.tree.interaction_check
+    async def underdev_interaction_check(interaction: discord.Interaction) -> bool:
+        if not UNDER_DEVELOPMENT_MODE:
+            return True
+        if interaction.type != discord.InteractionType.application_command:
+            return True
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(UNDER_DEVELOPMENT_DESCRIPTION, ephemeral=True)
+            else:
+                await interaction.response.send_message(UNDER_DEVELOPMENT_DESCRIPTION, ephemeral=True)
+        except Exception:
+            pass
+        return False
+
     @bot.tree.error
     async def on_app_command_error(interaction: discord.Interaction, error):
         if isinstance(error, app_commands.CommandNotFound):
