@@ -320,24 +320,24 @@ FUNNY_GIF_POOL = [
     "https://media.giphy.com/media/10LKovKon8DENq/giphy.gif",
 ]
 
-FUNNY_FALLBACK_REPLIES = [
-    "I am 73% sure that works, and 27% sure we just invented a new speedrun category.",
-    "Great question. The answer is yes... unless the universe patches it in the next update.",
-    "I ran that through my comedy engine and it returned: absolutely hilarious and probably valid.",
-    "Short answer: yes. Long answer: yeeeeeeeees with extra dramatic music.",
-    "That is either genius or chaos. Usually both.",
-    "I checked my totally real crystal ball and it says: go for it.",
-    "If this breaks reality, we call it a feature and ship it.",
+AI_FALLBACK_REPLIES = [
+    "I hear you. Tell me a little more and I will help you through it.",
+    "Got it. What part should we focus on first?",
+    "That makes sense. Want me to give a quick answer or a detailed one?",
+    "I am with you. What outcome are you aiming for?",
 ]
 
 AI_QUICK_GREET_REPLIES = {
-    "hi": ["hi", "hey", "yo yo", "hi there"],
-    "hello": ["hello", "hey hey", "heyo"],
-    "hey": ["hey", "hey there", "yo"],
-    "yo": ["yo", "yo yo", "hey"],
-    "sup": ["sup", "not much, just vibing", "sup gang"],
-    "wassup": ["wassup", "chilling, you?", "yo wassup"],
+    "hi": ["Hey! How are you?", "Hi! How are you doing today?"],
+    "hello": ["Hello! How are you?", "Hey! Nice to hear from you. How are you?"],
+    "hey": ["Hey! How are you?", "Hey there. How is your day going?"],
+    "yo": ["Hey! How are you?", "Yo. How are you doing?"],
+    "sup": ["Hey! How are you?", "Not much here. How are you?"],
+    "wassup": ["Hey! How are you?", "What is up? How are you feeling today?"],
 }
+
+AI_MEMORY_MAX_TURNS = 12
+AI_USER_MEMORY: dict[str, list[dict]] = {}
 
 STOCK_ROLE_PINGS = {
     "bamboo": "<@&1524530163155603677>",
@@ -2203,7 +2203,7 @@ def _pick_funny_gif_for_message(message_text: str) -> str:
     lowered = str(message_text or "").lower()
     if any(word in lowered for word in ["sad", "depressed", "bad", "tired", "cry"]):
         return "https://media.giphy.com/media/9Y5BbDSkSTiY8/giphy.gif"
-    if any(word in lowered for word in ["win", "w", "lets go", "let's go", "pog", "hype"]):
+    if any(word in lowered for word in ["win", "lets go", "let's go", "hype", "excited", "great"]):
         return "https://media.giphy.com/media/5GoVLqeAOo6PK/giphy.gif"
     if any(word in lowered for word in ["what", "why", "how", "question", "help"]):
         return "https://media.giphy.com/media/l4FGuhL4U2WyjdkaY/giphy.gif"
@@ -2226,11 +2226,11 @@ def _quick_ai_reply(user_message: str) -> str | None:
             return random.choice(AI_QUICK_GREET_REPLIES[first])
 
     if plain in {"gn", "good night"}:
-        return "good night, sleep easy"
+        return "Good night. Rest well."
     if plain in {"gm", "good morning"}:
-        return "good morning, hope your day slaps"
+        return "Good morning. Hope you have a great day."
     if plain in {"thanks", "thank you", "ty"}:
-        return "anytime 😎"
+        return "You are welcome."
 
     return None
 
@@ -2240,7 +2240,7 @@ def _should_include_gif(message_text: str, ai_reply: str) -> bool:
     reply_lowered = str(ai_reply or "").lower()
 
     # Prefer gifs for high-energy moments or obvious mood keywords.
-    if any(word in lowered for word in ["lol", "lmao", "hype", "win", "pog", "sad", "cry", "angry"]):
+    if any(word in lowered for word in ["hype", "win", "sad", "cry", "angry", "excited", "celebrate"]):
         return random.random() < 0.70
 
     # Questions are a medium chance.
@@ -2248,28 +2248,74 @@ def _should_include_gif(message_text: str, ai_reply: str) -> bool:
         return random.random() < 0.35
 
     # Simple greeting echoes should usually stay text-only.
-    if reply_lowered in {"hi", "hello", "hey", "yo", "sup", "heyo", "hi there", "hey there", "yo yo"}:
+    if "how are you" in reply_lowered:
         return random.random() < 0.12
 
     # General chat gets occasional gif spice.
     return random.random() < 0.25
 
 
-async def _fetch_funny_ai_reply(user_message: str) -> str:
+def _build_ai_memory_key(message: discord.Message) -> str:
+    guild_id = int(message.guild.id) if message.guild is not None else 0
+    return f"{guild_id}:{int(message.author.id)}"
+
+
+def _get_ai_history_lines(memory_key: str, *, limit: int = AI_MEMORY_MAX_TURNS) -> list[str]:
+    rows = AI_USER_MEMORY.get(memory_key, [])
+    clipped = rows[-limit:]
+    lines: list[str] = []
+    for row in clipped:
+        role = str(row.get("role", "user")).strip().lower()
+        text = str(row.get("text", "")).strip()
+        if not text:
+            continue
+        speaker = "User" if role == "user" else "Bot"
+        lines.append(f"{speaker}: {text}")
+    return lines
+
+
+def _remember_ai_turn(memory_key: str, *, role: str, text: str) -> None:
+    cleaned = str(text or "").strip()
+    if not cleaned:
+        return
+    rows = AI_USER_MEMORY.setdefault(memory_key, [])
+    rows.append({"role": role, "text": cleaned[:600]})
+    if len(rows) > AI_MEMORY_MAX_TURNS:
+        AI_USER_MEMORY[memory_key] = rows[-AI_MEMORY_MAX_TURNS:]
+
+
+async def _fetch_funny_ai_reply(user_message: str, *, memory_key: str | None = None) -> str:
     cleaned = str(user_message or "").strip()
     if not cleaned:
-        return random.choice(FUNNY_FALLBACK_REPLIES)
+        return random.choice(AI_FALLBACK_REPLIES)
 
     quick_reply = _quick_ai_reply(cleaned)
     if quick_reply:
         return quick_reply
 
     chatbot_url = "https://api.affiliateplus.xyz/api/chatbot"
+    context_prefix = ""
+    if memory_key:
+        history_lines = _get_ai_history_lines(memory_key)
+        if history_lines:
+            context_prefix = (
+                "Conversation context (most recent first):\n"
+                + "\n".join(history_lines[-6:])
+                + "\n\n"
+            )
+
+    prompt = (
+        "You are a friendly Discord chatbot. Reply naturally, start/continue conversation, and avoid cringe jokes. "
+        "Keep replies concise and human.\n\n"
+        f"{context_prefix}"
+        f"User message: {cleaned[:350]}"
+    )
+
     params = {
-        "message": cleaned[:350],
+        "message": prompt,
         "ownername": "FAS",
         "botname": "FAS AI",
-        "user": "discord-user",
+        "user": memory_key or "discord-user",
     }
     timeout = aiohttp.ClientTimeout(total=8)
     try:
@@ -2286,7 +2332,7 @@ async def _fetch_funny_ai_reply(user_message: str) -> str:
     except Exception:
         pass
 
-    return random.choice(FUNNY_FALLBACK_REPLIES)
+    return random.choice(AI_FALLBACK_REPLIES)
 
 
 async def _handle_ai_chat_channel_message(message: discord.Message) -> bool:
@@ -2299,9 +2345,13 @@ async def _handle_ai_chat_channel_message(message: discord.Message) -> bool:
     if not text and not message.attachments:
         return True
 
+    memory_key = _build_ai_memory_key(message)
+    _remember_ai_turn(memory_key, role="user", text=text)
+
     try:
         async with message.channel.typing():
-            ai_reply = await _fetch_funny_ai_reply(text)
+            ai_reply = await _fetch_funny_ai_reply(text, memory_key=memory_key)
+            _remember_ai_turn(memory_key, role="bot", text=ai_reply)
             if _should_include_gif(text, ai_reply):
                 gif_url = _pick_funny_gif_for_message(text)
                 await message.channel.send(f"{ai_reply}\n\nGIF energy: {gif_url}")
@@ -2310,7 +2360,8 @@ async def _handle_ai_chat_channel_message(message: discord.Message) -> bool:
     except Exception as exc:
         print(f"AI chat channel response failed: {exc}")
         try:
-            fallback_reply = random.choice(FUNNY_FALLBACK_REPLIES)
+            fallback_reply = random.choice(AI_FALLBACK_REPLIES)
+            _remember_ai_turn(memory_key, role="bot", text=fallback_reply)
             if _should_include_gif(text, fallback_reply):
                 await message.channel.send(
                     fallback_reply
