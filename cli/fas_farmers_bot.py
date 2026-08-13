@@ -208,6 +208,7 @@ MEMBER_JOIN_LOG_CHANNEL_ID = 1530260865754992691
 MESSAGE_LOG_CHANNEL_ID = 1530261107946684457
 ROLE_LOG_CHANNEL_ID = 1530264444544876544
 CHANNEL_LOG_CHANNEL_ID = 1530291212819501076
+AI_CHAT_CHANNEL_ID = 1537308469370290237
 SELL_PRICE_LIVE_CHANNEL_ID = 1530414527739330650
 SELL_PRICE_2X_PING_ROLE_ID = 1530415834126745620
 SELL_PRICE_4X_PING_ROLE_ID = 1530416033721090170
@@ -307,6 +308,27 @@ RARITY_EMOJIS = {
     "mythic": "<:Mythic:1525703606534148197>",
     "super": "<:super:1525703689459863703>",
 }
+
+FUNNY_GIF_POOL = [
+    "https://media.giphy.com/media/ICOgUNjpvO0PC/giphy.gif",
+    "https://media.giphy.com/media/3oEjI6SIIHBdRxXI40/giphy.gif",
+    "https://media.giphy.com/media/l0HlBO7eyXzSZkJri/giphy.gif",
+    "https://media.giphy.com/media/26ufdipQqU2lhNA4g/giphy.gif",
+    "https://media.giphy.com/media/3ohs7KViF6rA4aan5u/giphy.gif",
+    "https://media.giphy.com/media/3o7aD2saalBwwftBIY/giphy.gif",
+    "https://media.giphy.com/media/3o6Zt481isNVuQI1l6/giphy.gif",
+    "https://media.giphy.com/media/10LKovKon8DENq/giphy.gif",
+]
+
+FUNNY_FALLBACK_REPLIES = [
+    "I am 73% sure that works, and 27% sure we just invented a new speedrun category.",
+    "Great question. The answer is yes... unless the universe patches it in the next update.",
+    "I ran that through my comedy engine and it returned: absolutely hilarious and probably valid.",
+    "Short answer: yes. Long answer: yeeeeeeeees with extra dramatic music.",
+    "That is either genius or chaos. Usually both.",
+    "I checked my totally real crystal ball and it says: go for it.",
+    "If this breaks reality, we call it a feature and ship it.",
+]
 
 STOCK_ROLE_PINGS = {
     "bamboo": "<@&1524530163155603677>",
@@ -2166,6 +2188,76 @@ async def _set_underdev_mode(enabled: bool) -> tuple[int, int]:
     _start_background_processes()
     await _apply_underdev_presence(False)
     return 0, 0
+
+
+def _pick_funny_gif_for_message(message_text: str) -> str:
+    lowered = str(message_text or "").lower()
+    if any(word in lowered for word in ["sad", "depressed", "bad", "tired", "cry"]):
+        return "https://media.giphy.com/media/9Y5BbDSkSTiY8/giphy.gif"
+    if any(word in lowered for word in ["win", "w", "lets go", "let's go", "pog", "hype"]):
+        return "https://media.giphy.com/media/5GoVLqeAOo6PK/giphy.gif"
+    if any(word in lowered for word in ["what", "why", "how", "question", "help"]):
+        return "https://media.giphy.com/media/l4FGuhL4U2WyjdkaY/giphy.gif"
+    return random.choice(FUNNY_GIF_POOL)
+
+
+async def _fetch_funny_ai_reply(user_message: str) -> str:
+    cleaned = str(user_message or "").strip()
+    if not cleaned:
+        return random.choice(FUNNY_FALLBACK_REPLIES)
+
+    chatbot_url = "https://api.affiliateplus.xyz/api/chatbot"
+    params = {
+        "message": cleaned[:350],
+        "ownername": "FAS",
+        "botname": "FAS AI",
+        "user": "discord-user",
+    }
+    timeout = aiohttp.ClientTimeout(total=8)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(chatbot_url, params=params) as resp:
+                if resp.status == 200:
+                    data = await resp.json(content_type=None)
+                    if isinstance(data, dict):
+                        text = str(data.get("message", "") or data.get("response", "")).strip()
+                        if text:
+                            if len(text) > 800:
+                                text = text[:797] + "..."
+                            return text
+    except Exception:
+        pass
+
+    return random.choice(FUNNY_FALLBACK_REPLIES)
+
+
+async def _handle_ai_chat_channel_message(message: discord.Message) -> bool:
+    if message.guild is None:
+        return False
+    if int(getattr(message.channel, "id", 0) or 0) != AI_CHAT_CHANNEL_ID:
+        return False
+
+    text = str(message.content or "").strip()
+    if not text and not message.attachments:
+        return True
+
+    try:
+        async with message.channel.typing():
+            ai_reply = await _fetch_funny_ai_reply(text)
+            gif_url = _pick_funny_gif_for_message(text)
+            await message.channel.send(f"{ai_reply}\n\nGIF energy: {gif_url}")
+    except Exception as exc:
+        print(f"AI chat channel response failed: {exc}")
+        try:
+            await message.channel.send(
+                random.choice(FUNNY_FALLBACK_REPLIES)
+                + "\n\n"
+                + f"GIF energy: {_pick_funny_gif_for_message(text)}"
+            )
+        except Exception:
+            pass
+
+    return True
 
 
 def _highest_seed_balances(bank_data: dict, top_n: int = 3) -> list[int]:
@@ -7105,6 +7197,9 @@ async def on_message(message: discord.Message):
     if UNDER_DEVELOPMENT_MODE:
         if content.startswith(("-", "/", "?", "!", ".")):
             await message.channel.send(UNDER_DEVELOPMENT_DESCRIPTION)
+        return
+
+    if await _handle_ai_chat_channel_message(message):
         return
 
     if message.guild is not None and BOT_MODE == "farmers" and message.channel.id == PREDICTOR_V2_CHANNEL_ID and content and not content.startswith("-"):
