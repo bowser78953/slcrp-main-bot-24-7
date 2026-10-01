@@ -1,0 +1,20 @@
+{
+  "name": "Vortex",
+  "prefix": "!",
+  "message_content_intent": true,
+  "sync_slash_commands": true,
+  "activity": {
+    "type": "playing",
+    "text": "Vortex"
+  },
+  "commands": {
+    "ping": {
+      "description": "Check that Vortex is online",
+      "response": "Pong! Vortex is online."
+    },
+    "vortex": {
+      "description": "Get the Vortex bot status",
+      "response": "Vortex is online."
+    }
+  }
+}

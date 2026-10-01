@@ -1,6 +1,0 @@
-{
-  "name": "seedshop",
-  "description": "Show active items in the normal seed shop.",
-  "usage": "-seedshop",
-  "category": "seed"
-}

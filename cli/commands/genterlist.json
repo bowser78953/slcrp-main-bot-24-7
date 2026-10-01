@@ -1,6 +1,0 @@
-{
-  "name": "genterlist",
-  "description": "Show entries for a giveaway by ID.",
-  "usage": "-genterlist <giveaway_id>",
-  "category": "giveaway"
-}

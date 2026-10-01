@@ -1,6 +1,0 @@
-{
-  "name": "sreport",
-  "description": "Create a scam report for a user.",
-  "usage": "-sreport <@user> <reason>",
-  "category": "vouch"
-}

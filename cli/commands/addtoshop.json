@@ -1,6 +1,0 @@
-{
-  "name": "addtoshop",
-  "description": "Add an item to the normal seed shop.",
-  "usage": "-addtoshop <item_name> <price>",
-  "category": "seed"
-}

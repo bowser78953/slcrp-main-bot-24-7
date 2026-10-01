@@ -1,6 +1,0 @@
-{
-  "name": "kick",
-  "description": "Kick a user from the server.",
-  "usage": "-kick <@user> <reason>",
-  "category": "moderation"
-}

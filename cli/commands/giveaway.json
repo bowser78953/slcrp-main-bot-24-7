@@ -1,7 +1,0 @@
-{
-  "name": "giveaway",
-  "description": "Create a giveaway using slash command.",
-  "usage": "/giveaway",
-  "category": "slash",
-  "command_type": "slash"
-}

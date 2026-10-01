@@ -1,6 +1,0 @@
-{
-  "name": "greroll",
-  "description": "Reroll winners for a finished giveaway you hosted.",
-  "usage": "-greroll <giveaway_id>",
-  "category": "giveaway"
-}

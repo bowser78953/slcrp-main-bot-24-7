@@ -1,6 +1,0 @@
-{
-  "name": "buy",
-  "description": "Buy an active item from the seed shop.",
-  "usage": "-buy <item_id>",
-  "category": "seed"
-}

@@ -1,6 +1,0 @@
-{
-  "name": "predict",
-  "description": "Predict when a seed may return in stock.",
-  "usage": "-predict <seed_name>",
-  "category": "prediction"
-}

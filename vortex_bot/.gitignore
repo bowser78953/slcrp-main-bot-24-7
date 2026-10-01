@@ -1,0 +1,11 @@
+.env
+__pycache__/
+shift_types.json
+universal_nicknames.json
+universal_roles.json
+command_levels.json
+loa_settings.json
+shift_sessions.json
+shift_log_channels.json
+shift_totals.json
+erlc_connections.json

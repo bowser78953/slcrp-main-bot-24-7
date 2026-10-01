@@ -1,11 +1,19 @@
 services:
   - type: worker
     name: slcrp-main-bot
-    env: python
-    plan: free
-    autoDeploy: true
-    buildCommand: pip install -r requirements.txt
-    startCommand: python run_bots.py
+    runtime: python
+    region: oregon
+    plan: 0.5c-512mb
+    branch: main
+    autoDeployTrigger: commit
+    buildCommand: pip install -r vortex_bot/requirements.txt
+    startCommand: python vortex_bot/main.py
+    disk:
+      name: vortex-data
+      mountPath: /var/data
+      sizeGB: 1
     envVars:
       - key: DISCORD_BOT_TOKEN
         sync: false
+      - key: VORTEX_DATA_DIR
+        value: /var/data

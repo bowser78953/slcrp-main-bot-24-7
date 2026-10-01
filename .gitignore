@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.venv/
+.env
+vortex_bot/.env
+vortex_bot/command_levels.json
+vortex_bot/erlc_connections.json
+vortex_bot/loa_settings.json
+vortex_bot/shift_log_channels.json
+vortex_bot/shift_sessions.json
+vortex_bot/shift_totals.json
+vortex_bot/shift_types.json
+vortex_bot/universal_nicknames.json
+vortex_bot/universal_roles.json

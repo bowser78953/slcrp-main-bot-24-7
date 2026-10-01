@@ -1,6 +1,0 @@
-{
-  "name": "timeout",
-  "description": "Temporarily timeout a user.",
-  "usage": "-timeout <@user> <reason> <time>",
-  "category": "moderation"
-}
