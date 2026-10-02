@@ -1,0 +1,12 @@
+{
+  "commands": [
+    "config/commands.json",
+    "data/responses.json"
+  ],
+  "giveaway": [
+    "commands/giveaway.json"
+  ],
+  "settings": [
+    "config/settings.json"
+  ]
+}

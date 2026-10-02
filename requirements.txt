@@ -1,1 +1,2 @@
 -r vortex_bot/requirements.txt
+-r discord_bot/requirements.txt

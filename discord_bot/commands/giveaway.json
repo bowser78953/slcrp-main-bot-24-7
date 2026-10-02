@@ -1,0 +1,6 @@
+{
+  "name": "giveaway",
+  "description": "Show giveaway info",
+  "aliases": ["gaw", "give"],
+  "response": "Giveaway is active. Use #giveaway-entry to join."
+}

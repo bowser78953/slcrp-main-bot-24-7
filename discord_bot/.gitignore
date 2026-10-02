@@ -1,0 +1,4 @@
+.env
+data/saved_roles.json
+data/bot_state.json
+data/clear_transcripts.json

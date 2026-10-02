@@ -6,8 +6,8 @@ services:
     plan: 0.5c-512mb
     branch: main
     autoDeployTrigger: commit
-    buildCommand: pip install -r vortex_bot/requirements.txt
-    startCommand: python vortex_bot/main.py
+    buildCommand: pip install -r requirements.txt
+    startCommand: python run_bots.py
     disk:
       name: vortex-data
       mountPath: /var/data
@@ -15,5 +15,9 @@ services:
     envVars:
       - key: DISCORD_BOT_TOKEN
         sync: false
+      - key: VORTEX_BOT_TOKEN
+        sync: false
       - key: VORTEX_DATA_DIR
         value: /var/data
+      - key: DISCORD_BOT_DATA_DIR
+        value: /var/data/indiana-state

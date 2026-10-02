@@ -1,0 +1,72 @@
+{
+  "cmds": {
+    "description": "Show a list of all commands",
+    "response_key": "_help",
+    "aliases": []
+  },
+  "gsban": {
+    "description": "Globally ban a user from every server the bot is in",
+    "response_key": "_prefix_only",
+    "aliases": []
+  },
+  "gsunban": {
+    "description": "Unban a user from every server the bot is in",
+    "response_key": "_prefix_only",
+    "aliases": []
+  },
+  "sr": {
+    "description": "Save this server's assignable roles at or above the configured threshold",
+    "response_key": "_prefix_only",
+    "aliases": []
+  },
+  "tar": {
+    "description": "Remove this server's assignable roles at or above the configured threshold",
+    "response_key": "_prefix_only",
+    "aliases": []
+  },
+  "gar": {
+    "description": "Restore this server's saved roles at or above the configured threshold",
+    "response_key": "_prefix_only",
+    "aliases": []
+  },
+  "clear": {
+    "description": "Clear recent messages and save a transcript",
+    "response_key": "_prefix_only",
+    "aliases": []
+  },
+  "cleartranscript": {
+    "description": "Retrieve a clear transcript by its ID",
+    "response_key": "_prefix_only",
+    "aliases": []
+  },
+  "lockchannel": {
+    "description": "Prevent everyone and the configured role from typing in this channel",
+    "response_key": "_prefix_only",
+    "aliases": []
+  },
+  "unlock": {
+    "description": "Restore this channel's saved typing permissions",
+    "response_key": "_prefix_only",
+    "aliases": []
+  },
+  "help": {
+    "description": "Show all commands",
+    "response_key": "_help",
+    "aliases": ["h", "commands"]
+  },
+  "ping": {
+    "description": "Bot replies with pong",
+    "response_key": "pong_text",
+    "aliases": []
+  },
+  "rules": {
+    "description": "Show server rules message",
+    "response_key": "rules_text",
+    "aliases": ["rule"]
+  },
+  "farm": {
+    "description": "Show your farming checklist",
+    "response_key": "farm_checklist",
+    "aliases": ["checklist"]
+  }
+}
