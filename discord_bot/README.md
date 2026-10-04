@@ -61,7 +61,7 @@ Use `!lockchannel` to deny Send Messages to @everyone and role `1554697553461903
 
 ## Automod
 
-Incoming member messages are checked case-insensitively for the whole words `fuck`, `shit`, `bitch`, `dick`, `fucker`, `motherfucker`, and `ass`. Members with role `1556404763887800370` are exempt. Cases are logged in channel `1554592774626484404`; moderators with Manage Messages permission can record Take Action or Dismiss. These buttons record a case decision but do not automatically ban, kick, or warn the member.
+Incoming member messages are checked case-insensitively for whole words listed in `config/automod.json`. Members with role `1556404763887800370` are exempt. Edit the `words` array and run `!reload automod` to apply changes immediately without restarting. Cases are logged in channel `1554592774626484404`; moderators with Manage Messages permission can record Take Action or Dismiss. These buttons record a case decision but do not automatically ban, kick, or warn the member.
 
 ## Edit Commands
 

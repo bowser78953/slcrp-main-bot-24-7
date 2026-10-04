@@ -28,7 +28,6 @@ CHANNEL_LOCK_ROLE_ID = 1554697553461903400
 AUTOMOD_AUDIT_CHANNEL_ID = 1554592774626484404
 AUTOMOD_CC_ROLE_ID = 1554635863739080764
 AUTOMOD_EXEMPT_ROLE_ID = 1556404763887800370
-AUTOMOD_WORD_PATTERN = re.compile(r"\b(motherfucker|fucker|fuck|shit|bitch|dick|ass)\b", re.IGNORECASE)
 
 
 def resolve_token(settings: dict[str, Any]) -> str:
@@ -93,6 +92,27 @@ def _load_categories(path: Path) -> dict[str, list[str]]:
     return categories
 
 
+def _load_automod_words(path: Path) -> list[str]:
+    try:
+        raw_data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ConfigError(f"Could not load automod word list {path}: {exc}") from exc
+
+    if not isinstance(raw_data, dict) or not isinstance(raw_data.get("words"), list):
+        raise ConfigError(f"Automod config must contain a words array: {path}")
+    if any(not isinstance(word, str) for word in raw_data["words"]):
+        raise ConfigError(f"Automod words must all be strings: {path}")
+
+    return list(dict.fromkeys(word.strip() for word in raw_data["words"] if word.strip()))
+
+
+def _compile_automod_words(words: list[str]) -> re.Pattern[str] | None:
+    if not words:
+        return None
+    alternatives = "|".join(re.escape(word) for word in sorted(words, key=len, reverse=True))
+    return re.compile(rf"\b(?:{alternatives})\b", re.IGNORECASE)
+
+
 def load_all_config(base_path: Path) -> tuple[dict[str, Any], dict[str, Any], dict[str, str], dict[str, list[str]]]:
     load_dotenv(base_path / ".env")
 
@@ -123,12 +143,15 @@ class ConfigReloader:
         self.commands_path = base_path / "config" / "commands.json"
         self.responses_path = base_path / "data" / "responses.json"
         self.categories_path = base_path / "config" / "catagorys.json"
+        self.automod_path = base_path / "config" / "automod.json"
         self.commands_dir = base_path / "commands"
 
         self.settings: dict[str, Any] = {}
         self.commands: dict[str, Any] = {}
         self.responses: dict[str, str] = {}
         self.categories: dict[str, list[str]] = {}
+        self.automod_words: list[str] = []
+        self.automod_pattern: re.Pattern[str] | None = None
         self._file_mtimes: dict[Path, int] = {}
 
     def load_initial(self) -> None:
@@ -137,10 +160,12 @@ class ConfigReloader:
         self.commands = commands
         self.responses = responses
         self.categories = categories
+        self.automod_words = _load_automod_words(self.automod_path)
+        self.automod_pattern = _compile_automod_words(self.automod_words)
         self._refresh_mtimes()
 
     def _tracked_files(self) -> list[Path]:
-        tracked = [self.settings_path, self.commands_path, self.responses_path, self.categories_path]
+        tracked = [self.settings_path, self.commands_path, self.responses_path, self.categories_path, self.automod_path]
         if self.commands_dir.exists():
             tracked.extend(sorted(self.commands_dir.glob("*.json")))
         return [path for path in tracked if path.exists()]
@@ -171,6 +196,7 @@ class ConfigReloader:
         old_commands = self.commands
 
         settings, commands, responses, categories = load_all_config(self.base_path)
+        automod_words = _load_automod_words(self.automod_path)
 
         settings["token"] = resolve_token(settings)
 
@@ -180,6 +206,8 @@ class ConfigReloader:
         self.commands = commands
         self.responses = responses
         self.categories = categories
+        self.automod_words = automod_words
+        self.automod_pattern = _compile_automod_words(automod_words)
         self._refresh_mtimes()
         return True, command_schema_changed
 
@@ -690,7 +718,8 @@ class FarmersDiscordBot(discord.Client):
         if any(role.id == AUTOMOD_EXEMPT_ROLE_ID for role in getattr(message.author, "roles", ())):
             return False
 
-        match = AUTOMOD_WORD_PATTERN.search(message.content)
+        pattern = self.config_reloader.automod_pattern
+        match = pattern.search(message.content) if pattern else None
         if match is None:
             return False
 
@@ -1374,12 +1403,15 @@ class FarmersDiscordBot(discord.Client):
 
     async def force_reload(self) -> tuple[bool, bool]:
         settings, commands, responses, categories = load_all_config(self.config_reloader.base_path)
+        automod_words = _load_automod_words(self.config_reloader.automod_path)
         previous_commands = self.config_reloader.commands
 
         self.config_reloader.settings = settings
         self.config_reloader.commands = commands
         self.config_reloader.responses = responses
         self.config_reloader.categories = categories
+        self.config_reloader.automod_words = automod_words
+        self.config_reloader.automod_pattern = _compile_automod_words(automod_words)
         self.config_reloader._refresh_mtimes()
 
         self.settings = settings

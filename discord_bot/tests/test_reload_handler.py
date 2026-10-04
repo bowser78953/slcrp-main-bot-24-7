@@ -1,18 +1,21 @@
 import asyncio
 from copy import deepcopy
 from datetime import datetime, timezone
+import json
+import os
+import re
 import tempfile
 import unittest
 from pathlib import Path
 import sys
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from discord_bot.bot.client import FarmersDiscordBot
+from discord_bot.bot.client import ConfigReloader, FarmersDiscordBot
 from discord_bot.bot.handlers import MessageHandler
 from discord_bot.bot.json_store import JsonStore
 
@@ -99,6 +102,54 @@ class DummyPurgeChannel(DummyChannel):
 
 
 class ReloadHandlerTests(unittest.TestCase):
+    def test_automod_words_update_with_reload_automod(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base_path = Path(directory)
+            config_path = base_path / "config"
+            data_path = base_path / "data"
+            commands_path = base_path / "commands"
+            config_path.mkdir()
+            data_path.mkdir()
+            commands_path.mkdir()
+
+            (config_path / "settings.json").write_text(
+                json.dumps(
+                    {
+                        "token": "PUT_YOUR_DISCORD_BOT_TOKEN_HERE",
+                        "prefix": "!",
+                        "sync_slash_on_startup": False,
+                        "sync_slash_on_change": False,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (config_path / "commands.json").write_text("{}", encoding="utf-8")
+            (data_path / "responses.json").write_text("{}", encoding="utf-8")
+            (config_path / "catagorys.json").write_text(
+                json.dumps({"automod": ["config/automod.json"]}),
+                encoding="utf-8",
+            )
+            automod_path = config_path / "automod.json"
+            automod_path.write_text(json.dumps({"words": ["badword"]}), encoding="utf-8")
+
+            with patch.dict(os.environ, {"DISCORD_BOT_TOKEN": "test-token"}):
+                bot = FarmersDiscordBot(base_path=base_path)
+                self.assertTrue(bot.config_reloader.automod_pattern.search("badword"))
+
+                automod_path.write_text(json.dumps({"words": ["newword"]}), encoding="utf-8")
+                original_mtime = automod_path.stat().st_mtime_ns
+                os.utime(automod_path, ns=(original_mtime + 1_000_000, original_mtime + 1_000_000))
+
+                channel = DummyChannel()
+                handled = asyncio.run(
+                    bot.handle_reload_command(DummyMessage("!reload Automod", channel=channel))
+                )
+
+                self.assertTrue(handled)
+                self.assertIn("config/automod.json", channel.messages[0])
+                self.assertTrue(bot.config_reloader.automod_pattern.search("NEWWORD"))
+                self.assertIsNone(bot.config_reloader.automod_pattern.search("badword"))
+
     def test_lockchannel_denies_typing_and_question_unlock_restores_overwrites(self):
         everyone = SimpleNamespace(id=1)
         protected_role = SimpleNamespace(id=1554697553461903400)
@@ -243,6 +294,7 @@ class ReloadHandlerTests(unittest.TestCase):
         bot = SimpleNamespace(
             automod_cases={},
             last_moderation_cases={},
+            config_reloader=SimpleNamespace(automod_pattern=re.compile(r"\b(?:fuck|shit|bitch|dick|fucker|motherfucker|ass)\b", re.IGNORECASE)),
             persistent_state_store=SimpleNamespace(save=lambda state: saved_states.append(deepcopy(state))),
             giveaways={},
             giveaway_ping_roles={},

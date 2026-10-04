@@ -8,5 +8,8 @@
   ],
   "settings": [
     "config/settings.json"
+  ],
+  "automod": [
+    "config/automod.json"
   ]
 }
