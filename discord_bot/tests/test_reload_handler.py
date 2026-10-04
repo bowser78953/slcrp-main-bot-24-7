@@ -15,7 +15,7 @@ import discord
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from discord_bot.bot.client import ConfigReloader, FarmersDiscordBot
+from discord_bot.bot.client import BOT_CONTROL_OWNER_ID, ConfigReloader, FarmersDiscordBot, GuardedCommandTree
 from discord_bot.bot.handlers import MessageHandler
 from discord_bot.bot.json_store import JsonStore
 
@@ -102,6 +102,124 @@ class DummyPurgeChannel(DummyChannel):
 
 
 class ReloadHandlerTests(unittest.TestCase):
+    def test_underdev_and_user_controls_persist_and_confirm_publicly(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = JsonStore(Path(directory) / "bot_state.json")
+            saved_states = []
+            bot = SimpleNamespace(
+                underdev_enabled=False,
+                disabled_user_ids=set(),
+                giveaways={},
+                giveaway_ping_roles={},
+                channel_lock_snapshots={},
+                automod_cases={},
+                last_moderation_cases={},
+                persistent_state_store=SimpleNamespace(save=lambda data: saved_states.append(deepcopy(data))),
+                handler=MessageHandler(settings={"prefix": "-"}, commands={}, responses={}),
+                change_presence=AsyncMock(),
+            )
+            bot._save_persistent_state = lambda: FarmersDiscordBot._save_persistent_state(bot)
+            bot._apply_presence = AsyncMock()
+            bot._command_access_denial = lambda user_id: FarmersDiscordBot._command_access_denial(bot, user_id)
+            channel = DummyChannel()
+            owner = SimpleNamespace(id=BOT_CONTROL_OWNER_ID)
+
+            underdev_message = SimpleNamespace(content="!underdev", author=owner, channel=channel)
+            self.assertTrue(asyncio.run(FarmersDiscordBot._handle_bot_control_command(bot, underdev_message)))
+            self.assertTrue(bot.underdev_enabled)
+            self.assertIn("enabled", channel.messages[-1])
+            self.assertTrue(saved_states[-1]["underdev_enabled"])
+            bot._apply_presence.assert_awaited_once()
+
+            denied = FarmersDiscordBot._command_access_denial(bot, 200)
+            self.assertIn("under development", denied)
+            self.assertIsNone(FarmersDiscordBot._command_access_denial(bot, BOT_CONTROL_OWNER_ID))
+
+            class DummyResponse:
+                def __init__(self):
+                    self.sent = []
+                    self.edited = None
+
+                async def send_message(self, content, **kwargs):
+                    self.sent.append((content, kwargs))
+
+                async def edit_message(self, **kwargs):
+                    self.edited = kwargs
+
+            tree_interaction_response = DummyResponse()
+            tree_interaction = SimpleNamespace(
+                user=SimpleNamespace(id=200),
+                response=tree_interaction_response,
+            )
+            allowed = asyncio.run(
+                GuardedCommandTree.interaction_check(
+                    SimpleNamespace(client=bot),
+                    tree_interaction,
+                )
+            )
+            self.assertFalse(allowed)
+            self.assertFalse(tree_interaction_response.sent[0][1].get("ephemeral", False))
+
+            disable_message = SimpleNamespace(
+                content="!disable bot <@200>",
+                author=owner,
+                channel=channel,
+            )
+            self.assertTrue(asyncio.run(FarmersDiscordBot._handle_bot_control_command(bot, disable_message)))
+            self.assertIn("ARE YOU SURE", channel.messages[-1])
+            self.assertIn("BE SCARED", channel.messages[-1])
+            self.assertFalse(channel.send_kwargs[-1]["allowed_mentions"].users)
+            button = channel.send_kwargs[-1]["view"].children[0]
+            self.assertEqual(button.label, "Disable bot")
+
+            confirmation_response = DummyResponse()
+            confirmation = SimpleNamespace(
+                user=owner,
+                response=confirmation_response,
+            )
+            asyncio.run(
+                FarmersDiscordBot._handle_bot_control_interaction(
+                    bot,
+                    confirmation,
+                    f"bot-disable-confirm:200:{BOT_CONTROL_OWNER_ID}",
+                )
+            )
+            self.assertIn(200, bot.disabled_user_ids)
+            self.assertIsNone(confirmation_response.edited["view"])
+            self.assertIn("disabled", confirmation_response.edited["content"])
+            self.assertIn("disabled", FarmersDiscordBot._command_access_denial(bot, 200))
+
+            enable_message = SimpleNamespace(
+                content="!enable bot 200",
+                author=owner,
+                channel=channel,
+            )
+            self.assertTrue(asyncio.run(FarmersDiscordBot._handle_bot_control_command(bot, enable_message)))
+            self.assertNotIn(200, bot.disabled_user_ids)
+            self.assertIn("under development", FarmersDiscordBot._command_access_denial(bot, 200))
+            self.assertFalse(channel.send_kwargs[-1].get("ephemeral", False))
+
+            restore_message = SimpleNamespace(content="!underdev", author=owner, channel=channel)
+            asyncio.run(FarmersDiscordBot._handle_bot_control_command(bot, restore_message))
+            self.assertFalse(bot.underdev_enabled)
+            self.assertIsNone(FarmersDiscordBot._command_access_denial(bot, 200))
+            self.assertFalse(saved_states[-1]["underdev_enabled"])
+
+            restored = SimpleNamespace(
+                persistent_state_store=store,
+                giveaways={},
+                giveaway_ping_roles={},
+                channel_lock_snapshots={},
+                automod_cases={},
+                last_moderation_cases={},
+                underdev_enabled=False,
+                disabled_user_ids=set(),
+            )
+            store.save(saved_states[-3])
+            FarmersDiscordBot._load_persistent_state(restored)
+            self.assertIn(200, restored.disabled_user_ids)
+            self.assertTrue(restored.underdev_enabled)
+
     def test_automod_words_update_with_reload_automod(self):
         with tempfile.TemporaryDirectory() as directory:
             base_path = Path(directory)
@@ -250,6 +368,8 @@ class ReloadHandlerTests(unittest.TestCase):
                 },
                 automod_cases={"123": {"guild_id": 303, "resolution": None}},
                 last_moderation_cases={"303:11": "Ban"},
+                underdev_enabled=True,
+                disabled_user_ids={90},
             )
 
             FarmersDiscordBot._save_persistent_state(original)
@@ -261,6 +381,8 @@ class ReloadHandlerTests(unittest.TestCase):
                 channel_lock_snapshots={},
                 automod_cases={},
                 last_moderation_cases={},
+                underdev_enabled=False,
+                disabled_user_ids=set(),
             )
             FarmersDiscordBot._load_persistent_state(restored)
 
@@ -270,6 +392,8 @@ class ReloadHandlerTests(unittest.TestCase):
             self.assertEqual(restored.channel_lock_snapshots, original.channel_lock_snapshots)
             self.assertEqual(restored.automod_cases, original.automod_cases)
             self.assertEqual(restored.last_moderation_cases, original.last_moderation_cases)
+            self.assertTrue(restored.underdev_enabled)
+            self.assertEqual(restored.disabled_user_ids, {90})
 
     def test_automod_logs_word_case_and_persists_button_resolution(self):
         cc_role = SimpleNamespace(id=1554635863739080764)
@@ -361,6 +485,7 @@ class ReloadHandlerTests(unittest.TestCase):
         self.assertEqual(bot.automod_cases["123"]["resolved_by"], 66)
         self.assertIsNone(response.edited["view"])
         self.assertIn("Has moderated the user.", followup.messages[0][0])
+        self.assertFalse(any(kwargs.get("ephemeral", False) for _, kwargs in followup.messages))
         self.assertTrue(saved_states)
 
         bot.automod_cases["124"] = {"guild_id": 303, "user_id": 55, "resolution": None}

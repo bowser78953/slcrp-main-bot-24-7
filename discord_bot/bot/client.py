@@ -22,6 +22,18 @@ class ConfigError(Exception):
     pass
 
 
+BOT_CONTROL_OWNER_ID = 1332458947067773072
+
+
+class GuardedCommandTree(app_commands.CommandTree):
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        denial = self.client._command_access_denial(interaction.user.id)
+        if denial:
+            await interaction.response.send_message(denial)
+            return False
+        return True
+
+
 GLOBAL_BAN_AUDIT_CHANNEL_ID = 1554592675116744786
 ROLE_THRESHOLD_ROLE_ID = 1554533334955069632
 CHANNEL_LOCK_ROLE_ID = 1554697553461903400
@@ -225,7 +237,7 @@ class FarmersDiscordBot(discord.Client):
         intents.message_content = bool(settings.get("message_content_intent", True))
         super().__init__(intents=intents)
 
-        self.tree = app_commands.CommandTree(self)
+        self.tree = GuardedCommandTree(self)
         self.settings = settings
         self.handler = MessageHandler(settings=settings, commands=commands, responses=responses)
         self.categories = self.config_reloader.categories
@@ -234,6 +246,8 @@ class FarmersDiscordBot(discord.Client):
         self.channel_lock_snapshots: dict[str, dict[str, Any]] = {}
         self.automod_cases: dict[str, dict[str, Any]] = {}
         self.last_moderation_cases: dict[str, str] = {}
+        self.underdev_enabled = False
+        self.disabled_user_ids: set[int] = set()
         self._giveaway_tasks: dict[int, asyncio.Task[None]] = {}
         self.data_path = Path(os.getenv("DISCORD_BOT_DATA_DIR", base_path / "data"))
         self.data_path.mkdir(parents=True, exist_ok=True)
@@ -303,6 +317,15 @@ class FarmersDiscordBot(discord.Client):
                 if str(case_name) in {"Ban", "Kick", "Warning", "N/A"}
             }
 
+        self.underdev_enabled = bool(state.get("underdev_enabled", False))
+        raw_disabled_users = state.get("disabled_user_ids", [])
+        if isinstance(raw_disabled_users, list):
+            self.disabled_user_ids = {
+                int(user_id)
+                for user_id in raw_disabled_users
+                if str(user_id).isdigit()
+            }
+
     def _save_persistent_state(self) -> None:
         giveaways = {}
         for giveaway_id, giveaway in self.giveaways.items():
@@ -322,6 +345,10 @@ class FarmersDiscordBot(discord.Client):
                 "channel_lock_snapshots": self.channel_lock_snapshots,
                 "automod_cases": self.automod_cases,
                 "last_moderation_cases": self.last_moderation_cases,
+                "underdev_enabled": bool(getattr(self, "underdev_enabled", False)),
+                "disabled_user_ids": sorted(
+                    int(user_id) for user_id in getattr(self, "disabled_user_ids", set())
+                ),
             }
         )
 
@@ -500,6 +527,9 @@ class FarmersDiscordBot(discord.Client):
         if not interaction.data or "custom_id" not in interaction.data:
             return
         custom_id = str(interaction.data["custom_id"])
+        if custom_id.startswith("bot-disable-confirm:"):
+            await self._handle_bot_control_interaction(interaction, custom_id)
+            return
         if custom_id.startswith("automod-case:"):
             await self._handle_automod_case_interaction(interaction, custom_id)
             return
@@ -538,6 +568,8 @@ class FarmersDiscordBot(discord.Client):
             if command_name in {
                 "giveaway", "gwlist", "forceend", "gsban", "gsunban",
                 "sr", "tar", "gar", "clear", "cleartranscript", "lockchannel", "unlock",
+                "underdev", "disable", "enable",
+                "underdev", "disable", "enable",
             }:
                 continue
             slash_name = self._safe_slash_name(command_name)
@@ -776,18 +808,18 @@ class FarmersDiscordBot(discord.Client):
 
         case = self.automod_cases.get(case_id)
         if action not in {"take", "dismiss"} or case is None:
-            await interaction.response.send_message("This automod case is no longer available.", ephemeral=True)
+            await interaction.response.send_message("This automod case is no longer available.")
             return
         if interaction.guild is None or interaction.guild.id != int(case.get("guild_id", 0)):
-            await interaction.response.send_message("This case belongs to another server.", ephemeral=True)
+            await interaction.response.send_message("This case belongs to another server.")
             return
 
         permissions = getattr(interaction.user, "guild_permissions", None)
         if not permissions or not (permissions.administrator or permissions.manage_messages):
-            await interaction.response.send_message("You need Manage Messages permission to resolve this case.", ephemeral=True)
+            await interaction.response.send_message("You need Manage Messages permission to resolve this case.")
             return
         if case.get("resolution") is not None:
-            await interaction.response.send_message("This automod case has already been resolved.", ephemeral=True)
+            await interaction.response.send_message("This automod case has already been resolved.")
             return
 
         resolution = "take" if action == "take" else "dismiss"
@@ -798,7 +830,7 @@ class FarmersDiscordBot(discord.Client):
         except OSError as exc:
             case["resolution"] = None
             case["resolved_by"] = None
-            await interaction.response.send_message(f"Could not save this case resolution: {exc}", ephemeral=True)
+            await interaction.response.send_message(f"Could not save this case resolution: {exc}")
             return
 
         await interaction.response.edit_message(view=None)
@@ -809,6 +841,163 @@ class FarmersDiscordBot(discord.Client):
         await interaction.followup.send(
             response,
             allowed_mentions=discord.AllowedMentions(users=[interaction.user]),
+        )
+
+    def _command_access_denial(self, user_id: int) -> str | None:
+        if user_id == BOT_CONTROL_OWNER_ID:
+            return None
+        if user_id in self.disabled_user_ids:
+            return "Bot access has been disabled for your account."
+        if self.underdev_enabled:
+            return "The bot is under development; only the owner can use commands right now."
+        return None
+
+    def _is_command_message(self, content: str) -> bool:
+        token = content.strip().split(maxsplit=1)[0] if content.strip() else ""
+        if token == "?unlock":
+            return True
+        return any(
+            token.startswith(prefix) and len(token) > len(prefix)
+            for prefix in self.handler._candidate_prefixes()
+        )
+
+    async def _apply_presence(self) -> None:
+        if self.underdev_enabled:
+            await self.change_presence(
+                status=discord.Status.idle,
+                activity=discord.Game(name="⚠️ Bot Under Development"),
+            )
+            return
+
+        activity_text = self.settings.get("activity_text", "Type !help")
+        activity_type = self.settings.get("activity_type", "playing").lower()
+        activity_map = {
+            "playing": discord.ActivityType.playing,
+            "watching": discord.ActivityType.watching,
+            "listening": discord.ActivityType.listening,
+        }
+        selected_activity = activity_map.get(activity_type, discord.ActivityType.playing)
+        await self.change_presence(
+            status=discord.Status.online,
+            activity=discord.Activity(type=selected_activity, name=activity_text),
+        )
+
+    async def _handle_bot_control_command(self, message: discord.Message) -> bool:
+        parts = message.content.strip().split(maxsplit=2)
+        if not parts:
+            return False
+
+        command_name = next(
+            (
+                parts[0][len(prefix):].lower()
+                for prefix in self.handler._candidate_prefixes()
+                if parts[0].startswith(prefix)
+                and parts[0][len(prefix):].lower() in {"underdev", "disable", "enable"}
+            ),
+            None,
+        )
+        if command_name is None:
+            return False
+        if message.author.id != BOT_CONTROL_OWNER_ID:
+            await message.channel.send("Only the bot owner can use this control command.")
+            return True
+
+        if command_name == "underdev":
+            previous_state = self.underdev_enabled
+            self.underdev_enabled = not previous_state
+            try:
+                self._save_persistent_state()
+            except OSError as exc:
+                self.underdev_enabled = previous_state
+                await message.channel.send(f"Could not save under-development mode: {exc}")
+                return True
+            await self._apply_presence()
+            state = "enabled" if self.underdev_enabled else "disabled"
+            await message.channel.send(f"Under-development mode {state}.")
+            return True
+
+        if len(parts) < 3 or parts[1].lower() != "bot":
+            await message.channel.send(f"Usage: {parts[0]} bot <user mention/user ID>")
+            return True
+        target_match = re.fullmatch(r"<@!?([0-9]+)>|([0-9]+)", parts[2])
+        if target_match is None:
+            await message.channel.send("Provide a user mention or numeric user ID.")
+            return True
+
+        target_id = int(target_match.group(1) or target_match.group(2))
+        if target_id <= 0:
+            await message.channel.send("Provide a valid user ID.")
+            return True
+        if target_id == BOT_CONTROL_OWNER_ID:
+            await message.channel.send("The bot owner cannot be disabled.")
+            return True
+
+        if command_name == "disable":
+            view = discord.ui.View(timeout=300)
+            view.add_item(
+                discord.ui.Button(
+                    label="Disable bot",
+                    style=discord.ButtonStyle.danger,
+                    custom_id=f"bot-disable-confirm:{target_id}:{message.author.id}",
+                )
+            )
+            await message.channel.send(
+                f"***ARE YOU SURE YOU WANT TO DISABLE THE BOT FOR <@{target_id}>***\n"
+                "-# if bowser is treating you with this BE SCARED!",
+                view=view,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return True
+
+        previous_state = target_id in self.disabled_user_ids
+        self.disabled_user_ids.discard(target_id)
+        try:
+            self._save_persistent_state()
+        except OSError as exc:
+            if previous_state:
+                self.disabled_user_ids.add(target_id)
+            await message.channel.send(f"Could not enable bot access for <@{target_id}>: {exc}")
+            return True
+        await message.channel.send(
+            f"Bot access enabled for <@{target_id}>.",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        return True
+
+    async def _handle_bot_control_interaction(
+        self,
+        interaction: discord.Interaction,
+        custom_id: str,
+    ) -> None:
+        try:
+            _, target_text, requester_text = custom_id.split(":", maxsplit=2)
+            target_id = int(target_text)
+            requester_id = int(requester_text)
+        except (ValueError, TypeError):
+            await interaction.response.send_message("This disable request is invalid.")
+            return
+
+        if interaction.user.id != BOT_CONTROL_OWNER_ID or requester_id != BOT_CONTROL_OWNER_ID:
+            await interaction.response.send_message("Only the bot owner can confirm this request.")
+            return
+        if target_id == BOT_CONTROL_OWNER_ID:
+            await interaction.response.send_message("The bot owner cannot be disabled.")
+            return
+
+        was_disabled = target_id in self.disabled_user_ids
+        self.disabled_user_ids.add(target_id)
+        try:
+            self._save_persistent_state()
+        except OSError as exc:
+            if not was_disabled:
+                self.disabled_user_ids.discard(target_id)
+            await interaction.response.send_message(f"Could not disable bot access: {exc}")
+            return
+
+        await interaction.response.edit_message(
+            content=f"Bot access disabled for <@{target_id}>.",
+            view=None,
+            allowed_mentions=discord.AllowedMentions.none(),
         )
 
     def _build_clear_audit_view(self, executor_id: int, cleared_count: int, transcript_id: str) -> discord.ui.LayoutView:
@@ -1474,17 +1663,7 @@ class FarmersDiscordBot(discord.Client):
         for giveaway_id, giveaway in self.giveaways.items():
             if not giveaway.get("ended") or not giveaway.get("result_posted"):
                 self._schedule_giveaway(giveaway_id)
-        activity_text = self.settings.get("activity_text", "Type !help")
-        activity_type = self.settings.get("activity_type", "playing").lower()
-
-        activity_map = {
-            "playing": discord.ActivityType.playing,
-            "watching": discord.ActivityType.watching,
-            "listening": discord.ActivityType.listening,
-        }
-        selected_activity = activity_map.get(activity_type, discord.ActivityType.playing)
-
-        await self.change_presence(activity=discord.Activity(type=selected_activity, name=activity_text))
+        await self._apply_presence()
         print(f"Logged in as {self.user} (ID: {self.user.id})")
 
     async def on_message(self, message: discord.Message) -> None:
@@ -1493,6 +1672,13 @@ class FarmersDiscordBot(discord.Client):
             return
         if await self._handle_automod_message(message):
             return
+        if self._is_command_message(message.content):
+            denial = self._command_access_denial(message.author.id)
+            if denial:
+                await message.channel.send(denial)
+                return
+            if await self._handle_bot_control_command(message):
+                return
         if await self._handle_clear_transcript_command(message):
             return
         if await self._handle_clear_command(message):

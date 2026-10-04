@@ -63,6 +63,10 @@ Use `!lockchannel` to deny Send Messages to @everyone and role `1554697553461903
 
 Incoming member messages are checked case-insensitively for whole words listed in `config/automod.json`. Members with role `1556404763887800370` are exempt. Edit the `words` array and run `!reload automod` to apply changes immediately without restarting. Cases are logged in channel `1554592774626484404`; moderators with Manage Messages permission can record Take Action or Dismiss. These buttons record a case decision but do not automatically ban, kick, or warn the member.
 
+## Bot Access Controls
+
+The owner account `1332458947067773072` can toggle `!underdev`; while active, the bot is idle and only that account can use prefix or slash commands. `!disable bot <user>` asks for owner confirmation before disabling command access for a user. `!enable bot <user>` re-enables that account, including while under-development mode is active. These settings persist in `bot_state.json`.
+
 ## Edit Commands
 
 To add a command, update two files:

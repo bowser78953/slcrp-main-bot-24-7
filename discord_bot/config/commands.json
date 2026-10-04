@@ -49,6 +49,36 @@
     "response_key": "_prefix_only",
     "aliases": []
   },
+  "underdev": {
+    "description": "Toggle under-development mode (owner only)",
+    "response_key": "_prefix_only",
+    "aliases": []
+  },
+  "disable": {
+    "description": "Request owner confirmation to disable bot access for a user",
+    "response_key": "_prefix_only",
+    "aliases": []
+  },
+  "enable": {
+    "description": "Re-enable bot access for a user (owner only)",
+    "response_key": "_prefix_only",
+    "aliases": []
+  },
+  "underdev": {
+    "description": "Toggle bot under-development mode (owner only)",
+    "response_key": "_prefix_only",
+    "aliases": []
+  },
+  "disable": {
+    "description": "Request owner confirmation to disable bot commands for a user",
+    "response_key": "_prefix_only",
+    "aliases": []
+  },
+  "enable": {
+    "description": "Re-enable bot commands for a user (owner only)",
+    "response_key": "_prefix_only",
+    "aliases": []
+  },
   "help": {
     "description": "Show all commands",
     "response_key": "_help",
