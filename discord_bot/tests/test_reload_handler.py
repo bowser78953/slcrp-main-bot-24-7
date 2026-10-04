@@ -59,6 +59,7 @@ class DummyAuditChannel:
 
     async def send(self, **kwargs):
         self.messages.append(kwargs)
+        return SimpleNamespace(id=8000 + len(self.messages))
 
 
 class DummyRole:
@@ -138,6 +139,8 @@ class ReloadHandlerTests(unittest.TestCase):
             channel_lock_snapshots={},
             giveaways={},
             giveaway_ping_roles={},
+            automod_cases={},
+            last_moderation_cases={},
             persistent_state_store=SimpleNamespace(save=lambda data: store_saves.append(deepcopy(data))),
         )
         bot._save_persistent_state = lambda: FarmersDiscordBot._save_persistent_state(bot)
@@ -194,6 +197,8 @@ class ReloadHandlerTests(unittest.TestCase):
                         "overwrites": {"1": None, "2": True},
                     }
                 },
+                automod_cases={"123": {"guild_id": 303, "resolution": None}},
+                last_moderation_cases={"303:11": "Ban"},
             )
 
             FarmersDiscordBot._save_persistent_state(original)
@@ -203,6 +208,8 @@ class ReloadHandlerTests(unittest.TestCase):
                 giveaways={},
                 giveaway_ping_roles={},
                 channel_lock_snapshots={},
+                automod_cases={},
+                last_moderation_cases={},
             )
             FarmersDiscordBot._load_persistent_state(restored)
 
@@ -210,6 +217,126 @@ class ReloadHandlerTests(unittest.TestCase):
             self.assertEqual(restored.giveaways[123]["end_ts"], 500)
             self.assertEqual(restored.giveaway_ping_roles, {303: 505})
             self.assertEqual(restored.channel_lock_snapshots, original.channel_lock_snapshots)
+            self.assertEqual(restored.automod_cases, original.automod_cases)
+            self.assertEqual(restored.last_moderation_cases, original.last_moderation_cases)
+
+    def test_automod_logs_word_case_and_persists_button_resolution(self):
+        cc_role = SimpleNamespace(id=1554635863739080764)
+        guild = SimpleNamespace(
+            id=303,
+            name="Test Server",
+            icon=None,
+            get_role=lambda role_id: cc_role if role_id == cc_role.id else None,
+        )
+        channel = SimpleNamespace(id=404, mention="<#404>")
+        author = SimpleNamespace(id=55, bot=False, roles=[])
+        message = SimpleNamespace(
+            id=123,
+            content="You said BITCH loudly.",
+            clean_content="You said BITCH loudly.",
+            guild=guild,
+            channel=channel,
+            author=author,
+        )
+        audit_channel = DummyAuditChannel()
+        saved_states = []
+        bot = SimpleNamespace(
+            automod_cases={},
+            last_moderation_cases={},
+            persistent_state_store=SimpleNamespace(save=lambda state: saved_states.append(deepcopy(state))),
+            giveaways={},
+            giveaway_ping_roles={},
+            channel_lock_snapshots={},
+            get_channel=lambda channel_id: audit_channel,
+        )
+        bot._save_persistent_state = lambda: FarmersDiscordBot._save_persistent_state(bot)
+        bot._build_automod_audit_view = lambda target_message, word, case_id: (
+            FarmersDiscordBot._build_automod_audit_view(bot, target_message, word, case_id)
+        )
+
+        triggered = asyncio.run(FarmersDiscordBot._handle_automod_message(bot, message))
+
+        self.assertTrue(triggered)
+        self.assertEqual(bot.automod_cases["123"]["word"], "BITCH")
+        audit_view = audit_channel.messages[0]["view"]
+        components = audit_view.to_components()[0]["components"]
+        audit_text = "\n".join(component.get("content", "") for component in components)
+        self.assertIn("# Automod Triggered", audit_text)
+        self.assertIn("**Last Case:** N/A", audit_text)
+        self.assertIn("||BITCH||", audit_text)
+        action_row = next(component for component in components if component["type"] == 1)
+        self.assertEqual([button["style"] for button in action_row["components"]], [3, 4])
+        self.assertEqual(audit_channel.messages[0]["allowed_mentions"].roles, [cc_role])
+
+        class DummyResponse:
+            def __init__(self):
+                self.edited = None
+                self.messages = []
+
+            async def edit_message(self, **kwargs):
+                self.edited = kwargs
+
+            async def send_message(self, content, *, ephemeral=False):
+                self.messages.append((content, ephemeral))
+
+        class DummyFollowup:
+            def __init__(self):
+                self.messages = []
+
+            async def send(self, content, **kwargs):
+                self.messages.append((content, kwargs))
+
+        permissions = SimpleNamespace(administrator=False, manage_messages=True)
+        moderator = SimpleNamespace(id=66, guild_permissions=permissions)
+        response = DummyResponse()
+        followup = DummyFollowup()
+        interaction = SimpleNamespace(
+            guild=guild,
+            user=moderator,
+            response=response,
+            followup=followup,
+        )
+
+        asyncio.run(
+            FarmersDiscordBot._handle_automod_case_interaction(
+                bot,
+                interaction,
+                "automod-case:take:123",
+            )
+        )
+
+        self.assertEqual(bot.automod_cases["123"]["resolution"], "take")
+        self.assertEqual(bot.automod_cases["123"]["resolved_by"], 66)
+        self.assertIsNone(response.edited["view"])
+        self.assertIn("Has moderated the user.", followup.messages[0][0])
+        self.assertTrue(saved_states)
+
+        bot.automod_cases["124"] = {"guild_id": 303, "user_id": 55, "resolution": None}
+        response = DummyResponse()
+        interaction.response = response
+        asyncio.run(
+            FarmersDiscordBot._handle_automod_case_interaction(
+                bot,
+                interaction,
+                "automod-case:dismiss:124",
+            )
+        )
+        self.assertEqual(bot.automod_cases["124"]["resolution"], "dismiss")
+        self.assertIn("Has dismissed this case.", followup.messages[-1][0])
+
+        exempt_message = SimpleNamespace(
+            id=125,
+            content="ass",
+            guild=guild,
+            channel=channel,
+            author=SimpleNamespace(
+                id=77,
+                bot=False,
+                roles=[SimpleNamespace(id=1556404763887800370)],
+            ),
+        )
+        self.assertFalse(asyncio.run(FarmersDiscordBot._handle_automod_message(bot, exempt_message)))
+        self.assertEqual(len(audit_channel.messages), 1)
 
     def test_cmds_with_bang_prefix_shows_command_list(self):
         handler = MessageHandler(
@@ -243,7 +370,9 @@ class ReloadHandlerTests(unittest.TestCase):
         bot = SimpleNamespace(
             handler=MessageHandler(settings={"prefix": "-"}, commands={}, responses={}),
             guilds=[first_guild, second_guild],
+            last_moderation_cases={},
             user=SimpleNamespace(id=999),
+            _save_persistent_state=lambda: None,
             get_channel=lambda channel_id: audit_channel,
             _handle_global_server_moderation=lambda message, action: (
                 FarmersDiscordBot._handle_global_server_moderation(bot, message, action)
@@ -278,6 +407,10 @@ class ReloadHandlerTests(unittest.TestCase):
         second_guild.ban.assert_awaited_once()
         self.assertEqual(first_guild.ban.await_args.args[0].id, 123)
         self.assertEqual(len(audit_channel.messages), 1)
+        self.assertEqual(
+            bot.last_moderation_cases,
+            {"101:123": "Ban", "202:123": "Ban"},
+        )
 
         first_guild.ban.reset_mock()
         second_guild.ban.reset_mock()

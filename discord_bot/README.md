@@ -59,6 +59,10 @@ The administrator-only `!sr <user>` saves that member's assignable roles at or a
 
 Use `!lockchannel` to deny Send Messages to @everyone and role `1554697553461903400` in the current channel. The bot keeps its own send permission so it can post the status embed and receive `?unlock`. Unlock restores the saved permission overwrites. Both commands require Manage Channels permission.
 
+## Automod
+
+Incoming member messages are checked case-insensitively for the whole words `fuck`, `shit`, `bitch`, `dick`, `fucker`, `motherfucker`, and `ass`. Members with role `1556404763887800370` are exempt. Cases are logged in channel `1554592774626484404`; moderators with Manage Messages permission can record Take Action or Dismiss. These buttons record a case decision but do not automatically ban, kick, or warn the member.
+
 ## Edit Commands
 
 To add a command, update two files:

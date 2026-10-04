@@ -25,6 +25,10 @@ class ConfigError(Exception):
 GLOBAL_BAN_AUDIT_CHANNEL_ID = 1554592675116744786
 ROLE_THRESHOLD_ROLE_ID = 1554533334955069632
 CHANNEL_LOCK_ROLE_ID = 1554697553461903400
+AUTOMOD_AUDIT_CHANNEL_ID = 1554592774626484404
+AUTOMOD_CC_ROLE_ID = 1554635863739080764
+AUTOMOD_EXEMPT_ROLE_ID = 1556404763887800370
+AUTOMOD_WORD_PATTERN = re.compile(r"\b(motherfucker|fucker|fuck|shit|bitch|dick|ass)\b", re.IGNORECASE)
 
 
 def resolve_token(settings: dict[str, Any]) -> str:
@@ -200,6 +204,8 @@ class FarmersDiscordBot(discord.Client):
         self.giveaways: dict[int, dict[str, Any]] = {}
         self.giveaway_ping_roles: dict[int, int] = {}
         self.channel_lock_snapshots: dict[str, dict[str, Any]] = {}
+        self.automod_cases: dict[str, dict[str, Any]] = {}
+        self.last_moderation_cases: dict[str, str] = {}
         self._giveaway_tasks: dict[int, asyncio.Task[None]] = {}
         self.data_path = Path(os.getenv("DISCORD_BOT_DATA_DIR", base_path / "data"))
         self.data_path.mkdir(parents=True, exist_ok=True)
@@ -253,6 +259,22 @@ class FarmersDiscordBot(discord.Client):
                 if isinstance(snapshot, dict)
             }
 
+        raw_automod_cases = state.get("automod_cases", {})
+        if isinstance(raw_automod_cases, dict):
+            self.automod_cases = {
+                str(case_id): case
+                for case_id, case in raw_automod_cases.items()
+                if isinstance(case, dict)
+            }
+
+        raw_last_cases = state.get("last_moderation_cases", {})
+        if isinstance(raw_last_cases, dict):
+            self.last_moderation_cases = {
+                str(case_key): str(case_name)
+                for case_key, case_name in raw_last_cases.items()
+                if str(case_name) in {"Ban", "Kick", "Warning", "N/A"}
+            }
+
     def _save_persistent_state(self) -> None:
         giveaways = {}
         for giveaway_id, giveaway in self.giveaways.items():
@@ -270,6 +292,8 @@ class FarmersDiscordBot(discord.Client):
                     for guild_id, role_id in self.giveaway_ping_roles.items()
                 },
                 "channel_lock_snapshots": self.channel_lock_snapshots,
+                "automod_cases": self.automod_cases,
+                "last_moderation_cases": self.last_moderation_cases,
             }
         )
 
@@ -448,6 +472,9 @@ class FarmersDiscordBot(discord.Client):
         if not interaction.data or "custom_id" not in interaction.data:
             return
         custom_id = str(interaction.data["custom_id"])
+        if custom_id.startswith("automod-case:"):
+            await self._handle_automod_case_interaction(interaction, custom_id)
+            return
         if not custom_id.startswith("giveaway-enter:"):
             return
 
@@ -606,6 +633,154 @@ class FarmersDiscordBot(discord.Client):
             )
         )
         return view
+
+    def _build_automod_audit_view(self, message: discord.Message, word: str, case_id: str) -> discord.ui.LayoutView:
+        guild = message.guild
+        user_id = message.author.id
+        sentence = message.clean_content or message.content
+        if len(sentence) > 1600:
+            sentence = f"{sentence[:1597]}..."
+        last_case = self.last_moderation_cases.get(f"{guild.id}:{user_id}", "N/A")
+        channel_link = f"https://discord.com/channels/{guild.id}/{message.channel.id}"
+
+        view = discord.ui.LayoutView(timeout=None)
+        view.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay("# Automod Triggered"),
+                discord.ui.TextDisplay(f"***CC:*** <@&{AUTOMOD_CC_ROLE_ID}>"),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(
+                    f"<:User:1554596625060597911> **User:** <@{user_id}>\n"
+                    f"<:User_ID:1554601438980612136> **User ID:** {user_id}\n"
+                    f"<:Case:1556407648125980894> **Last Case:** {last_case}"
+                ),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(
+                    f"<:text:1554602725466181773> **Blacklisted Word:** ||{word}||\n"
+                    f"<:text:1554602725466181773> **Sentence Said in:** {sentence}"
+                ),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(
+                    f"<:Server:1556408987652595732> **Server:** {guild.name}\n"
+                    f"<:Server:1556408987652595732> **Channel:** {channel_link}"
+                ),
+                discord.ui.Separator(),
+                discord.ui.ActionRow(
+                    discord.ui.Button(
+                        label="Take Action",
+                        style=discord.ButtonStyle.success,
+                        custom_id=f"automod-case:take:{case_id}",
+                    ),
+                    discord.ui.Button(
+                        label="Dismiss",
+                        style=discord.ButtonStyle.danger,
+                        custom_id=f"automod-case:dismiss:{case_id}",
+                    ),
+                ),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay("-# Indiana State Roleplay | Audit Logs"),
+                accent_color=discord.Color(0x242429),
+            )
+        )
+        return view
+
+    async def _handle_automod_message(self, message: discord.Message) -> bool:
+        if message.guild is None or message.author.bot:
+            return False
+        if any(role.id == AUTOMOD_EXEMPT_ROLE_ID for role in getattr(message.author, "roles", ())):
+            return False
+
+        match = AUTOMOD_WORD_PATTERN.search(message.content)
+        if match is None:
+            return False
+
+        case_id = str(message.id)
+        if case_id in self.automod_cases:
+            return True
+
+        self.automod_cases[case_id] = {
+            "guild_id": message.guild.id,
+            "user_id": message.author.id,
+            "word": match.group(0),
+            "resolution": None,
+            "resolved_by": None,
+        }
+        try:
+            self._save_persistent_state()
+        except OSError as exc:
+            print(f"Could not persist automod case {case_id}: {exc}")
+
+        audit_channel = self.get_channel(AUTOMOD_AUDIT_CHANNEL_ID)
+        if audit_channel is None:
+            try:
+                audit_channel = await self.fetch_channel(AUTOMOD_AUDIT_CHANNEL_ID)
+            except discord.HTTPException as exc:
+                print(f"Could not fetch automod audit channel: {exc}")
+                return True
+
+        cc_role = message.guild.get_role(AUTOMOD_CC_ROLE_ID)
+        try:
+            audit_message = await audit_channel.send(
+                view=self._build_automod_audit_view(message, match.group(0), case_id),
+                allowed_mentions=discord.AllowedMentions(
+                    roles=[cc_role] if cc_role else True,
+                    users=False,
+                    everyone=False,
+                ),
+            )
+            self.automod_cases[case_id]["audit_message_id"] = audit_message.id
+            self._save_persistent_state()
+        except (discord.HTTPException, OSError) as exc:
+            print(f"Could not send automod audit case {case_id}: {exc}")
+        return True
+
+    async def _handle_automod_case_interaction(
+        self,
+        interaction: discord.Interaction,
+        custom_id: str,
+    ) -> None:
+        try:
+            _, action, case_id = custom_id.split(":", maxsplit=2)
+        except ValueError:
+            await interaction.response.send_message("This automod action is invalid.", ephemeral=True)
+            return
+
+        case = self.automod_cases.get(case_id)
+        if action not in {"take", "dismiss"} or case is None:
+            await interaction.response.send_message("This automod case is no longer available.", ephemeral=True)
+            return
+        if interaction.guild is None or interaction.guild.id != int(case.get("guild_id", 0)):
+            await interaction.response.send_message("This case belongs to another server.", ephemeral=True)
+            return
+
+        permissions = getattr(interaction.user, "guild_permissions", None)
+        if not permissions or not (permissions.administrator or permissions.manage_messages):
+            await interaction.response.send_message("You need Manage Messages permission to resolve this case.", ephemeral=True)
+            return
+        if case.get("resolution") is not None:
+            await interaction.response.send_message("This automod case has already been resolved.", ephemeral=True)
+            return
+
+        resolution = "take" if action == "take" else "dismiss"
+        case["resolution"] = resolution
+        case["resolved_by"] = interaction.user.id
+        try:
+            self._save_persistent_state()
+        except OSError as exc:
+            case["resolution"] = None
+            case["resolved_by"] = None
+            await interaction.response.send_message(f"Could not save this case resolution: {exc}", ephemeral=True)
+            return
+
+        await interaction.response.edit_message(view=None)
+        if action == "take":
+            response = f"<@{interaction.user.id}> Has moderated the user."
+        else:
+            response = f"<@{interaction.user.id}> Has dismissed this case."
+        await interaction.followup.send(
+            response,
+            allowed_mentions=discord.AllowedMentions(users=[interaction.user]),
+        )
 
     def _build_clear_audit_view(self, executor_id: int, cleared_count: int, transcript_id: str) -> discord.ui.LayoutView:
         view = discord.ui.LayoutView(timeout=None)
@@ -970,6 +1145,7 @@ class FarmersDiscordBot(discord.Client):
 
         audit_reason = f"Global {action} by {message.author} ({message.author.id}): {reason}"[:512]
         succeeded = 0
+        succeeded_guild_ids: list[int] = []
         failed = 0
         not_banned = 0
         target = discord.Object(id=user_id)
@@ -980,6 +1156,7 @@ class FarmersDiscordBot(discord.Client):
                 else:
                     await guild.unban(target, reason=audit_reason)
                 succeeded += 1
+                succeeded_guild_ids.append(guild.id)
             except discord.NotFound as exc:
                 if action == "unban":
                     not_banned += 1
@@ -989,6 +1166,14 @@ class FarmersDiscordBot(discord.Client):
             except discord.HTTPException as exc:
                 failed += 1
                 print(f"Global {action} failed in guild {guild.id}: {exc}")
+
+        if action == "ban" and succeeded_guild_ids:
+            for guild_id in succeeded_guild_ids:
+                self.last_moderation_cases[f"{guild_id}:{user_id}"] = "Ban"
+            try:
+                self._save_persistent_state()
+            except OSError as exc:
+                print(f"Could not persist last moderation case for user {user_id}: {exc}")
 
         if succeeded:
             completion = f"<:tick:1554606894889312407> User has been {participle} from **{succeeded}**."
@@ -1273,6 +1458,8 @@ class FarmersDiscordBot(discord.Client):
     async def on_message(self, message: discord.Message) -> None:
         await self.reload_json_if_needed()
         if message.author.bot:
+            return
+        if await self._handle_automod_message(message):
             return
         if await self._handle_clear_transcript_command(message):
             return
