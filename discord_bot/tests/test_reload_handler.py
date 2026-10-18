@@ -248,13 +248,19 @@ class ReloadHandlerTests(unittest.TestCase):
                 encoding="utf-8",
             )
             automod_path = config_path / "automod.json"
-            automod_path.write_text(json.dumps({"words": ["badword"]}), encoding="utf-8")
+            automod_path.write_text(
+                json.dumps({"words": ["badword"], "auto_ban_words": ["badban"]}),
+                encoding="utf-8",
+            )
 
             with patch.dict(os.environ, {"DISCORD_BOT_TOKEN": "test-token"}):
                 bot = FarmersDiscordBot(base_path=base_path)
                 self.assertTrue(bot.config_reloader.automod_pattern.search("badword"))
 
-                automod_path.write_text(json.dumps({"words": ["newword"]}), encoding="utf-8")
+                automod_path.write_text(
+                    json.dumps({"words": ["newword"], "auto_ban_words": ["newban"]}),
+                    encoding="utf-8",
+                )
                 original_mtime = automod_path.stat().st_mtime_ns
                 os.utime(automod_path, ns=(original_mtime + 1_000_000, original_mtime + 1_000_000))
 
@@ -267,6 +273,100 @@ class ReloadHandlerTests(unittest.TestCase):
                 self.assertIn("config/automod.json", channel.messages[0])
                 self.assertTrue(bot.config_reloader.automod_pattern.search("NEWWORD"))
                 self.assertIsNone(bot.config_reloader.automod_pattern.search("badword"))
+                self.assertTrue(bot.config_reloader.auto_ban_pattern.search("NEWBAN"))
+                self.assertIsNone(bot.config_reloader.auto_ban_pattern.search("badban"))
+
+    def test_auto_ban_uses_separate_words_bans_servers_and_exempts_role(self):
+        first_guild = SimpleNamespace(id=303, ban=AsyncMock())
+        second_guild = SimpleNamespace(id=404, ban=AsyncMock())
+        audit_channel = DummyAuditChannel()
+        author = SimpleNamespace(id=55, bot=False, roles=[])
+        guild = SimpleNamespace(
+            id=303,
+            name="Test Server",
+            get_role=lambda role_id: None,
+        )
+        channel = SimpleNamespace(id=606)
+        message = SimpleNamespace(
+            id=707,
+            content="The word RETARDED was used.",
+            clean_content="The word RETARDED was used.",
+            guild=guild,
+            channel=channel,
+            author=author,
+        )
+        saved_states = []
+        bot = SimpleNamespace(
+            config_reloader=SimpleNamespace(
+                auto_ban_pattern=re.compile(r"\b(?:nigger|nigga|cunt|retard|retarded|pussy)\b", re.IGNORECASE),
+            ),
+            guilds=[first_guild, second_guild],
+            auto_ban_cases={},
+            last_moderation_cases={"303:55": "Warning"},
+            automod_cases={},
+            giveaways={},
+            giveaway_ping_roles={},
+            channel_lock_snapshots={},
+            underdev_enabled=False,
+            disabled_user_ids=set(),
+            persistent_state_store=SimpleNamespace(save=lambda state: saved_states.append(deepcopy(state))),
+            get_channel=lambda channel_id: audit_channel,
+        )
+        bot._save_persistent_state = lambda: FarmersDiscordBot._save_persistent_state(bot)
+        bot._build_auto_ban_audit_view = lambda target_message, case_id, previous_case: (
+            FarmersDiscordBot._build_auto_ban_audit_view(bot, target_message, case_id, previous_case)
+        )
+
+        triggered = asyncio.run(FarmersDiscordBot._handle_auto_ban_message(bot, message))
+
+        self.assertTrue(triggered)
+        first_guild.ban.assert_awaited_once()
+        second_guild.ban.assert_awaited_once()
+        self.assertEqual(bot.auto_ban_cases["303:707"]["matched_word"], "RETARDED")
+        self.assertEqual(bot.last_moderation_cases["303:55"], "Ban")
+        self.assertEqual(bot.last_moderation_cases["404:55"], "Ban")
+        self.assertEqual(len(audit_channel.messages), 1)
+        audit_view = audit_channel.messages[0]["view"]
+        audit_text = "\n".join(
+            component.get("content", "")
+            for component in audit_view.to_components()[0]["components"]
+        )
+        self.assertIn("# Auto Ban Triggered", audit_text)
+        self.assertIn("**Last Case:** Warning", audit_text)
+        self.assertIn("RETARDED", audit_text)
+        self.assertNotIn("Blacklisted Word", audit_text)
+        self.assertFalse(audit_channel.messages[0]["allowed_mentions"].users)
+        self.assertTrue(saved_states)
+
+        exempt_message = SimpleNamespace(
+            id=708,
+            content="pussy",
+            guild=guild,
+            channel=channel,
+            author=SimpleNamespace(
+                id=77,
+                bot=False,
+                roles=[SimpleNamespace(id=1556404763887800370)],
+            ),
+        )
+        self.assertFalse(asyncio.run(FarmersDiscordBot._handle_auto_ban_message(bot, exempt_message)))
+        self.assertEqual(len(audit_channel.messages), 1)
+
+    def test_auto_ban_trigger_prevents_regular_automod_for_same_message(self):
+        message = SimpleNamespace(
+            author=SimpleNamespace(id=123, bot=False),
+            content="bad text",
+        )
+        bot = SimpleNamespace(
+            reload_json_if_needed=AsyncMock(),
+            _handle_auto_ban_message=AsyncMock(return_value=True),
+            _handle_automod_message=AsyncMock(return_value=True),
+        )
+
+        asyncio.run(FarmersDiscordBot.on_message(bot, message))
+
+        bot._handle_auto_ban_message.assert_awaited_once_with(message)
+        bot._handle_automod_message.assert_not_awaited()
 
     def test_lockchannel_denies_typing_and_question_unlock_restores_overwrites(self):
         everyone = SimpleNamespace(id=1)

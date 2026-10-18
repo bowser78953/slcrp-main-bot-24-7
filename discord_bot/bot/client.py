@@ -38,6 +38,7 @@ GLOBAL_BAN_AUDIT_CHANNEL_ID = 1554592675116744786
 ROLE_THRESHOLD_ROLE_ID = 1554533334955069632
 CHANNEL_LOCK_ROLE_ID = 1554697553461903400
 AUTOMOD_AUDIT_CHANNEL_ID = 1554592774626484404
+AUTO_BAN_AUDIT_CHANNEL_ID = 1554593063177814147
 AUTOMOD_CC_ROLE_ID = 1554635863739080764
 AUTOMOD_EXEMPT_ROLE_ID = 1556404763887800370
 
@@ -104,18 +105,26 @@ def _load_categories(path: Path) -> dict[str, list[str]]:
     return categories
 
 
-def _load_automod_words(path: Path) -> list[str]:
+def _load_automod_word_list(path: Path, key: str) -> list[str]:
     try:
         raw_data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ConfigError(f"Could not load automod word list {path}: {exc}") from exc
 
-    if not isinstance(raw_data, dict) or not isinstance(raw_data.get("words"), list):
-        raise ConfigError(f"Automod config must contain a words array: {path}")
-    if any(not isinstance(word, str) for word in raw_data["words"]):
-        raise ConfigError(f"Automod words must all be strings: {path}")
+    if not isinstance(raw_data, dict) or not isinstance(raw_data.get(key), list):
+        raise ConfigError(f"Automod config must contain a {key} array: {path}")
+    if any(not isinstance(word, str) for word in raw_data[key]):
+        raise ConfigError(f"All entries in automod {key} must be strings: {path}")
 
-    return list(dict.fromkeys(word.strip() for word in raw_data["words"] if word.strip()))
+    return list(dict.fromkeys(word.strip() for word in raw_data[key] if word.strip()))
+
+
+def _load_automod_words(path: Path) -> list[str]:
+    return _load_automod_word_list(path, "words")
+
+
+def _load_auto_ban_words(path: Path) -> list[str]:
+    return _load_automod_word_list(path, "auto_ban_words")
 
 
 def _compile_automod_words(words: list[str]) -> re.Pattern[str] | None:
@@ -164,6 +173,10 @@ class ConfigReloader:
         self.categories: dict[str, list[str]] = {}
         self.automod_words: list[str] = []
         self.automod_pattern: re.Pattern[str] | None = None
+        self.auto_ban_words: list[str] = []
+        self.auto_ban_pattern: re.Pattern[str] | None = None
+        self.auto_ban_words: list[str] = []
+        self.auto_ban_pattern: re.Pattern[str] | None = None
         self._file_mtimes: dict[Path, int] = {}
 
     def load_initial(self) -> None:
@@ -174,6 +187,10 @@ class ConfigReloader:
         self.categories = categories
         self.automod_words = _load_automod_words(self.automod_path)
         self.automod_pattern = _compile_automod_words(self.automod_words)
+        self.auto_ban_words = _load_auto_ban_words(self.automod_path)
+        self.auto_ban_pattern = _compile_automod_words(self.auto_ban_words)
+        self.auto_ban_words = _load_auto_ban_words(self.automod_path)
+        self.auto_ban_pattern = _compile_automod_words(self.auto_ban_words)
         self._refresh_mtimes()
 
     def _tracked_files(self) -> list[Path]:
@@ -209,6 +226,8 @@ class ConfigReloader:
 
         settings, commands, responses, categories = load_all_config(self.base_path)
         automod_words = _load_automod_words(self.automod_path)
+        auto_ban_words = _load_auto_ban_words(self.automod_path)
+        auto_ban_words = _load_auto_ban_words(self.automod_path)
 
         settings["token"] = resolve_token(settings)
 
@@ -220,6 +239,10 @@ class ConfigReloader:
         self.categories = categories
         self.automod_words = automod_words
         self.automod_pattern = _compile_automod_words(automod_words)
+        self.auto_ban_words = auto_ban_words
+        self.auto_ban_pattern = _compile_automod_words(auto_ban_words)
+        self.auto_ban_words = auto_ban_words
+        self.auto_ban_pattern = _compile_automod_words(auto_ban_words)
         self._refresh_mtimes()
         return True, command_schema_changed
 
@@ -245,6 +268,7 @@ class FarmersDiscordBot(discord.Client):
         self.giveaway_ping_roles: dict[int, int] = {}
         self.channel_lock_snapshots: dict[str, dict[str, Any]] = {}
         self.automod_cases: dict[str, dict[str, Any]] = {}
+        self.auto_ban_cases: dict[str, dict[str, Any]] = {}
         self.last_moderation_cases: dict[str, str] = {}
         self.underdev_enabled = False
         self.disabled_user_ids: set[int] = set()
@@ -309,6 +333,14 @@ class FarmersDiscordBot(discord.Client):
                 if isinstance(case, dict)
             }
 
+        raw_auto_ban_cases = state.get("auto_ban_cases", {})
+        if isinstance(raw_auto_ban_cases, dict):
+            self.auto_ban_cases = {
+                str(case_id): case
+                for case_id, case in raw_auto_ban_cases.items()
+                if isinstance(case, dict)
+            }
+
         raw_last_cases = state.get("last_moderation_cases", {})
         if isinstance(raw_last_cases, dict):
             self.last_moderation_cases = {
@@ -344,6 +376,7 @@ class FarmersDiscordBot(discord.Client):
                 },
                 "channel_lock_snapshots": self.channel_lock_snapshots,
                 "automod_cases": self.automod_cases,
+                "auto_ban_cases": getattr(self, "auto_ban_cases", {}),
                 "last_moderation_cases": self.last_moderation_cases,
                 "underdev_enabled": bool(getattr(self, "underdev_enabled", False)),
                 "disabled_user_ids": sorted(
@@ -743,6 +776,113 @@ class FarmersDiscordBot(discord.Client):
             )
         )
         return view
+
+    def _build_auto_ban_audit_view(
+        self,
+        message: discord.Message,
+        case_id: str,
+        previous_case: str,
+    ) -> discord.ui.LayoutView:
+        guild = message.guild
+        user_id = message.author.id
+        sentence = message.clean_content or message.content
+        if len(sentence) > 1600:
+            sentence = f"{sentence[:1597]}..."
+        channel_link = f"https://discord.com/channels/{guild.id}/{message.channel.id}"
+        view = discord.ui.LayoutView(timeout=None)
+        view.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay("# Auto Ban Triggered"),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(
+                    f"<:User:1554596625060597911> **User:** <@{user_id}>\n"
+                    f"<:User_ID:1554601438980612136> **User ID:** {user_id}\n"
+                    f"<:Case:1556407648125980894> **Last Case:** {previous_case}"
+                ),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(
+                    f"<:text:1554602725466181773> **Sentence Said in:** {sentence}"
+                ),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(
+                    f"<:Server:1556408987652595732> **Server:** {guild.name}\n"
+                    f"<:Server:1556408987652595732> **Channel:** {channel_link}"
+                ),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay("-# Indiana State Roleplay | Audit Logs"),
+                accent_color=discord.Color(0x242429),
+            )
+        )
+        return view
+
+    async def _handle_auto_ban_message(self, message: discord.Message) -> bool:
+        if message.guild is None or message.author.bot:
+            return False
+        if any(role.id == AUTOMOD_EXEMPT_ROLE_ID for role in getattr(message.author, "roles", ())):
+            return False
+
+        pattern = self.config_reloader.auto_ban_pattern
+        match = pattern.search(message.content) if pattern else None
+        if match is None:
+            return False
+
+        case_id = f"{message.guild.id}:{message.id}"
+        if case_id in self.auto_ban_cases:
+            return True
+
+        user_id = message.author.id
+        previous_case = self.last_moderation_cases.get(f"{message.guild.id}:{user_id}", "N/A")
+        case = {
+            "guild_id": message.guild.id,
+            "source_channel_id": message.channel.id,
+            "user_id": user_id,
+            "matched_word": match.group(0),
+            "previous_case": previous_case,
+            "status": "pending",
+            "banned_guild_ids": [],
+            "failed_guild_ids": [],
+        }
+        self.auto_ban_cases[case_id] = case
+        try:
+            self._save_persistent_state()
+        except OSError as exc:
+            print(f"Could not persist auto-ban case {case_id}: {exc}")
+
+        reason = f"Automod auto-ban from message {message.id} in server {message.guild.id}"[:512]
+        target = discord.Object(id=user_id)
+        for guild in list(self.guilds):
+            try:
+                await guild.ban(target, reason=reason)
+                case["banned_guild_ids"].append(guild.id)
+                self.last_moderation_cases[f"{guild.id}:{user_id}"] = "Ban"
+            except discord.HTTPException as exc:
+                case["failed_guild_ids"].append(guild.id)
+                print(f"Automod auto-ban failed in guild {guild.id}: {exc}")
+
+        case["status"] = "complete" if not case["failed_guild_ids"] else "partial"
+        try:
+            self._save_persistent_state()
+        except OSError as exc:
+            print(f"Could not persist auto-ban result {case_id}: {exc}")
+
+        audit_channel = self.get_channel(AUTO_BAN_AUDIT_CHANNEL_ID)
+        if audit_channel is None:
+            try:
+                audit_channel = await self.fetch_channel(AUTO_BAN_AUDIT_CHANNEL_ID)
+            except discord.HTTPException as exc:
+                print(f"Could not fetch auto-ban audit channel: {exc}")
+                return True
+
+        try:
+            audit_message = await audit_channel.send(
+                view=self._build_auto_ban_audit_view(message, case_id, previous_case),
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            case["audit_message_id"] = audit_message.id
+            self._save_persistent_state()
+        except (discord.HTTPException, OSError) as exc:
+            print(f"Could not send auto-ban audit case {case_id}: {exc}")
+        return True
 
     async def _handle_automod_message(self, message: discord.Message) -> bool:
         if message.guild is None or message.author.bot:
@@ -1593,6 +1733,7 @@ class FarmersDiscordBot(discord.Client):
     async def force_reload(self) -> tuple[bool, bool]:
         settings, commands, responses, categories = load_all_config(self.config_reloader.base_path)
         automod_words = _load_automod_words(self.config_reloader.automod_path)
+        auto_ban_words = _load_auto_ban_words(self.config_reloader.automod_path)
         previous_commands = self.config_reloader.commands
 
         self.config_reloader.settings = settings
@@ -1601,6 +1742,8 @@ class FarmersDiscordBot(discord.Client):
         self.config_reloader.categories = categories
         self.config_reloader.automod_words = automod_words
         self.config_reloader.automod_pattern = _compile_automod_words(automod_words)
+        self.config_reloader.auto_ban_words = auto_ban_words
+        self.config_reloader.auto_ban_pattern = _compile_automod_words(auto_ban_words)
         self.config_reloader._refresh_mtimes()
 
         self.settings = settings
@@ -1669,6 +1812,8 @@ class FarmersDiscordBot(discord.Client):
     async def on_message(self, message: discord.Message) -> None:
         await self.reload_json_if_needed()
         if message.author.bot:
+            return
+        if await self._handle_auto_ban_message(message):
             return
         if await self._handle_automod_message(message):
             return
